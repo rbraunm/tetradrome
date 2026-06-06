@@ -159,3 +159,70 @@ def determinant(seifert: Matrix) -> int:
 def signature(seifert: Matrix) -> int:
     """The knot signature: signature of V + V^T."""
     return _signature_symmetric(_symmetrize(seifert))
+
+
+def _lagrange_coeffs(xs: list[int], ys: list[int]) -> list[Fraction]:
+    """Monomial coefficients (ascending, exact) of the polynomial through (xs, ys)."""
+    n = len(xs)
+    out = [Fraction(0)] * n
+    for k in range(n):
+        basis = [Fraction(1)]  # product of (t - xs[m]) for m != k, ascending coeffs
+        denom = Fraction(1)
+        for m in range(n):
+            if m == k:
+                continue
+            shifted = [Fraction(0)] * (len(basis) + 1)
+            for i, c in enumerate(basis):
+                shifted[i] += -xs[m] * c
+                shifted[i + 1] += c
+            basis = shifted
+            denom *= xs[k] - xs[m]
+        for i, c in enumerate(basis):
+            out[i] += ys[k] * c / denom
+    return out
+
+
+def canonical_alexander(coeffs) -> tuple[int, ...]:
+    """Canonical representative of a Laurent Alexander polynomial.
+
+    Input is ascending coefficients. The Alexander polynomial is defined only up to a
+    unit +/- t^k; this drops the t^k (shifts the lowest nonzero coefficient to the
+    constant term) and fixes the sign so that constant term is positive. This matches
+    the form of KnotInfo's alexander_polynomial_vector.
+    """
+    c = [int(v) for v in coeffs]
+    while len(c) > 1 and c[-1] == 0:
+        c.pop()
+    lo = 0
+    while lo < len(c) and c[lo] == 0:
+        lo += 1
+    c = c[lo:] or [0]
+    if c[0] < 0:
+        c = [-v for v in c]
+    return tuple(c)
+
+
+def alexander_polynomial(seifert: Matrix) -> tuple[int, ...]:
+    """The Alexander polynomial det(V - t*V^T), canonical (up to +/- t^k), as ascending
+    integer coefficients.
+
+    Computed by exact interpolation: det(V - x*V^T) is an integer for each integer x,
+    and the determinant has degree <= dim(V) in t, so dim(V)+1 integer-determinant
+    samples pin it down exactly -- no polynomial-ring arithmetic needed. Validated
+    against KnotInfo across the tabulated knots.
+    """
+    v = seifert
+    n = len(v)
+    if n == 0:
+        return (1,)  # unknot
+    xs = list(range(n + 1))
+    ys = [
+        integer_determinant([[v[i][j] - x * v[j][i] for j in range(n)] for i in range(n)])
+        for x in xs
+    ]
+    coeffs = []
+    for c in _lagrange_coeffs(xs, ys):
+        if c.denominator != 1:
+            raise ArithmeticError(f"non-integer Alexander coefficient {c}")
+        coeffs.append(int(c))
+    return canonical_alexander(coeffs)

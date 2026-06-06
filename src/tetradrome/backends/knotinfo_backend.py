@@ -1,7 +1,7 @@
 """KnotInfo backend.
 
 Read access to the offline KnotInfo table (`database_knotinfo`). Serves two roles:
-the source of structural data for tabulated knots (PD code, Seifert matrix) and the
+the source of structural data for tabulated knots (PD code, braid word) and the
 known-answer oracle for validation. It is optional: a missing install raises
 BackendUnavailable, never a silent fallback (decisions/0004).
 
@@ -99,11 +99,20 @@ def braid_word(name: str) -> list[int]:
 
 
 def known_answer(name: str, invariant: str):
-    """KnotInfo's stored integer value for `invariant`, or None if not available.
+    """KnotInfo's stored value for `invariant`, or None if not available.
 
-    None means the oracle has no value (blank/sentinel) -- it is never coerced to a
-    default (decisions/0004).
+    Integers (determinant, signature) come back as int; the Alexander polynomial comes
+    back as ascending integer coefficients (a tuple), left in KnotInfo's raw form for
+    the invariants layer to canonicalize. None means the oracle has no value
+    (blank/sentinel) -- it is never coerced to a default (decisions/0004).
     """
+    if invariant == "alexander_polynomial":
+        raw = lookup(name).get("alexander_polynomial_vector")
+        if raw is None or str(raw).strip() in ("", "does not exist"):
+            return None
+        vec = ast.literal_eval(str(raw))
+        return tuple(int(c) for c in vec[2:])  # vec = [low_exp, high_exp, c_low, ...]
+
     column = _ORACLE_COLUMN.get(invariant)
     if column is None:
         return None
