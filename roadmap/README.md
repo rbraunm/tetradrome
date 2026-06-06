@@ -15,6 +15,10 @@ records design decisions. Nothing in `roadmap/` is load-bearing at runtime.
 - `decisions/` -- short decision records for choices that must be settled before
   code: canonical invariant names (SPEC 12.4), Python target, native coefficient
   field, test framework, the validate-by-default error policy.
+- `design/` -- design specs that deepen a SPEC section into an implementable plan.
+  `homology-engine.md` covers the Khovanov/Lee/Floer computation substrate: the
+  engine-vs-acceleration layering, the faithful-raw-path rule, the memory-prediction
+  gate, and a general-to-reduced implementation path.
 
 ## Graduation
 

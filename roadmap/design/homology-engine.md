@@ -1,0 +1,353 @@
+# Homology Computation Engine — Design & Implementation Path
+
+**Status:** Design captured; pre-implementation. No code in this area yet.
+
+**Scope:** The computational substrate for the homological invariants — Khovanov
+(and Lee / Rasmussen *s*) and, later, knot Floer (τ, ε, ν, HFK). This document
+elaborates `SPEC.md` §13.4–13.7 and §19, is governed by decisions
+[0003](../decisions/0003-native-coefficient-field.md) (F2 first, packed-bit GF(2))
+and [0004](../decisions/0004-validate-by-default-error-policy.md) (validate by
+default), and follows the licensing posture of `SPEC.md` §20 (Apache-2.0; GPL tools
+as external validators only, never incorporated).
+
+It exists because the design conversation produced more detail than the SPEC sketch
+holds — specifically the engine-vs-acceleration layering, the faithfulness rule, the
+memory predictor, the multimodular path to ℚ, and a general-to-reduced implementation
+order. Capture is the point; nothing here should be lost when code starts.
+
+---
+
+## 1. Background: why native, not an external backend
+
+The obvious shortcut for Floer is the `knot_floer_homology` PyPI package — a Python
+wrapper around Zoltán Szabó's HFK Calculator (a C++ program), maintained by the
+SnapPy team. It is rejected as a *core* dependency for four independent reasons, any
+one of which is sufficient:
+
+1. **License.** It is GPLv2+. Tetradrome is Apache-2.0. A GPL runtime dependency is
+   a copyleft entanglement: shipped as a combined work, GPL terms could reach our
+   code. Acceptable only as an opt-in extra the *user* installs into their own
+   environment — never bundled, never core.
+2. **It is not our math.** Using it means reporting Szabó's answer, not computing
+   one. That defeats the purpose of the workbench.
+3. **Portability.** PyPI shows *no source distribution* — binary wheels only, and
+   each is a glibc/arch-pinned C++ extension (manylinux_2_17, etc.). On any
+   platform/Python without a prebuilt wheel it is not slow to install, it is
+   *uninstallable* — there is nothing to build from. That fails "pure Python, runs
+   anywhere." (The bare package is fairly leaf-like — PD in, dict out — but it is
+   normally consumed via the heavy spherogram/SnapPy stack.)
+4. **The kernel is the opportunity, not the liability.** The reason Floer/Khovanov
+   are hard is the inner loop: sparse linear algebra over a cube of resolutions.
+   That is exactly the kernel we want to *own* and accelerate (JIT / NUMA / GPU),
+   not rent as an opaque binary.
+
+Maintenance status is secondary to all of the above, and ambiguous anyway: last
+*version* was 1.2.2 (Jan 2025), with a sporadic history (1.2 in 2022, then 1.2.1 in
+late 2024), but Python 3.14 wheels were rebuilt Dec 2025 — "stable, low-activity,
+kept building," which is normal for a thin wrapper over a frozen 2017 calculator. We
+do not depend on it regardless.
+
+**A sharper mathematical point.** Even Floer's τ does not directly resolve the
+motivating example: τ, *s*, ε, and ν all vanish on the Conway knot itself — that is
+why it resisted for decades. Piccirillo's result came from *s(K′)* on a
+trace-sibling K′, not from any invariant computed on the Conway knot. So the
+invariant with real concordance teeth is **Rasmussen *s* (from Khovanov/Lee)**, and
+Khovanov is therefore the higher-priority native engine. (See `SPEC.md` §18 and
+`../../docs/conway_notes.md`.)
+
+External tools may still appear later strictly as **opt-in cross-checkers**, exactly
+where KnotInfo sits (a validation oracle), never as a compute step. That is the
+`SPEC.md` §13.8 migration-layer / adapter contract, not this engine.
+
+---
+
+## 2. Architecture: two layers that must not be conflated
+
+There are two separate layers. The acceleration discussion (pure → JIT → NUMA → GPU)
+is *one* of them; the invariant theories are the *other*. Floer is not a tier in the
+acceleration stack — it is a peer of Khovanov in the theory layer.
+
+```text
+FRONT ENDS (theories — different math per engine)
+  Seifert-form      Khovanov complex      Floer complex
+  (exception)       (cube of res.)        (grid rectangles  OR  Szabo HFK cube)
+        |                  |                          |
+        |                  v                          v
+        |            graded chain complex over a ring (F2 / F_p / Z / Q)
+        |                  |                          |
+        |                  +------------+-------------+
+        |                               v
+        |               SHARED BACK END (invariant-agnostic)
+        |        graded sparse linear algebra  ->  homology (ranks)
+        |          [ acceleration tiers live HERE, see §3 ]
+        v
+  tiny dense integer linear algebra (bypasses the F2 back end entirely)
+```
+
+**Front ends (theory layer).** Each emits a graded chain complex from a diagram and
+is *different math*; they are not interchangeable:
+
+- **Khovanov** — cube of resolutions over a Frobenius algebra; 2ⁿ vertices.
+- **Floer** — entirely separate machinery. Two combinatorial routes:
+  *grid homology* (Manolescu–Ozsváth–Sarkar–Szabó: generators are permutations on an
+  n×n grid, differential counts empty rectangles) or *Szabó's HFK cube*. Its
+  bottleneck is **n! generation** — a different scaling beast than Khovanov's 2ⁿ —
+  so even though the back-end reducer is shared, the front ends are not.
+- **Seifert-form** — the exception. It is a 2g×2g *dense integer* matrix
+  (`src/tetradrome/invariants/seifert.py`, already built and validated). It does not
+  touch the F2 back end at all; different regime.
+
+**Back end (algebra layer, `SPEC.md` §13.6).** Takes a graded sparse complex over a
+ring and computes homology by reduction (rank / kernel / image → homology
+dimension). It "knows nothing about the Conway knot" — invariant-agnostic. **This is
+where all acceleration lives**, which is the whole payoff: written once, every theory
+that emits a complex feeds it. Khovanov and Floer both reduce here; only Seifert-form
+sits outside.
+
+### Invariant → engine map
+
+| Invariant | Engine | Back end | Status |
+|---|---|---|---|
+| determinant, signature, Alexander | Seifert-form | dense integer (own) | **done, validated** |
+| Jones polynomial | Kauffman bracket + cube skeleton | (combinatorial, light) | planned (warm-up) |
+| Khovanov homology | Khovanov complex | shared F2/F_p reducer | planned |
+| Rasmussen *s* | Khovanov + Lee deformation | shared reducer over ℚ (via multimodular) | planned |
+| τ, ε, ν, HFK ranks | Floer (grid or Szabó cube) | shared reducer | later |
+
+### Proposed module layout (indicative, not binding)
+
+```text
+src/tetradrome/
+  invariants/
+    seifert.py            # done: dense-integer engine (det/sig/Alexander)
+  engines/                # FRONT ENDS (one subpackage per theory)
+    khovanov/             # cube, enhanced states, gradings, differential, d^2=0
+    lee/                  # Lee deformation, filtration, s-invariant extraction
+    floer/                # grid homology and/or Szabo cube (later)
+  algebra/                # SHARED BACK END (invariant-agnostic)
+    complex.py            # graded chain complex; sparse boundary maps over a ring
+    reduce_reference.py   # pure-Python reference reducer (rank/kernel/image)
+    reduce_f2_packed.py   # bit-packed F2 reducer (acceleration tier)
+    reduce_jit.py         # Numba-JIT tier
+    reduce_gpu.py         # CuPy / Numba-CUDA tier (optional)
+    multimodular.py       # primes + CRT + rational reconstruction (for Q)
+    memory.py             # complex-size predictor + fill-in estimate + routing
+    tiers.py              # runtime tier detection + selection + graceful fallback
+```
+
+---
+
+## 3. Acceleration tier model (runtime, hardware-adaptive)
+
+Distinct from the *development* ladder in `SPEC.md` §4.2/§13.7
+(reference → optimized CPU → GPU → agreement tests), which is how each tier is
+*built*. This section is the *runtime* model: how a built system *chooses* a tier on
+the host it finds itself on.
+
+**Tiers**, floor to ceiling, each optional and detected at runtime:
+
+1. **Pure-Python / stdlib** — the floor. Always present, source of truth, the
+   reference every other tier is checked against. Slowest; never absent.
+2. **JIT (Numba)** — bit-packed kernels compiled to machine code. Present when Numba
+   is installed.
+3. **Multi-core / NUMA** — parallel across cores and sockets.
+4. **GPU (CuPy / Numba-CUDA)** — present only if a usable GPU and the optional deps
+   are there.
+
+**Selection is for the *user's* hardware, not the author's.** The same code runs on a
+Raspberry Pi and a 4-GPU box; it simply lights up more of itself on the bigger
+machine. GPU is never required. Tier selection is runtime-detected with graceful
+fallback, and — non-negotiable — **every tier returns the identical answer** (§4).
+
+**Representation.**
+
+- **F2:** bit-packed — F2 vectors as arrays of uint64 words; reduction is XOR /
+  popcount over word arrays. Exact (it is bits; no precision story) and a near-ideal
+  JIT/GPU target. Matches decision 0003's packed-bit GF(2) matrix type.
+- **ℚ (Lee / *s*):** big rationals are JIT-hostile, so do **not** carry ℚ through the
+  hot loop. Use **multimodular**: reduce over a batch of primes (each a fixed-width
+  F_p reduction, JIT/GPU-friendly), then recombine by CRT + rational reconstruction.
+  Exact result, fixed-width inner loop. (`algebra/multimodular.py`.)
+
+**Grading parallelism.** A graded complex splits into independent summands by
+(homological, quantum) grading — embarrassingly parallel: many independent matrices
+to reduce at once. This is the main lever for multi-core/NUMA/GPU and is theory-
+agnostic (lives in the back end).
+
+---
+
+## 4. Faithfulness principle (non-negotiable)
+
+**Hard rule: no lossy shortcuts, no heuristics, no probabilistic rank anywhere in the
+core.** This matters *more* here than in a typical library, because the fast
+knot-homology tools are precisely the ones that bake in assumptions — thin /
+alternating / "mod 2 and assume no torsion" — and those assumptions break on exactly
+the outlier knots this project exists for.
+
+### The distinction that the rule hinges on
+
+Not all "smart" algebra is a shortcut. There are two categorically different things:
+
+- **Exact reductions — ALLOWED.** Delooping and local Gaussian elimination
+  (Bar-Natan's divide-and-conquer / "local" Khovanov algorithm) are **chain homotopy
+  equivalences**: provably identical homology, gradings, and every derived invariant.
+  They assume nothing about the knot and close off no use-case. They are "Bareiss
+  instead of cofactor expansion" — a faithful *algorithm choice*, not a mathematical
+  compromise.
+- **Heuristics — BANNED in the core.** Truncating gradings; assuming thinness or
+  alternation; Monte-Carlo / probabilistic rank; "mod 2 and assume no torsion";
+  early-termination guesses. These bake in assumptions that can be wrong on the
+  inputs that matter.
+
+### How the architecture enforces faithfulness
+
+1. **The raw, unreduced path is first-class and always runnable.** It is the source
+   of truth, the most general (any coefficient ring, any derived quantity), and the
+   reference everything else is checked against. It is allowed to be slower and more
+   memory-hungry; correctness and generality outrank speed.
+2. **Exact reductions are an optional, toggleable pre-pass**, and we verify
+   `raw == reduced` across the catalog. This is decision 0004 (validate by default)
+   pointed *inward*.
+3. **The GPU kernel is just exact rank/elimination over the ring** — faithful by
+   nature, and agnostic to whether it is fed the raw complex or a reduced one. So
+   leading with reductions (§6) never taints the GPU path: the kernel does the
+   identical math either way, and the raw complex can always be run on it directly if
+   one wants to spend the memory.
+
+The same agreement discipline covers the tiers: **fast path must equal the reference
+path** — a free internal cross-check, again 0004 inward.
+
+---
+
+## 5. Memory prediction & gating (requirement)
+
+Predict the memory a specific calculation needs, and **never blindly throw a ton of
+memory at a system with a limited GPU**. This is the "fail loud and early" rule
+applied to memory: tell the user "this needs ~X GB, you have Y" *before* starting,
+never an OOM forty minutes in or a silent swap-death.
+
+**What is predictable, honestly:**
+
+- **Initial complex size — exact and cheap.** The dimension of every (homological,
+  quantum) graded piece is computable directly from the diagram *without building
+  anything*: it is combinatorial — 2ⁿ vertices, 2^(circles at that vertex)
+  generators each, O(n·2ⁿ) to profile the whole thing. This gives the exact storage
+  for the *unreduced* complex.
+- **Elimination peak (fill-in) — boundable and estimable, not exact.** Fill-in
+  during reduction is the classic sparse-direct unknown. We have a hard upper bound
+  (dense worst case, which is predictable) and a heuristic/symbolic estimate, but not
+  an exact figure.
+
+**Gate and route.** Compute the estimate; compare against **available VRAM
+specifically** (the tight constraint — far smaller than system RAM) as well as system
+RAM; then route:
+
+- fits in VRAM → GPU tier;
+- fits in RAM but not VRAM → CPU/RAM tier;
+- fits in neither directly → tile/stream through VRAM, or **refuse loudly with the
+  number**.
+
+Never silently degrade to swap, and never silently shrink the math to fit a small
+GPU.
+
+**Where exact reductions legitimately earn a default-off opt-in:** as a *size* tool,
+when the faithful raw path will not fit the box. Because the reduction is exact
+(§4), shrinking-to-fit costs no fidelity — but it is the user's explicit choice, not
+a silent default to cram onto constrained VRAM.
+
+---
+
+## 6. Honest performance calibration (so we do not oversell)
+
+- **CPU JIT vs pure-Python baseline:** a massive win, unambiguous. It is the right
+  default.
+- **CPU JIT vs Szabó's hand-written C++:** same order of magnitude. LLVM gets Numba
+  close to C on the bit-packed F2 kernels; on many-core/NUMA we can plausibly pull
+  ahead; on a single laptop "comparable" is the honest word.
+- **The decisive advantage is not raw speed — it is that ours *runs at all*.** For a
+  user whose platform has no prebuilt wheel, "comparable C-speed that installs" beats
+  "faster C++ that will not install" by an infinite margin.
+- **GPU:** real upside on the wide/dense reductions and many-grading batches, but
+  *not* a clean win — F2 elimination with pivoting is partly serial — and never
+  required. The frontier *hard* cases are usually **memory-bound, not flop-bound**
+  (fill-in vs small VRAM), so GPU is a big win in the medium-large regime (where a
+  workbench is most useful) and not a bleeding-edge magic bullet.
+- **Algorithm beats kernel.** The biggest historical wins came from smarter algebra
+  *before* linear algebra — Bar-Natan's local/divide-and-conquer reduction shrinks
+  the problem so much that the residual field linear algebra is often small. That is
+  both the largest multiplier *and* what makes large cases fit in memory. It is also
+  exact, so it leads; GPU is a multiplier on whatever dense work remains.
+- **NUMA-awareness is the genuinely fiddly part:** thread pinning plus memory
+  locality — likely `numactl` and explicit work partitioning, and eventually perhaps
+  a small Cython kernel *we* write and can read. The point of owning it is that it is
+  auditable and tunable to the host, not a black box.
+
+Why is GPU underexploited in this space today? Mostly path dependence: the mainstream
+tools (KhoHo, KnotKit, regina, Szabó's calculator) are decades of accreted C/C++ by a
+handful of people, and porting irregular sparse C++ to CUDA is a large effort with no
+paper at the end. That is an incentive problem, not a verdict that GPU cannot help.
+
+---
+
+## 7. Implementation path (general → reduced/accelerated)
+
+Each phase is validated before the next begins. Reductions and acceleration are added
+*after* a faithful reference exists and must never change an answer.
+
+- **Phase 0 — Jones warm-up.** Kauffman bracket plus the cube *skeleton* (state
+  enumeration, crossing resolution, circle detection) at trivial compute cost.
+  Exercises and validates the cube machinery and the bracket; it is the scaffold
+  Khovanov bolts directly onto. Validate the Jones polynomial against KnotInfo.
+- **Phase 1 — Back-end interface + reference reducer.** Define the graded chain
+  complex (chain groups by grading; sparse boundary maps over a ring) and a
+  pure-Python F2 reducer (rank / kernel / image → homology dimension), with the
+  `d² = 0` check. This is the general, faithful core, and the reference for
+  everything later. Land the *exact* complex-size predictor here (cheap; §5).
+- **Phase 2 — Khovanov front end (raw/faithful).** Build the unreduced cube complex
+  over F2 (enhanced states, gradings, differentials); feed the reference reducer;
+  validate Khovanov homology against KnotInfo's mod-2 data. First full faithful path
+  end to end.
+- **Phase 3 — Lee / Rasmussen *s*.** Lee deformation, filtered complex, extract *s*
+  under documented conventions. Work over ℚ via multimodular (primes + CRT + rational
+  reconstruction) to stay exact and fixed-width. Validate *s* against KnotInfo.
+- **Phase 4 — Exact reductions (optional pre-pass).** Delooping + local Gaussian
+  elimination; toggleable; verify `raw == reduced` across the catalog. Doubles as the
+  memory *size* tool of §5.
+- **Phase 5 — Acceleration tiers.** Bit-packed F2 reducer → Numba JIT →
+  multi-core/NUMA → GPU (CuPy / Numba-CUDA), each validated against the pure
+  reference via agreement tests (`SPEC.md` §4.2/§13.7). Wire the runtime tier
+  selector and the memory predictor/router (the fill-in estimate + VRAM-aware
+  routing land here, where GPU/tiers actually exist).
+- **Phase 6 — Floer front end (peer engine).** Grid homology (MOS rectangles)
+  and/or the Szabó HFK cube, feeding the *same* back end; τ, ε, ν, HFK ranks;
+  validate against KnotInfo. Note the n! generation bottleneck → generation-side
+  parallelism is its own concern, separate from the shared reducer.
+
+Ordering rationale: general and faithful first (Phases 0–3 produce correct answers
+with the reference reducer), exact reductions second (Phase 4, still answer-identical
+and individually validated), acceleration last (Phase 5, validated against the
+reference) — so at no point does an optimization precede the thing it must agree with.
+
+---
+
+## 8. Relationship to existing SPEC & decisions
+
+- **Elaborates** `SPEC.md` §13.4 (Khovanov), §13.5 (Lee/Rasmussen), §13.6 (algebra
+  layer), §13.7 (GPU/CUDA), §19 (performance strategy).
+- **Consistent with** §4.2 (GPU real-but-narrow) and §20 (Apache-2.0; GPL tools
+  external-only).
+- **Governed by** decision 0003 (F2 first; packed-bit GF(2)) and 0004 (validate by
+  default — here also pointed inward: `raw == reduced`, and tier `== reference`).
+
+### Candidate decision records this design implies
+
+These are stated here for completeness; each may be split into its own ADR before the
+corresponding code lands:
+
+1. **No external compute backends in the core.** Portability (no-sdist binary
+   wheels), license (GPLv2+ vs Apache-2.0), and "not our math" together disqualify
+   `knot_floer_homology` and similar as anything but opt-in external validators.
+2. **Faithful raw path is first-class; only exact (homotopy-equivalence) reductions,
+   toggleable and verified `raw == reduced`; no heuristics in the core.**
+3. **Memory-prediction gate with VRAM-aware routing; fail loud and early; exact
+   reduction is an opt-in size tool, never a silent shrink-to-fit.**
