@@ -23,8 +23,9 @@ def test_lookup_unknown_raises():
         ki.lookup("definitely_not_a_knot")
 
 
-def test_seifert_matrix_and_oracle_present():
-    assert ki.seifert_matrix("6_2")  # non-empty integer matrix
+def test_braid_word_and_oracle_present():
+    assert ki.braid_word("3_1") == [1, 1, 1]
+    assert ki.braid_word("4_1") == [1, -2, 1, -2]
     assert ki.known_answer("6_2", "determinant") == 11
     assert ki.known_answer("6_2", "signature") == -2
 

@@ -5,9 +5,10 @@ validation path, or that disagrees with the oracle, raises UnvalidatedResult rat
 than being returned.
 
 Currently supports the Seifert-form invariants `determinant` and `signature`,
-computed natively and checked against KnotInfo. The Seifert matrix is sourced from
-KnotInfo for tabulated knots; a native Seifert algorithm (for off-table knots) is
-future work.
+computed natively from the Seifert matrix and checked against KnotInfo. The Seifert
+matrix is itself computed natively (Collins' algorithm) from the knot's braid word;
+for tabulated knots the braid word is read from KnotInfo. Braid-word input for
+off-table knots is the next step.
 """
 from __future__ import annotations
 
@@ -32,10 +33,11 @@ def compute(knot: NormalizedDiagram, invariant: str, validate: bool = True) -> I
     if knot.identity is None:
         raise UnknownKnot(
             "Invariant computation currently needs a KnotInfo-identified knot "
-            "(no native Seifert algorithm for off-table knots yet)."
+            "(braid-word input for off-table knots is not wired in yet)."
         )
 
-    matrix = knotinfo_backend.seifert_matrix(knot.identity)
+    braid = knotinfo_backend.braid_word(knot.identity)
+    matrix = seifert.seifert_matrix_from_braid(braid)
     value = _SEIFERT_INVARIANTS[invariant](matrix)
 
     oracle = knotinfo_backend.known_answer(knot.identity, invariant)
@@ -51,8 +53,8 @@ def compute(knot: NormalizedDiagram, invariant: str, validate: bool = True) -> I
         provenance=Provenance(
             backend="tetradrome-native",
             backend_version=__version__,
-            method="seifert_form",
-            inputs="knotinfo:seifert_matrix",
+            method="seifert_form_from_braid",
+            inputs="knotinfo:braid_notation",
         ),
         validation=ValidationStatus(known_answer_match=known),
     )

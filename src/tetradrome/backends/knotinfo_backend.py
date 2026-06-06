@@ -80,12 +80,22 @@ def pd_notation(name: str) -> list:
     return ast.literal_eval(raw)
 
 
-def seifert_matrix(name: str) -> list[list[int]]:
-    """Parse a knot's Seifert matrix from KnotInfo into a list of int rows."""
-    raw = lookup(name).get("seifert_matrix")
+def braid_word(name: str) -> list[int]:
+    """Parse a knot's braid word from KnotInfo into a list of nonzero ints.
+
+    The braid word is a *presentation* of the knot (input to native Seifert-matrix
+    computation), not a precomputed answer.
+    """
+    raw = lookup(name).get("braid_notation")
     if not raw:
-        raise UnknownKnot(f"{name!r} has no seifert_matrix in KnotInfo.")
-    return [list(row) for row in ast.literal_eval(raw)]
+        raise UnknownKnot(f"{name!r} has no braid_notation in KnotInfo.")
+    s = str(raw).strip().replace("{", "[").replace("}", "]").replace(";", ",")
+    value = ast.literal_eval(s)
+    while isinstance(value, list) and len(value) == 1 and isinstance(value[0], list):
+        value = value[0]
+    if not isinstance(value, list) or any(isinstance(v, list) for v in value):
+        raise UnknownKnot(f"{name!r} braid_notation is not a flat word: {raw!r}")
+    return [int(v) for v in value]
 
 
 def known_answer(name: str, invariant: str):

@@ -27,7 +27,7 @@ def test_determinant_and_signature_match_knotinfo(name, det, sig):
     assert s.validation.known_answer_match == "pass"
     assert d.validation.is_validated and s.validation.is_validated
     assert d.provenance.backend == "tetradrome-native"
-    assert d.provenance.method == "seifert_form"
+    assert d.provenance.method == "seifert_form_from_braid"
 
 
 def test_unsupported_invariant_raises():
