@@ -53,6 +53,10 @@ s = td.invariants.compute(k, "rasmussen_invariant")   # typed result, with prove
 verdict = td.concordance.slice_status(k)
 print(verdict.smoothly_slice, verdict.certificate.via)
 
+# off-table: present a knot by braid word (here T(2,15), beyond the 13-crossing tables)
+t = td.knots.from_braid([1] * 15)
+det = td.invariants.compute(t, "determinant", validate=False)   # -> 15 (no oracle off-table)
+
 # build a validated, content-hashed roster others can depend on
 roster = td.export.build(["K11n34", "4_1", "3_1"], validate=True)
 td.export.save(roster, "roster-v1.json")

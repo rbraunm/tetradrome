@@ -5,10 +5,11 @@ validation path, or that disagrees with the oracle, raises UnvalidatedResult rat
 than being returned.
 
 Currently supports the Seifert-form invariants `determinant` and `signature`,
-computed natively from the Seifert matrix and checked against KnotInfo. The Seifert
-matrix is itself computed natively (Collins' algorithm) from the knot's braid word;
-for tabulated knots the braid word is read from KnotInfo. Braid-word input for
-off-table knots is the next step.
+computed natively from the Seifert matrix and checked against KnotInfo when the knot
+is tabulated. The Seifert matrix is itself computed natively (Collins' algorithm)
+from the knot's braid word: a braid word supplied via `from_braid` is used directly
+(off-table knots included); for a tabulated knot given by name the braid word is read
+from KnotInfo. Off-table results have no oracle, so under validate=True they raise.
 """
 from __future__ import annotations
 
@@ -30,43 +31,52 @@ def compute(knot: NormalizedDiagram, invariant: str, validate: bool = True) -> I
         raise ValueError(
             f"compute does not support {invariant!r}; supported: {sorted(_SEIFERT_INVARIANTS)}"
         )
-    if knot.identity is None:
+
+    if knot.braid is not None:
+        braid = list(knot.braid)
+        inputs = "braid_word"
+    elif knot.identity is not None:
+        braid = knotinfo_backend.braid_word(knot.identity)
+        inputs = "knotinfo:braid_notation"
+    else:
         raise UnknownKnot(
-            "Invariant computation currently needs a KnotInfo-identified knot "
-            "(braid-word input for off-table knots is not wired in yet)."
+            "Invariant computation needs a braid word (from_braid) or a KnotInfo identity."
         )
 
-    braid = knotinfo_backend.braid_word(knot.identity)
     matrix = seifert.seifert_matrix_from_braid(braid)
     value = _SEIFERT_INVARIANTS[invariant](matrix)
 
-    oracle = knotinfo_backend.known_answer(knot.identity, invariant)
+    oracle = (
+        knotinfo_backend.known_answer(knot.identity, invariant)
+        if knot.identity is not None
+        else None
+    )
     if oracle is None:
         known = "not_available"
     else:
         known = "pass" if value == oracle else "fail"
 
     result = InvariantResult(
-        knot=knot.identity,
+        knot=knot.identity or "(braid word)",
         invariant=invariant,
         value=value,
         provenance=Provenance(
             backend="tetradrome-native",
             backend_version=__version__,
             method="seifert_form_from_braid",
-            inputs="knotinfo:braid_notation",
+            inputs=inputs,
         ),
         validation=ValidationStatus(known_answer_match=known),
     )
 
     if validate and known == "fail":
         raise UnvalidatedResult(
-            f"{invariant} for {knot.identity}: computed {value} disagrees with "
+            f"{invariant} for {result.knot}: computed {value} disagrees with "
             f"KnotInfo oracle {oracle}."
         )
     if validate and not result.validation.is_validated:
         raise UnvalidatedResult(
-            f"{invariant} for {knot.identity}: no validation available "
+            f"{invariant} for {result.knot}: no validation available "
             f"(known_answer_match={known})."
         )
     return result
