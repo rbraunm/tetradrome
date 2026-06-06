@@ -31,4 +31,5 @@ def test_braid_word_and_oracle_present():
 
 
 def test_known_answer_unsupported_invariant_is_none():
-    assert ki.known_answer("3_1", "jones_polynomial") is None
+    # An invariant with no oracle mapping yet returns None (never a coerced default).
+    assert ki.known_answer("3_1", "rasmussen_invariant") is None

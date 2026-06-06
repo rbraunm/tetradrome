@@ -113,6 +113,13 @@ def known_answer(name: str, invariant: str):
         vec = ast.literal_eval(str(raw))
         return tuple(int(c) for c in vec[2:])  # vec = [low_exp, high_exp, c_low, ...]
 
+    if invariant == "jones_polynomial":
+        raw = lookup(name).get("jones_polynomial_vector")
+        if raw is None or str(raw).strip() in ("", "does not exist"):
+            return None
+        vec = ast.literal_eval(str(raw))  # [low_exp, high_exp, c_low, ...]
+        return (int(vec[0]), tuple(int(c) for c in vec[2:]))
+
     column = _ORACLE_COLUMN.get(invariant)
     if column is None:
         return None
