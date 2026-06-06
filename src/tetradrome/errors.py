@@ -1,9 +1,9 @@
 """Public error types.
 
 No silent fallbacks: Tetradrome raises loudly rather than returning a plausible
-wrong answer (decisions/0004-validate-by-default-error-policy). Additional members
-of the error set (UnvalidatedResult, BackendUnavailable, ConventionMismatch,
-ExportHashMismatch) are added here as the code that raises them lands.
+wrong answer (decisions/0004-validate-by-default-error-policy). The remaining
+members of the error set (ConventionMismatch, ExportHashMismatch) are added here as
+the code that raises them lands.
 """
 
 
@@ -13,3 +13,11 @@ class TetradromeError(Exception):
 
 class UnknownKnot(TetradromeError):
     """A knot identifier or diagram could not be resolved into a normalized diagram."""
+
+
+class BackendUnavailable(TetradromeError):
+    """A required backend or data source is not installed/available."""
+
+
+class UnvalidatedResult(TetradromeError):
+    """A result could not be validated and validate=True (decisions/0004)."""

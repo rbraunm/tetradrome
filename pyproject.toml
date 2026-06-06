@@ -15,15 +15,17 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Mathematics",
 ]
-# Spherogram is the diagram layer (core). Compute backends and the validation
-# oracle are optional, per "make every backend optional" (SPEC) and the
-# call-not-vendor licensing posture (decisions/0004, docs/existing_tools.md).
-dependencies = ["spherogram"]
+# KnotInfo (database_knotinfo) is the structural-data source for tabulated knots
+# and the validation oracle -- core. Compute engines for off-table work are
+# optional, per "make every backend optional" (SPEC) and the call-not-vendor
+# licensing posture (decisions/0004, docs/existing_tools.md).
+dependencies = ["database_knotinfo"]
 
 [project.optional-dependencies]
 floer = ["knot_floer_homology"]
-knotinfo = ["database_knotinfo"]
-all = ["knot_floer_homology", "database_knotinfo"]
+# Spherogram is kept only as an optional dev cross-check (e.g. an independent
+# Seifert matrix for off-table knots); it is not needed at runtime.
+dev = ["spherogram", "pytest"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
