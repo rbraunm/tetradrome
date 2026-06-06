@@ -1234,18 +1234,19 @@ CUDA is not appropriate for:
 
 ## 20. Licensing and Distribution Notes
 
-Several useful tools are GPL-licensed or exist in ecosystems with their own licensing and installation constraints. Tetradrome should avoid accidentally creating distribution problems.
+**License: Apache 2.0.** All Tetradrome code is original; nothing inherits a license from another project.
 
-Initial guidance:
+Several useful tools are GPL-licensed or live in ecosystems with their own licensing and installation constraints. Tetradrome avoids distribution problems by treating them strictly as external validators and historical references, never as incorporated code.
 
-- treat GPL tools as optional external integrations unless the project intentionally adopts GPL-compatible licensing;
-- record backend license and installation requirements in `docs/existing_tools.md`;
-- separate “can call this installed program” from “vendored into Tetradrome”; 
-- keep raw-output parsers modular;
-- make every backend optional;
-- design a graceful degraded mode when a backend is unavailable.
+Rules:
 
-This matters because a useful research workbench can be lightweight and permissive, while some high-value computational engines may remain external dependencies.
+- All first-party code is original; no GPL (or other) source is copied or adapted into the tree.
+- GPL tools are optional external validators only: invoked as separate programs, or installed by the user as optional dependencies. Tetradrome calls them; it does not vendor or statically combine them into its distribution.
+- No backend data is vendored either; KnotInfo and similar are queried/validated against and cited, not copied into the repo.
+- Record backend license and installation requirements in `docs/existing_tools.md`.
+- Keep raw-output parsers modular; make every backend optional; degrade gracefully when one is unavailable.
+
+Because no GPL source or data is distributed inside Tetradrome, no copyleft obligation attaches and the permissive Apache 2.0 license fits. Existing tools also serve as a parity reference — a maintenance signal for new maths or features worth matching, not a dependency.
 
 ---
 

@@ -105,4 +105,6 @@ The motivating mathematics is Lisa Piccirillo, *The Conway knot is not slice*, A
 
 ## License
 
-To be finalized. Several backends Tetradrome builds on are GPL (for example `knot_floer_homology` / HFKcalc are GPL-2.0-or-later), so the license must be GPL-compatible; a copyleft license is the likely choice.
+Apache License 2.0.
+
+All Tetradrome code is original. The tools under [Built on](#built-on) are used only as external validators and historical references — invoked as separate programs or optional, user-installed dependencies, and consulted for the shape of their data and the mathematics they implement. None of their source or data is vendored into this repository, so no copyleft obligation attaches and a permissive license is the right fit.
