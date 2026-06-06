@@ -1,11 +1,23 @@
 # Milestones
 
 SPEC Section 16, as a tracked checklist. `[ ]` not started, `[~]` in progress,
-`[x]` done. "research" tags an item that depends on exercising an external tool;
-"data" tags an item that depends on imported known-answer values.
+`[x]` done, `[-]` deferred (post-foundation). "research" tags an item that depends
+on exercising an external tool; "data" tags an item that depends on imported
+known-answer values.
 
 Current focus: Milestone 0 and Milestone 1, plus the catalog/known-answer parts
 of Milestones 2 and 3. These are the pre-code deliverables.
+
+Research status: the three pip backends -- Spherogram (diagrams),
+`knot_floer_homology` (Floer), and KnotInfo via `database_knotinfo` (oracle) --
+are empirically verified; see `roadmap/research/`. All three are pip-only and
+standalone. The remaining "research"-tagged items below are syntheses of those
+notes, not new investigation.
+
+Deferred to post-foundation (see "Deferred" section): the Sage-feasibility and
+KnotJob spikes. They gate *computing* Khovanov/Rasmussen fresh, but KnotInfo
+already supplies those as known answers (including mod-2 Khovanov), so they do
+not block the foundation.
 
 ---
 
@@ -39,8 +51,8 @@ of Milestones 2 and 3. These are the pre-code deliverables.
 
 ## Milestone 4 -- First backend adapters
 - [ ] `knot_floer_homology` adapter  (research)
-- [ ] SageMath adapter if feasible  (research)
-- [ ] KnotJob / JavaKh feasibility spike  (research)
+- [-] SageMath adapter if feasible  (deferred -- see Deferred section)
+- [-] KnotJob / JavaKh feasibility spike  (deferred -- see Deferred section)
 - [ ] backend availability checks
 - [ ] normalized output schema
 
@@ -95,3 +107,23 @@ of Milestones 2 and 3. These are the pre-code deliverables.
 - [ ] validation report
 - [ ] limitations page
 - [ ] outreach note
+
+---
+
+## Deferred (post-foundation)
+
+These are real work items, intentionally parked until the foundation (diagram
+layer + Floer backend + KnotInfo oracle + validation harness + reports) exists.
+They are not part of the roadmap flesh-out.
+
+- [-] Sage feasibility spike -- can Sage stand up outside a heavy environment, and
+  is `Spherogram-in-Sage` a viable path to the polynomial/Khovanov invariants its
+  pip build gates behind Sage? Marker tag `[deferred]`.
+- [-] KnotJob / JavaKh CLI spike -- reliable command-line invocation for computing
+  Khovanov homology and the Rasmussen `s` invariant fresh.
+
+Why safe to defer: KnotInfo already supplies Khovanov (incl. mod-2) and Rasmussen
+`s` as known answers for tabulated knots, so the foundation and its validation can
+be built and trusted without either spike. They become necessary only when
+computing those invariants for knots not in the tables (the eventual
+Conway-adjacent / native-engine work).
