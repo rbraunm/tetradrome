@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tetradrome"
+version = "0.0.0"
+description = "A reproducible, audit-friendly workbench for knot invariants that constrain smooth 4-dimensional topology."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+# Spherogram is the diagram layer (core). Compute backends and the validation
+# oracle are optional, per "make every backend optional" (SPEC) and the
+# call-not-vendor licensing posture (decisions/0004, docs/existing_tools.md).
+dependencies = ["spherogram"]
+
+[project.optional-dependencies]
+floer = ["knot_floer_homology"]
+knotinfo = ["database_knotinfo"]
+all = ["knot_floer_homology", "database_knotinfo"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
