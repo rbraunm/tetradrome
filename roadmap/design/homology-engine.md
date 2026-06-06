@@ -339,15 +339,19 @@ reference) — so at no point does an optimization precede the thing it must agr
 - **Governed by** decision 0003 (F2 first; packed-bit GF(2)) and 0004 (validate by
   default — here also pointed inward: `raw == reduced`, and tier `== reference`).
 
-### Candidate decision records this design implies
+### Decision records this design rests on
 
-These are stated here for completeness; each may be split into its own ADR before the
-corresponding code lands:
+The following were split out of this design into their own ADRs (the process itself is
+recorded in [0005](../decisions/0005-decision-record-process.md), which also defines
+the soft-lock semantics — ADRs stay reviewable even when "locked"):
 
-1. **No external compute backends in the core.** Portability (no-sdist binary
-   wheels), license (GPLv2+ vs Apache-2.0), and "not our math" together disqualify
-   `knot_floer_homology` and similar as anything but opt-in external validators.
-2. **Faithful raw path is first-class; only exact (homotopy-equivalence) reductions,
-   toggleable and verified `raw == reduced`; no heuristics in the core.**
-3. **Memory-prediction gate with VRAM-aware routing; fail loud and early; exact
-   reduction is an opt-in size tool, never a silent shrink-to-fit.**
+1. [0006](../decisions/0006-no-external-compute-backends.md) — **No external compute
+   backends in the core.** Portability (no-sdist binary wheels), license (GPLv2+ vs
+   Apache-2.0), and "not our math" disqualify `knot_floer_homology` and similar as
+   anything but opt-in external validators.
+2. [0007](../decisions/0007-faithful-raw-path-no-heuristics.md) — **Faithful raw path
+   first-class; only exact (homotopy-equivalence) reductions, toggleable and verified
+   `raw == reduced`; no heuristics in the core.**
+3. [0008](../decisions/0008-memory-prediction-gate.md) — **Memory-prediction gate with
+   VRAM-aware routing; fail loud and early; exact reduction is an opt-in size tool,
+   never a silent shrink-to-fit.**

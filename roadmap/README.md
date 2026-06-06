@@ -12,9 +12,12 @@ records design decisions. Nothing in `roadmap/` is load-bearing at runtime.
 - `research/` -- per-tool findings (real APIs, versions, install paths,
   licenses), gathered by exercising the tools, not by assumption. Feeds
   `docs/existing_tools.md` and `docs/backend_matrix.md`.
-- `decisions/` -- short decision records for choices that must be settled before
-  code: canonical invariant names (SPEC 12.4), Python target, native coefficient
-  field, test framework, the validate-by-default error policy.
+- `decisions/` -- short decision records. `0005` defines the ADR process itself,
+  including the soft "locked" gate (locked means an extra are-you-sure step, never
+  immutability -- every ADR stays reviewable). Topics so far: canonical invariant
+  names (SPEC 12.4), Python target, native coefficient field, validate-by-default,
+  no external compute backends, the faithful-raw-path rule, and the memory-prediction
+  gate.
 - `design/` -- design specs that deepen a SPEC section into an implementable plan.
   `homology-engine.md` covers the Khovanov/Lee/Floer computation substrate: the
   engine-vs-acceleration layering, the faithful-raw-path rule, the memory-prediction
