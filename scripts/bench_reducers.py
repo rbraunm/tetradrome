@@ -132,10 +132,11 @@ def speed_synthetic(sizes: list[int], backends: list[str], density: float, repea
     print()
 
 
-_CPU_BACKENDS = ("reference", "bitint", "packed-cpu")
+_CPU_BACKENDS = ("reference", "bitint", "jit", "packed-cpu")
 
 
-def speed_parallel(knot_names: list[str], backends: list[str], workers: int, repeat: int) -> None:
+def speed_parallel(knot_names: list[str], backends: list[str], workers: int, repeat: int,
+                   pin: bool = False) -> None:
     cpu_backends = [b for b in backends if b in _CPU_BACKENDS]
     if not cpu_backends:
         return
@@ -146,12 +147,20 @@ def speed_parallel(knot_names: list[str], backends: list[str], workers: int, rep
             items[(name, j)] = cx
     print(f"== speed: serial vs parallel, {len(items)} complexes on {workers} workers "
           f"(best of {repeat}) ==")
-    print(f"  {'backend':11s} {'serial':>12s} {'parallel':>12s} {'speedup':>10s}")
+    head = f"  {'backend':11s} {'serial':>12s} {'parallel':>12s} {'speedup':>10s}"
+    if pin:
+        head += f" {'pinned':>12s} {'speedup':>10s}"
+    print(head)
     for backend in cpu_backends:
         ser = _time(lambda: {k: tiers.f2_homology(cx, backend=backend) for k, cx in items.items()}, repeat)
         par = _time(lambda: parallel_f2_homology(items, backend=backend, workers=workers), repeat)
-        speedup = ser / par if par > 0 else float("inf")
-        print(f"  {backend:11s} {ser * 1e3:10.2f}ms {par * 1e3:10.2f}ms {speedup:9.2f}x")
+        row = (f"  {backend:11s} {ser * 1e3:10.2f}ms {par * 1e3:10.2f}ms "
+               f"{ser / par if par else float('inf'):9.2f}x")
+        if pin:
+            pinned = _time(
+                lambda: parallel_f2_homology(items, backend=backend, workers=workers, pin=True), repeat)
+            row += f" {pinned * 1e3:10.2f}ms {ser / pinned if pinned else float('inf'):9.2f}x"
+        print(row)
     print()
 
 
@@ -186,6 +195,8 @@ def main() -> None:
     ap.add_argument("--skip-parallel", action="store_true", help="skip the serial-vs-parallel run")
     ap.add_argument("--workers", type=int, default=None,
                     help="worker processes for the parallel run (default: CPU count)")
+    ap.add_argument("--pin", action="store_true",
+                    help="also time a NUMA-pinned parallel run (Linux multi-socket boxes)")
     ap.add_argument("--gpu-info", action="store_true",
                     help="print GPU detection and enablement guidance, then exit")
     args = ap.parse_args()
@@ -207,7 +218,8 @@ def main() -> None:
     routing(knot_names)
     speed_knots(knot_names, backends, args.repeat)
     if not args.skip_parallel:
-        speed_parallel(knot_names, backends, args.workers or (os.cpu_count() or 1), args.repeat)
+        speed_parallel(knot_names, backends, args.workers or (os.cpu_count() or 1),
+                       args.repeat, pin=args.pin)
     if not args.skip_synthetic:
         sizes = [int(s) for s in args.sizes.split(",") if s]
         speed_synthetic(sizes, backends, args.density, args.repeat)
