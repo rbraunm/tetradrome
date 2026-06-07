@@ -34,18 +34,22 @@ def _comultiply_lee(s: int) -> tuple[tuple[int, int], ...]:
     return ((-1, -1), (1, 1))            # - -> -(x)- + +(x)+
 
 
-def lee_complex(pd: PDCode) -> RationalComplex:
-    """The Lee cochain complex over Q: a single complex graded by homological degree i
-    (the deformation breaks the quantum grading, so there is no split by j)."""
+def _assemble_lee(pd: PDCode):
+    """Build the Lee complex data graded by homological degree i. Returns
+    (dims, maps, qdeg), where qdeg[i][pos] is the quantum degree of the pos-th generator
+    of C^i, in the same basis order as the maps. The q-grading is a filtration (not a
+    grading) of the Lee differential; the s-invariant reads it off this basis."""
     resolved, gens = _enumerate_generators(pd)   # raises on the empty diagram
     by_i: dict[int, list] = {}
-    index: dict[tuple, tuple[int, int]] = {}     # key -> (i, position)
+    index: dict[tuple, tuple[int, int]] = {}      # key -> (i, position)
     labeling_of: dict[tuple, dict] = {}
-    for i, _j, _state, labeling, key in gens:
+    qdeg: dict[int, list[int]] = {}
+    for i, j, _state, labeling, key in gens:
         bucket = by_i.setdefault(i, [])
         index[key] = (i, len(bucket))
         bucket.append(key)
         labeling_of[key] = labeling
+        qdeg.setdefault(i, []).append(j)
 
     dims = {i: len(keys) for i, keys in by_i.items()}
     maps: dict[int, list[dict[int, int]]] = {}
@@ -64,7 +68,21 @@ def lee_complex(pd: PDCode) -> RationalComplex:
                 col[pos2] = col.get(pos2, 0) + _edge_sign(state, c)
             columns.append({r: v for r, v in col.items() if v})
         maps[i] = columns
+    return dims, maps, qdeg
+
+
+def lee_complex(pd: PDCode) -> RationalComplex:
+    """The Lee cochain complex over Q: a single complex graded by homological degree i
+    (the deformation breaks the quantum grading, so there is no split by j)."""
+    dims, maps, _qdeg = _assemble_lee(pd)
     return RationalComplex(dims, maps)
+
+
+def lee_complex_graded(pd: PDCode) -> tuple[RationalComplex, dict[int, list[int]]]:
+    """The Lee complex together with qdeg[i][pos], the quantum degree of each generator,
+    for reading off the quantum filtration (Rasmussen's s)."""
+    dims, maps, qdeg = _assemble_lee(pd)
+    return RationalComplex(dims, maps), qdeg
 
 
 def lee_homology(pd: PDCode) -> dict[int, int]:
