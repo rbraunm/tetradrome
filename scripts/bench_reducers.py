@@ -26,7 +26,7 @@ import random
 import time
 
 from tetradrome import knots
-from tetradrome.algebra import gpu, tiers
+from tetradrome.algebra import gpu, memory, tiers
 from tetradrome.algebra.parallel import parallel_f2_homology
 from tetradrome.algebra.reduce_reference import homology
 from tetradrome.engines import khovanov
@@ -155,6 +155,23 @@ def speed_parallel(knot_names: list[str], backends: list[str], workers: int, rep
     print()
 
 
+def routing(knot_names: list[str]) -> None:
+    cfg = gpu.gpu_config()
+    available = tiers.available_f2_backends()
+    print("== memory prediction & routing (heaviest quantum complex per knot) ==")
+    print(f"  {'knot':6s} {'peak (packed)':>15s} {'route':>12s}   reason")
+    for name in knot_names:
+        pd = knots.from_name(name).pd_code
+        worst = None
+        for cx in khovanov.khovanov_complexes(pd).values():
+            d = memory.route_backend(cx, available, gpu_cfg=cfg)
+            if worst is None or d.predicted_bytes > worst.predicted_bytes:
+                worst = d
+        kib = worst.predicted_bytes / 1024
+        print(f"  {name:6s} {kib:12.1f} KiB {worst.backend:>12s}   {worst.reason}")
+    print()
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--knots", type=str, default=",".join(DEFAULT_KNOTS),
@@ -187,6 +204,7 @@ def main() -> None:
 
     knot_names = [k for k in args.knots.split(",") if k]
     accuracy(knot_names, backends)
+    routing(knot_names)
     speed_knots(knot_names, backends, args.repeat)
     if not args.skip_parallel:
         speed_parallel(knot_names, backends, args.workers or (os.cpu_count() or 1), args.repeat)

@@ -7,6 +7,7 @@ roadmap/design/homology-engine.md.
 """
 from .complex import GradedComplex
 from .gpu import detect_gpu, enablement_instructions, gpu_config
+from .memory import ComplexSize, Routing, predict_size, route_backend
 from .parallel import parallel_f2_homology
 from .rational_complex import RationalComplex
 from .rational_reduce import rational_homology, rational_rank
@@ -20,6 +21,8 @@ __all__ = [
     "RationalComplex",
     "available_f2_backends",
     "best_available_backend",
+    "ComplexSize",
+    "Routing",
     "detect_gpu",
     "enablement_instructions",
     "f2_homology",
@@ -30,7 +33,9 @@ __all__ = [
     "gpu_config",
     "homology",
     "parallel_f2_homology",
+    "predict_size",
     "rank_backend",
     "rational_homology",
     "rational_rank",
+    "route_backend",
 ]
