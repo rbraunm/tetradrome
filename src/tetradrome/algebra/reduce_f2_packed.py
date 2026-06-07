@@ -93,15 +93,22 @@ def f2_rank_dense(columns: Sequence[Iterable[int]], nrows: int, xp) -> int:
     syncs only once per column (the pivot search). That trades memory (a dense uint8
     matrix) for far fewer host round-trips, which is what the GPU wants -- the batched
     kernel for `packed-gpu`. The numpy run validates the exact code cupy executes.
+
+    The matrix is assembled on the host and moved to the device in a single transfer:
+    per-element assignment on a GPU array is one kernel launch each, so building it on the
+    device would dwarf the reduction.
     """
+    import numpy as np
+
     cols = list(columns)
     ncols = len(cols)
     if ncols == 0 or nrows == 0:
         return 0
-    mat = xp.zeros((nrows, ncols), dtype=xp.uint8)
+    host = np.zeros((nrows, ncols), dtype=np.uint8)
     for j, col in enumerate(cols):
         for r in col:
-            mat[r, j] = 1
+            host[r, j] = 1
+    mat = xp.asarray(host)
     rank = 0
     prow = 0
     for c in range(ncols):
