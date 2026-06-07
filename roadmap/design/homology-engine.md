@@ -1,6 +1,10 @@
 # Homology Computation Engine — Design & Implementation Path
 
-**Status:** Design captured; pre-implementation. No code in this area yet.
+**Status:** Phases 0–3 implemented and validated — Jones (warm-up), the shared
+back end, native Khovanov over F2 and ℚ, the Lee deformation, and the Rasmussen
+*s*-invariant — all wired into `compute()` and checked against KnotInfo. Phase 4
+(exact reductions) is next; acceleration (Phase 5) and Floer (Phase 6) follow. The
+§7 phase plan carries per-phase status inline.
 
 **Scope:** The computational substrate for the homological invariants — Khovanov
 (and Lee / Rasmussen *s*) and, later, knot Floer (τ, ε, ν, HFK). This document
@@ -109,31 +113,41 @@ sits outside.
 | Invariant | Engine | Back end | Status |
 |---|---|---|---|
 | determinant, signature, Alexander | Seifert-form | dense integer (own) | **done, validated** |
-| Jones polynomial | Kauffman bracket + cube skeleton | (combinatorial, light) | planned (warm-up) |
-| Khovanov homology | Khovanov complex | shared F2/F_p reducer | planned |
-| Rasmussen *s* | Khovanov + Lee deformation | shared reducer over ℚ (via multimodular) | planned |
+| Jones polynomial | Kauffman bracket + cube skeleton | (combinatorial, light) | **done, validated** |
+| Khovanov homology | Khovanov complex | shared reducer (F2 fast lane / exact ℚ lane) | **done, validated (F2 and ℚ)** |
+| Rasmussen *s* | Khovanov + Lee deformation | shared reducer over ℚ (exact `Fraction`; multimodular is a Phase 5 optimization) | **done, validated** |
 | τ, ε, ν, HFK ranks | Floer (grid or Szabó cube) | shared reducer | later |
 
-### Proposed module layout (indicative, not binding)
+### Module layout (as built; Phase-5/6 entries still indicative)
 
 ```text
 src/tetradrome/
   invariants/
     seifert.py            # done: dense-integer engine (det/sig/Alexander)
+    jones.py              # done: Kauffman bracket -> Jones
+    compute.py            # done: dispatch + validate-by-default + provenance
   engines/                # FRONT ENDS (one subpackage per theory)
-    khovanov/             # cube, enhanced states, gradings, differential, d^2=0
-    lee/                  # Lee deformation, filtration, s-invariant extraction
-    floer/                # grid homology and/or Szabo cube (later)
+    cube.py               # done: resolution cube (states, smoothings, circles)
+    khovanov/             # done: gradings, differential (F2 + signed ℚ), homology,
+                          #       lee.py (Lee deformation), rasmussen.py (s-invariant)
+    floer/                # grid homology and/or Szabo cube (Phase 6)
   algebra/                # SHARED BACK END (invariant-agnostic)
-    complex.py            # graded chain complex; sparse boundary maps over a ring
-    reduce_reference.py   # pure-Python reference reducer (rank/kernel/image)
-    reduce_f2_packed.py   # bit-packed F2 reducer (acceleration tier)
-    reduce_jit.py         # Numba-JIT tier
-    reduce_gpu.py         # CuPy / Numba-CUDA tier (optional)
-    multimodular.py       # primes + CRT + rational reconstruction (for Q)
-    memory.py             # complex-size predictor + fill-in estimate + routing
-    tiers.py              # runtime tier detection + selection + graceful fallback
+    complex.py            # done: F2 graded complex (the fast-lane representation)
+    reduce_reference.py   # done: pure-Python F2 reference reducer
+    rational_complex.py   # done: ℚ graded complex (the rational lane)
+    rational_reduce.py    # done: exact-ℚ reference reducer (Fraction)
+    reduce_f2_packed.py   # bit-packed F2 reducer (Phase 5)
+    multimodular.py       # primes + CRT + rational reconstruction (Phase 5 optimization)
+    memory.py             # complex-size predictor + fill-in estimate + routing (Phase 5)
+    tiers.py              # runtime tier detection + selection + fallback (Phase 5)
 ```
+
+Lee and the s-invariant live under `engines/khovanov/` rather than a separate
+`lee/` subpackage: they reuse the same signed cube and generators, deforming only
+the Frobenius maps. The back end ended up two reference lanes behind one interface
+(an F2 fast lane and an exact-ℚ lane) rather than one ring-parameterized reducer —
+the field-tested split (Ripser/PHAT keep F2 special; Sage parameterizes one
+complex), chosen so the validated F2 path stayed untouched when ℚ was added.
 
 ---
 
@@ -294,29 +308,39 @@ paper at the end. That is an incentive problem, not a verdict that GPU cannot he
 Each phase is validated before the next begins. Reductions and acceleration are added
 *after* a faithful reference exists and must never change an answer.
 
-- **Phase 0 — Jones warm-up.** Kauffman bracket plus the cube *skeleton* (state
-  enumeration, crossing resolution, circle detection) at trivial compute cost.
-  Exercises and validates the cube machinery and the bracket; it is the scaffold
-  Khovanov bolts directly onto. Validate the Jones polynomial against KnotInfo.
-- **Phase 1 — Back-end interface + reference reducer.** Define the graded chain
-  complex (chain groups by grading; sparse boundary maps over a ring) and a
-  pure-Python F2 reducer (rank / kernel / image → homology dimension), with the
-  `d² = 0` check. This is the general, faithful core, and the reference for
-  everything later. The exact unreduced size of a *built* complex lives here
-  (`total_dim`); the cheaper predictor that reads size off the *diagram* without
-  building it is cube-specific (2ⁿ vertices, 2^circles generators) and lands with
-  Khovanov in Phase 2, so the invariant-agnostic back end never imports a front end.
-- **Phase 2 — Khovanov front end (raw/faithful).** Build the unreduced cube complex
-  over F2 (enhanced states, gradings, differentials); feed the reference reducer;
-  validate Khovanov homology against KnotInfo's mod-2 data. First full faithful path
-  end to end. Includes the cheap-from-diagram exact size predictor (2ⁿ vertices,
-  2^circles generators; §5), which belongs here with the cube it profiles.
-- **Phase 3 — Lee / Rasmussen *s*.** Lee deformation, filtered complex, extract *s*
-  under documented conventions. Work over ℚ via multimodular (primes + CRT + rational
-  reconstruction) to stay exact and fixed-width. Validate *s* against KnotInfo.
+- **Phase 0 — Jones warm-up. [done, validated]** Kauffman bracket plus the cube
+  *skeleton* (state enumeration, crossing resolution, circle detection) at trivial
+  compute cost. Exercises and validates the cube machinery and the bracket; it is the
+  scaffold Khovanov bolts directly onto. Jones validated against KnotInfo through 11
+  crossings. (Pinned here: our gradings put `t = q⁻²` relative to the Khovanov `q`.)
+- **Phase 1 — Back-end interface + reference reducer. [done]** The graded chain
+  complex (chain groups by grading; sparse boundary maps) and a pure-Python F2 reducer
+  (rank → homology dimension) with the `d² = 0` check — the general, faithful core and
+  the reference for everything later. `total_dim` lives here; the cheap-from-diagram
+  size predictor is cube-specific and lands with Khovanov in Phase 2. (The exact-ℚ
+  lane — `rational_complex` / `rational_reduce` — was added alongside in Phase 3, when
+  Lee first needed it.)
+- **Phase 2 — Khovanov front end (raw/faithful). [done, validated]** The unreduced
+  cube complex over F2 (enhanced states, gradings, differential), fed to the reference
+  reducer; Khovanov homology validated against KnotInfo's mod-2 data (derived from the
+  stored integral vector by universal coefficients). First full faithful path end to
+  end. Includes the cheap-from-diagram size predictor. **Chirality pinned here:**
+  KnotInfo tabulates Khovanov in the opposite chirality from its own stored PD, so our
+  value (the correct Khovanov of the given diagram) matches up to the global mirror
+  `(i, j) → (−i, −j)`; the oracle mirrors to compensate.
+- **Phase 3 — Lee / Rasmussen *s*. [done, validated]** Signed Khovanov over ℚ (cube
+  edge signs, validated by `d² = 0` over ℚ and against KnotInfo's free ranks); the Lee
+  deformation (a single complex graded by `i`, filtered by `q`; Lee homology is
+  2-dimensional for a knot); and *s* read off the quantum filtration on Lee homology,
+  validated against KnotInfo across `s = 0, ±2, ±4, ±6`. **Deviation from the original
+  plan:** the reference works over ℚ with **exact `Fraction` arithmetic, not
+  multimodular**. Multimodular (primes + CRT + rational reconstruction) is a
+  fixed-width *optimization* and belongs in Phase 5 with the other acceleration tiers
+  (decision 0007: faithful reference first), not in the reference path. All three
+  invariants, plus Jones, are wired into `compute()` with validate-by-default.
 - **Phase 4 — Exact reductions (optional pre-pass).** Delooping + local Gaussian
   elimination; toggleable; verify `raw == reduced` across the catalog. Doubles as the
-  memory *size* tool of §5.
+  memory *size* tool of §5. **(next)**
 - **Phase 5 — Acceleration tiers.** Bit-packed F2 reducer → Numba JIT →
   multi-core/NUMA → GPU (CuPy / Numba-CUDA), each validated against the pure
   reference via agreement tests (`SPEC.md` §4.2/§13.7). Wire the runtime tier

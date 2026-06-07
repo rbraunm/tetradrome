@@ -5,19 +5,17 @@ SPEC Section 16, as a tracked checklist. `[ ]` not started, `[~]` in progress,
 on exercising an external tool; "data" tags an item that depends on imported
 known-answer values.
 
-Current focus: Milestone 0 and Milestone 1, plus the catalog/known-answer parts
-of Milestones 2 and 3. These are the pre-code deliverables.
-
-Research status: the three pip backends -- Spherogram (diagrams),
-`knot_floer_homology` (Floer), and KnotInfo via `database_knotinfo` (oracle) --
-are empirically verified; see `roadmap/research/`. All three are pip-only and
-standalone. The remaining "research"-tagged items below are syntheses of those
-notes, not new investigation.
-
-Deferred to post-foundation (see "Deferred" section): the Sage-feasibility and
-KnotJob spikes. They gate *computing* Khovanov/Rasmussen fresh, but KnotInfo
-already supplies those as known answers (including mod-2 Khovanov), so they do
-not block the foundation.
+**Status note (native-first pivot, ADRs 0006/0007/0009).** This checklist predates
+the pivot from an orchestration foundation (adapt external tools) to native
+computation (own the engines; external tools are validation oracles only). The live
+tracker for the homology engines is now `roadmap/design/homology-engine.md` §7:
+**Phases 0–3 are done and validated** — Jones, the shared back end, native Khovanov
+over F2 and ℚ, Lee, and the Rasmussen *s*-invariant, all wired into `compute()` and
+checked against KnotInfo. Below, the native milestones (M7, M9) are marked done; the
+external-backend milestones (M4 adapters, M4A modernization harness, the Sage/KnotJob
+spikes) are **superseded** — Tetradrome computes these natively and only validates
+against KnotInfo. The remaining open work is acceleration (M8 = engine Phase 5), the
+report generator (M5), the Conway reproducer (M6), and native Floer (engine Phase 6).
 
 ---
 
@@ -80,12 +78,13 @@ not block the foundation.
 - [ ] explicit statement of what it does and does not establish
 
 ## Milestone 7 -- Native mod-2 Khovanov engine
-- [ ] cube-of-resolutions enumeration
-- [ ] resolution-circle detection
-- [ ] chain group construction
-- [ ] differential over F2
-- [ ] d^2 = 0 verification
-- [ ] known-answer validation against external backends
+- [x] cube-of-resolutions enumeration
+- [x] resolution-circle detection
+- [x] chain group construction
+- [x] differential over F2
+- [x] d^2 = 0 verification
+- [x] known-answer validation against external backends
+  *(done & validated; also extended to a signed ℚ lane -- see engine Phase 2/3a)*
 
 ## Milestone 8 -- Native exact algebra / performance backend
 - [ ] packed-bit F2 matrix representation
@@ -95,11 +94,11 @@ not block the foundation.
 - [ ] benchmarks
 
 ## Milestone 9 -- Native Lee / Rasmussen experiments
-- [ ] Lee deformation
-- [ ] filtered-complex handling
-- [ ] Rasmussen s-invariant extraction
-- [ ] validation on known knots
-- [ ] comparison with external backends
+- [x] Lee deformation
+- [x] filtered-complex handling
+- [x] Rasmussen s-invariant extraction
+- [x] validation on known knots  *(vs KnotInfo, s = 0, ±2, ±4, ±6)*
+- [x] comparison with external backends  *(KnotInfo oracle, up to the documented mirror)*
 
 ## Milestone 10 -- External review package
 - [ ] compact technical summary
