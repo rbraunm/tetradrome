@@ -364,8 +364,10 @@ Each phase is validated before the next begins. Reductions and acceleration are 
   complexes (`parallel.py` — process pool, parallel == serial), and size prediction with
   size/VRAM-aware routing (`memory.py` — packed reduction peak per complex, GPU only when
   it fits the measured budget and clears a calibratable threshold, loud failure over a RAM
-  budget). *Remaining:* the multimodular ℚ path, Numba JIT, a batched (non-sync-bound) GPU
-  kernel, and NUMA pinning.
+  budget), and the multimodular ℚ path (`multimodular.py` — rank over ℚ as the max of ranks
+  mod several large primes, dodging `Fraction` coefficient explosion; validated identical to
+  the exact reducer). *Remaining:* Numba JIT, a batched (non-sync-bound) GPU kernel, and
+  NUMA pinning — each better calibrated on real hardware than built blind.
 - **Phase 6 — Floer front end (peer engine).** Grid homology (MOS rectangles)
   and/or the Szabó HFK cube, feeding the *same* back end; τ, ε, ν, HFK ranks;
   validate against KnotInfo. Note the n! generation bottleneck → generation-side
