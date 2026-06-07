@@ -133,6 +133,17 @@ def pd_notation(name: str) -> list:
     return ast.literal_eval(raw)
 
 
+def grid_notation(name: str) -> list[list[int]]:
+    """Parse a knot's grid diagram from KnotInfo into a list of [row, col] markers
+    (1-based, 2n of them). Like the PD code and braid word, this is a *presentation* of
+    the knot -- input to the grid-homology engine -- not a precomputed answer.
+    """
+    raw = lookup(name).get("grid_notation")
+    if not raw:
+        raise UnknownKnot(f"{name!r} has no grid_notation in KnotInfo.")
+    return ast.literal_eval(raw)
+
+
 def braid_word(name: str) -> list[int]:
     """Parse a knot's braid word from KnotInfo into a list of nonzero ints.
 
