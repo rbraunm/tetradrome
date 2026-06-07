@@ -3,7 +3,7 @@
 Emits graded chain complexes (one per quantum grading) for the shared algebra back end
 to reduce. F2 first (decision 0003); see roadmap/design/homology-engine.md.
 """
-from .differential import khovanov_complexes
+from .differential import khovanov_complexes, khovanov_complexes_q
 from .gradings import (
     chain_dimensions,
     crossing_counts,
@@ -11,7 +11,7 @@ from .gradings import (
     grading,
     unreduced_size,
 )
-from .homology import khovanov_homology
+from .homology import khovanov_homology, khovanov_homology_q
 
 __all__ = [
     "chain_dimensions",
@@ -19,6 +19,8 @@ __all__ = [
     "enhanced_generators",
     "grading",
     "khovanov_complexes",
+    "khovanov_complexes_q",
     "khovanov_homology",
+    "khovanov_homology_q",
     "unreduced_size",
 ]
