@@ -107,6 +107,12 @@ the bound and the oracle's tabulated value, and never present a bound as a resol
 `unknotting_number_algebraic`, `bridge_index`, `super_bridge_index`, `tunnel_number`,
 `morse_novikov_number`, `crossing_number` (minimal, in general), `cosmetic_crossing`.
 
+Note on `unknotting_number`: the *exact* value is the open/bounded problem here, but its
+*operational* siblings — certifying u(K) = 1 and finding an unknotting crossing in a diagram — are a
+distinct, buildable engine (Reidemeister-graph search for existence; Montesinos-trick / branched-cover
+d-invariant + Nakanishi for the u ≥ 2 obstruction). They are an explicit prerequisite of the
+Piccirillo flagship in `four-manifold-objectives.md`, not a Tier 3 bound.
+
 ---
 
 ## Tier 4 — hyperbolic & geometric (research)

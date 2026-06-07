@@ -115,6 +115,20 @@ pieces already on this map.
   0-surgeries) share smooth slice status but *not* the values of the slice invariants. If s(K) is
   uselessly zero, construct a friend K′ with s(K′) ≠ 0 and transfer the conclusion. Given an
   unknotting-number-1 diagram with a marked unknotting crossing, the friend is algorithmic [Pic20].
+- **Prerequisite — unknotting machinery (explicit, not assumed).** The friend construction does not
+  start from a knot; it starts from *an unknotting-number-1 diagram with a chosen unknotting crossing*,
+  and producing that is its own engine with two distinct halves:
+  (i) **finding** an unknotting crossing — a diagram-combinatorics search (walk the Reidemeister graph
+  for a crossing whose change yields the unknot), the operational input the friend needs;
+  (ii) **certifying** u(K) = 1 — the existence side is a witnessed search, but the *obstruction* side
+  (proving u ≥ 2) is real theory: the Montesinos trick (u = 1 ⇒ the double branched cover is a
+  half-integer surgery) feeding Heegaard Floer d-invariant / Donaldson obstructions on Σ(K), plus
+  Alexander-module bounds (Nakanishi index). This is distinct from the *exact* unknotting number,
+  which is open in general (it lives in `coverage-map.md` Tier 3 as a bound). The flagship needs only
+  u = 1 detection + crossing-finding, not the general value — but it needs them as a built, validated
+  engine, reusing Layer B branched covers and Layer C d-invariants for the obstruction half. Validates
+  by reproducing the known unknotting-number-1 census and the unknotting crossings used in the
+  Conway-knot and Manolescu–Piccirillo constructions.
 - **RBG links [Manolescu–Piccirillo 2023].** The fully general machine for same-0-surgery pairs: a
   3-component framed link encoding a 0-surgery homeomorphism, with special / n-RBG variants,
   dualizable patterns, and annulus twisting as special cases. Turns "find a friend" into enumeration.
