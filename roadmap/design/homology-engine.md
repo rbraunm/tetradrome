@@ -431,6 +431,37 @@ Each phase is validated before the next begins. Reductions and acceleration are 
   This is the project's audit-friendly thesis applied to Floer: a from-first-principles complex
   an expert can inspect and check against the fast tools, not just a number to trust.
 
+- **Phase 8 — Compact grid-complex representation (exploratory).** *Exploratory.* Moves the
+  scaling wall rather than fencing it. The grid method's binding constraint is **memory, not
+  time**: the bench harness measures a steady ~2.6 KiB per generator (74.7 MiB at n=8, 795 MiB
+  at n=9, 9.33 GiB at n=10 — parent-traced; worker slices and IPC add more), so n=11's ~40M
+  generators project to ~100+ GiB and OOM a workstation. The cost is the *representation*, not
+  the plumbing: even serial generation holds, for every one of the n! states, a permutation
+  **tuple** plus a **frozenset of target permutation tuples** (the differential column). The
+  `imap` change in `floer/scaling.py` removed a transient duplicate but left the traced peak
+  essentially unchanged, confirming the floor is the data structure itself. The lever:
+  (a) represent each generator by its **lexicographic rank** (a single int via the factorial
+  number system — `_unrank`/its inverse already exist in `scaling.py`) instead of an n-tuple;
+  a 10-int tuple is ~500 B of object overhead, an int rank ~28 B;
+  (b) represent each differential column as a **packed bitset over row indices** (the
+  `reduce_f2_packed` bitint machinery already speaks this language) instead of a
+  `frozenset` of target tuples, so the column is one big integer rather than k boxed tuples;
+  (c) thread this representation through `grid_complexes` / `parallel_grid_complexes` /
+  `GradedComplex` so generation emits the packed form directly and reduction consumes it
+  without a tuple round-trip — eliminating the tuple→position mapping pass entirely.
+  Expected effect: a large constant-factor cut in bytes/generator (plausibly 5–10×), which buys
+  ~1–2 grid sizes of reach before the factorial reasserts itself — meaningful for a specific
+  borderline computation, not a change in asymptotics. Risks/notes: the rank↔permutation
+  inverse must be exact and fast (it is hot — once per generator); position assignment must stay
+  in global lexicographic order so results remain byte-identical to today's `grid_complexes`
+  (the existing agreement test is the guard); and this dovetails with Phase 7's serialization
+  need (a packed, ranked complex is also the natural on-disk artifact). Validation discipline is
+  unchanged: every tier reproduces the reference homology exactly, checked at n≤7 in the suite,
+  scaled via the harness. Open question to resolve when picked up: whether to keep the
+  tuple-based path for the small-knot/audit case and switch to packed only above a size
+  threshold, or unify on packed everywhere (the latter is cleaner but loses the human-readable
+  permutation in the auditable complex — which Phase 7 may want, so decide jointly with 7(a)).
+
 Ordering rationale: general and faithful first (Phases 0–3 produce correct answers
 with the reference reducer), exact reductions second (Phase 4, still answer-identical
 and individually validated), acceleration last (Phase 5, validated against the
