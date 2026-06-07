@@ -101,6 +101,45 @@ oracles, not as engines we author. Stated so the boundary is explicit.
 
 ---
 
+## Flagship program — the Piccirillo trace method (slice detection via friends)
+
+Piccirillo's proof that the Conway knot is not slice is the whole Tetradrome thesis in one
+result: a knot question (sliceness) recast as a 4-manifold question (does the 0-trace embed in
+S⁴), solved by swapping the knot for a *trace sibling* that the same smooth invariant — Rasmussen s
+— actually detects. It belongs here as a flagship, not a footnote, and it is mostly built from
+pieces already on this map.
+
+- **Trace embedding lemma.** K is smoothly slice ⇔ its 0-trace X₀(K) embeds smoothly in S⁴ — the
+  bridge that turns every slice question into a 4-manifold-embedding question (Layer B builds X_n(K)).
+- **Trace siblings / Piccirillo friends.** Knots with diffeomorphic traces (for the 0-trace, equal
+  0-surgeries) share smooth slice status but *not* the values of the slice invariants. If s(K) is
+  uselessly zero, construct a friend K′ with s(K′) ≠ 0 and transfer the conclusion. Given an
+  unknotting-number-1 diagram with a marked unknotting crossing, the friend is algorithmic [Pic20].
+- **RBG links [Manolescu–Piccirillo 2023].** The fully general machine for same-0-surgery pairs: a
+  3-component framed link encoding a 0-surgery homeomorphism, with special / n-RBG variants,
+  dualizable patterns, and annulus twisting as special cases. Turns "find a friend" into enumeration.
+- **Detection layer (ours, natively).** The friends are inert without an invariant that sees them.
+  Rasmussen s is the workhorse; the Steenrod-refined s^{Sq} invariants (Lipshitz–Sarkar) and
+  skein-lasagna-refined obstructions catch cases where plain s vanishes. This is exactly the
+  Khovanov/Lee machinery we author (Tier 0 s; Tier 2 refinements) — the Piccirillo pipeline is a
+  *consumer* of our detection engines, which is why it sits so naturally here.
+- **Exotic-4-manifold candidates (the apex).** 0-surgery homeomorphisms glue into candidate exotic
+  definite 4-manifolds (#nℂP²); a friend H-slice in one copy but s-obstructed in another would be an
+  exotic pair, bearing on the smooth 4-dimensional Poincaré conjecture. The frontier the bridge aims at.
+
+**Why this is on the roadmap, not "done."** The construction *is* implemented in research code — the
+friend algorithm has been coded and run over census knots, and recent exotic-trace searches automate
+it — but those implementations are paper-specific, unmaintained, and built **on top of SnapPy**
+(triangulating the RBG-link exterior, filling surgery slopes, distinguishing knots by volume), with
+s pulled from separate tools. There is no from-first-principles, single-schema implementation. That
+is Tetradrome's opening: author the trace / friend / RBG constructions natively, feed them our own s
+and refined-s detectors, and keep SnapPy as an *optional oracle* (volume / HOMFLYPT to certify a
+constructed friend is genuinely a distinct knot) — never the engine. Validation: reproduce the
+Conway-knot result (s of its friend ≠ 0) and the Manolescu–Piccirillo example pairs; verify trace
+diffeomorphism from the RBG certificate; agree with SnapPy on distinguishing volumes where used.
+
+---
+
 ## Sequencing
 
 Layer A is next-to-free and is the project's whole thesis made visible — it should ride along with
@@ -108,4 +147,7 @@ Phase 7 (which produces the CFK the concordance invariants read off). Layer B is
 substantial 4D build and is self-contained (Kirby calculus + intersection forms validate purely by
 internal consistency, no oracle needed). Layers C–D are the long horizon. Layer E is a boundary, not
 a backlog. The discipline from the homology engine carries over unchanged: nothing is "done" until
-it reduces correctly to the knot invariants we already validate and obeys the structural laws it must.
+it reduces correctly to the knot invariants we already validate and obeys the structural laws it must. The **Piccirillo program** is the natural integrating target: it consumes Layer A's s (and
+its refinements), Layer B's traces and RBG/Kirby machinery, and points straight at the exotica
+frontier — so as those layers land, the flagship is what assembles them into a result no single
+existing tool produces from first principles.
