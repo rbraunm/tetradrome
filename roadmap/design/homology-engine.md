@@ -1,10 +1,11 @@
 # Homology Computation Engine — Design & Implementation Path
 
-**Status:** Phases 0–3 implemented and validated — Jones (warm-up), the shared
-back end, native Khovanov over F2 and ℚ, the Lee deformation, and the Rasmussen
-*s*-invariant — all wired into `compute()` and checked against KnotInfo. Phase 4
-(exact reductions) is next; acceleration (Phase 5) and Floer (Phase 6) follow. The
-§7 phase plan carries per-phase status inline.
+**Status:** Phases 0–4 implemented and validated — Jones (warm-up), the shared
+back end, native Khovanov over F2 and ℚ, the Lee deformation, the Rasmussen
+*s*-invariant (all wired into `compute()` and checked against KnotInfo), and exact
+Gaussian-cancellation reduction (cross-checked `raw == reduced`). Acceleration
+(Phase 5) is next; Floer (Phase 6) follows. The §7 phase plan carries per-phase
+status inline.
 
 **Scope:** The computational substrate for the homological invariants — Khovanov
 (and Lee / Rasmussen *s*) and, later, knot Floer (τ, ε, ν, HFK). This document
@@ -338,9 +339,13 @@ Each phase is validated before the next begins. Reductions and acceleration are 
   fixed-width *optimization* and belongs in Phase 5 with the other acceleration tiers
   (decision 0007: faithful reference first), not in the reference path. All three
   invariants, plus Jones, are wired into `compute()` with validate-by-default.
-- **Phase 4 — Exact reductions (optional pre-pass).** Delooping + local Gaussian
-  elimination; toggleable; verify `raw == reduced` across the catalog. Doubles as the
-  memory *size* tool of §5. **(next)**
+- **Phase 4 — Exact reductions. [done]** Gaussian cancellation of the complex (the
+  elimination lemma; delooping is implicit in the generators), field-agnostic over F2
+  and ℚ. An independent homology algorithm, validated `raw == reduced` across the
+  catalog on both lanes, that collapses the full cube to its homology dimension (the
+  engine's memory tool in embryo — e.g. 7₄'s Lee cube, 1182 → 2). Unoptimized
+  reference; partial-reduction-as-pre-pass and the fill-in/VRAM routing land in Phase 5
+  where the tiers exist.
 - **Phase 5 — Acceleration tiers.** Bit-packed F2 reducer → Numba JIT →
   multi-core/NUMA → GPU (CuPy / Numba-CUDA), each validated against the pure
   reference via agreement tests (`SPEC.md` §4.2/§13.7). Wire the runtime tier
