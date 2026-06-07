@@ -34,7 +34,7 @@ oracle. The claims below are about Tetradrome's own native computation.
 | Rasmussen *s* computed natively | Green | read off the Lee quantum filtration; validated vs KnotInfo across s = 0, ±2, ±4, ±6 (incl. T(3,4)) | the invariant with concordance teeth |
 | Outputs normalize into a shared, validated schema | Green | `InvariantResult` / `Provenance` / `ValidationStatus`; `compute()` validate-by-default, oracle mirror handled in one place | all of the above flow through `compute()` |
 | Exact reductions preserve homology (`raw == reduced`) | Green | Gaussian cancellation (field-agnostic F2/ℚ); reproduces the rank-based homology per grading across the catalog and the bigraded F2 table; collapses the cube to its homology dimension | Phase 4; unoptimized reference, packed/accelerated cancellation is Phase 5 |
-| Acceleration tiers agree with the reference | Red | not implemented | Phase 5 (packed-bit F2 / JIT / GPU) |
+| Acceleration tiers agree with the reference | Yellow | bit-packed F2 tier (pure-Python int bit-vectors; uint64 word arrays shared across numpy/CPU and cupy/GPU) reproduces the reference homology across the catalog for every runnable backend; runtime registry with loud fallback; CPU/GPU accuracy+speed harness | Phase 5 in progress — JIT, multi-core/NUMA, GPU-proper, multimodular ℚ, and memory routing remain |
 | Native Floer (τ, ε, ν, HFK ranks) | Red | not implemented | Phase 6 (peer engine) |
 | Conway-adjacent workflow report is reproducible | Red | not assembled | needs the report generator + a curated input trail |
 | Existing tooling survey completed | Yellow | initial list in SPEC §4 + `roadmap/research/` notes | needs maintenance / expert review |

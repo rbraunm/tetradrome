@@ -4,7 +4,9 @@
 back end, native Khovanov over F2 and ℚ, the Lee deformation, the Rasmussen
 *s*-invariant (all wired into `compute()` and checked against KnotInfo), and exact
 Gaussian-cancellation reduction (cross-checked `raw == reduced`). Acceleration
-(Phase 5) is next; Floer (Phase 6) follows. The §7 phase plan carries per-phase
+(Phase 5) is under way — the bit-packed F2 tier, the runtime registry, and the
+CPU/GPU benchmark harness are in; JIT/NUMA/GPU-proper, the multimodular ℚ path, and
+memory routing remain. Floer (Phase 6) follows. The §7 phase plan carries per-phase
 status inline.
 
 **Scope:** The computational substrate for the homological invariants — Khovanov
@@ -346,11 +348,17 @@ Each phase is validated before the next begins. Reductions and acceleration are 
   engine's memory tool in embryo — e.g. 7₄'s Lee cube, 1182 → 2). Unoptimized
   reference; partial-reduction-as-pre-pass and the fill-in/VRAM routing land in Phase 5
   where the tiers exist.
-- **Phase 5 — Acceleration tiers.** Bit-packed F2 reducer → Numba JIT →
+- **Phase 5 — Acceleration tiers. [in progress]** Bit-packed F2 reducer → Numba JIT →
   multi-core/NUMA → GPU (CuPy / Numba-CUDA), each validated against the pure
   reference via agreement tests (`SPEC.md` §4.2/§13.7). Wire the runtime tier
   selector and the memory predictor/router (the fill-in estimate + VRAM-aware
   routing land here, where GPU/tiers actually exist).
+  *Done:* the bit-packed F2 tier (`reduce_f2_packed.py` — pure-Python int bit-vectors,
+  plus uint64 word arrays parameterized by the array module so one body of code runs on
+  numpy/CPU and cupy/GPU), the runtime registry with detection and loud fallback
+  (`tiers.py`), the per-backend agreement tests, and the CPU-vs-GPU accuracy+speed harness
+  (`scripts/bench_reducers.py`). *Remaining:* Numba JIT, multi-core/NUMA, the multimodular
+  ℚ path, and the memory predictor / VRAM routing.
 - **Phase 6 — Floer front end (peer engine).** Grid homology (MOS rectangles)
   and/or the Szabó HFK cube, feeding the *same* back end; τ, ε, ν, HFK ranks;
   validate against KnotInfo. Note the n! generation bottleneck → generation-side
