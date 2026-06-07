@@ -21,11 +21,13 @@ not assume.
 from __future__ import annotations
 
 import argparse
+import os
 import random
 import time
 
 from tetradrome import knots
 from tetradrome.algebra import gpu, tiers
+from tetradrome.algebra.parallel import parallel_f2_homology
 from tetradrome.algebra.reduce_reference import homology
 from tetradrome.engines import khovanov
 
@@ -130,6 +132,29 @@ def speed_synthetic(sizes: list[int], backends: list[str], density: float, repea
     print()
 
 
+_CPU_BACKENDS = ("reference", "bitint", "packed-cpu")
+
+
+def speed_parallel(knot_names: list[str], backends: list[str], workers: int, repeat: int) -> None:
+    cpu_backends = [b for b in backends if b in _CPU_BACKENDS]
+    if not cpu_backends:
+        return
+    items = {}
+    for name in knot_names:
+        pd = knots.from_name(name).pd_code
+        for j, cx in khovanov.khovanov_complexes(pd).items():
+            items[(name, j)] = cx
+    print(f"== speed: serial vs parallel, {len(items)} complexes on {workers} workers "
+          f"(best of {repeat}) ==")
+    print(f"  {'backend':11s} {'serial':>12s} {'parallel':>12s} {'speedup':>10s}")
+    for backend in cpu_backends:
+        ser = _time(lambda: {k: tiers.f2_homology(cx, backend=backend) for k, cx in items.items()}, repeat)
+        par = _time(lambda: parallel_f2_homology(items, backend=backend, workers=workers), repeat)
+        speedup = ser / par if par > 0 else float("inf")
+        print(f"  {backend:11s} {ser * 1e3:10.2f}ms {par * 1e3:10.2f}ms {speedup:9.2f}x")
+    print()
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--knots", type=str, default=",".join(DEFAULT_KNOTS),
@@ -141,6 +166,9 @@ def main() -> None:
     ap.add_argument("--density", type=float, default=0.5, help="synthetic matrix density")
     ap.add_argument("--repeat", type=int, default=3, help="timing repetitions (best is kept)")
     ap.add_argument("--skip-synthetic", action="store_true", help="skip the synthetic sweep")
+    ap.add_argument("--skip-parallel", action="store_true", help="skip the serial-vs-parallel run")
+    ap.add_argument("--workers", type=int, default=None,
+                    help="worker processes for the parallel run (default: CPU count)")
     ap.add_argument("--gpu-info", action="store_true",
                     help="print GPU detection and enablement guidance, then exit")
     args = ap.parse_args()
@@ -160,6 +188,8 @@ def main() -> None:
     knot_names = [k for k in args.knots.split(",") if k]
     accuracy(knot_names, backends)
     speed_knots(knot_names, backends, args.repeat)
+    if not args.skip_parallel:
+        speed_parallel(knot_names, backends, args.workers or (os.cpu_count() or 1), args.repeat)
     if not args.skip_synthetic:
         sizes = [int(s) for s in args.sizes.split(",") if s]
         speed_synthetic(sizes, backends, args.density, args.repeat)
