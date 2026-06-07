@@ -6,6 +6,7 @@ reduces them to homology. Two lanes behind one interface: an F2 fast lane (decis
 roadmap/design/homology-engine.md.
 """
 from .complex import GradedComplex
+from .gpu import detect_gpu, enablement_instructions, gpu_config
 from .rational_complex import RationalComplex
 from .rational_reduce import rational_homology, rational_rank
 from .reduce_f2_packed import f2_rank_bitint, f2_rank_words
@@ -18,11 +19,14 @@ __all__ = [
     "RationalComplex",
     "available_f2_backends",
     "best_available_backend",
+    "detect_gpu",
+    "enablement_instructions",
     "f2_homology",
     "f2_rank",
     "f2_rank_bitint",
     "f2_rank_words",
     "gaussian_homology",
+    "gpu_config",
     "homology",
     "rank_backend",
     "rational_homology",

@@ -16,6 +16,7 @@ array module, so the CPU run validates the exact path the GPU takes.
 """
 from __future__ import annotations
 
+from .gpu import usable_cupy
 from .reduce_f2_packed import f2_rank_bitint, f2_rank_words
 from .reduce_reference import f2_rank
 
@@ -32,15 +33,8 @@ def _numpy():
 
 
 def _cupy_if_gpu():
-    """cupy module iff it imports and reports at least one CUDA device, else None."""
-    try:
-        import cupy
-
-        if cupy.cuda.runtime.getDeviceCount() > 0:
-            return cupy
-    except Exception:
-        return None
-    return None
+    """cupy iff a CUDA device is usable, via the shared detector in gpu.py."""
+    return usable_cupy()
 
 
 def available_f2_backends() -> list[tuple[str, bool, str]]:

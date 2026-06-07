@@ -25,7 +25,7 @@ import random
 import time
 
 from tetradrome import knots
-from tetradrome.algebra import tiers
+from tetradrome.algebra import gpu, tiers
 from tetradrome.algebra.reduce_reference import homology
 from tetradrome.engines import khovanov
 
@@ -47,6 +47,16 @@ def _selected_backends(requested: list[str] | None) -> list[tuple[str, str]]:
         else:
             out.append((name, note[name]))
     return out
+
+
+def _print_gpu() -> None:
+    print(gpu.format_report())
+    steps = gpu.enablement_instructions()
+    if steps:
+        print("\nTo enable the GPU tier:")
+        for line in steps.splitlines():
+            print(f"  {line}")
+    print()
 
 
 def _print_availability() -> None:
@@ -131,7 +141,13 @@ def main() -> None:
     ap.add_argument("--density", type=float, default=0.5, help="synthetic matrix density")
     ap.add_argument("--repeat", type=int, default=3, help="timing repetitions (best is kept)")
     ap.add_argument("--skip-synthetic", action="store_true", help="skip the synthetic sweep")
+    ap.add_argument("--gpu-info", action="store_true",
+                    help="print GPU detection and enablement guidance, then exit")
     args = ap.parse_args()
+
+    _print_gpu()
+    if args.gpu_info:
+        return
 
     _print_availability()
     requested = args.backends.split(",") if args.backends else None
