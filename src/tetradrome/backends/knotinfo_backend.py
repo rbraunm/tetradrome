@@ -144,6 +144,19 @@ def grid_notation(name: str) -> list[list[int]]:
     return ast.literal_eval(raw)
 
 
+def hfk_ranks(name: str) -> dict[tuple[int, int], int]:
+    """Parse KnotInfo's HFK-hat into ``{(Maslov, Alexander): rank}`` (the oracle for the
+    grid-homology engine). The stored vector lists ``rank, Alexander, Maslov`` triples."""
+    raw = lookup(name).get("hfk_polynomial_vector")
+    if not raw:
+        raise UnknownKnot(f"{name!r} has no hfk_polynomial_vector in KnotInfo.")
+    out: dict[tuple[int, int], int] = {}
+    for triple in str(raw).strip().strip("[]").split(";"):
+        rank, alexander_grading, maslov_grading = (int(v) for v in triple.split(","))
+        out[(maslov_grading, alexander_grading)] = rank
+    return out
+
+
 def braid_word(name: str) -> list[int]:
     """Parse a knot's braid word from KnotInfo into a list of nonzero ints.
 

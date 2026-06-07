@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import itertools
 from collections import defaultdict
+from functools import cached_property
 
 from ...errors import TetradromeError
 
@@ -81,6 +82,13 @@ class GridDiagram:
         from ...backends import knotinfo_backend as ki
 
         return cls.from_markers(ki.grid_notation(name))
+
+    @cached_property
+    def marker_cells(self) -> frozenset:
+        """The 2n cells holding a marker (O or X), as (row, column) pairs."""
+        return frozenset(
+            [(r, self.O[r]) for r in range(self.n)] + [(r, self.X[r]) for r in range(self.n)]
+        )
 
     def generators(self):
         """Iterator over generators: each is a permutation ``sigma`` placing a point at

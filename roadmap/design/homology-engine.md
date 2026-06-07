@@ -8,7 +8,9 @@ Gaussian-cancellation reduction (cross-checked `raw == reduced`). Acceleration
 (GPU and numba now confirmed on real hardware); the measured outcome is that the
 pure-Python `bitint` reducer is the workhorse and the router keeps work on the CPU. A
 true on-device GPU kernel is deferred to a late-project goal (decision 0010); only the
-NUMA-pinning speed check on a multi-socket box remains. Floer (Phase 6) follows. The §7
+NUMA-pinning speed check on a multi-socket box remains. Floer (Phase 6) is in progress:
+the grid-homology engine now computes HFK-hat and the Seifert genus, validated against
+KnotInfo; τ is the next piece. The §7
 phase plan carries per-phase
 status inline.
 
@@ -384,10 +386,16 @@ Each phase is validated before the next begins. Reductions and acceleration are 
   (`bench_reducers.py --pin`); a genuinely on-device GPU kernel (bit-packed, no per-column
   sync) is **deferred to a late-project goal (decision 0010)** — speed/scale tuning to
   revisit when a CPU-infeasible workload makes it worth the engineering, not before.
-- **Phase 6 — Floer front end (peer engine).** Grid homology (MOS rectangles)
-  and/or the Szabó HFK cube, feeding the *same* back end; τ, ε, ν, HFK ranks;
-  validate against KnotInfo. Note the n! generation bottleneck → generation-side
-  parallelism is its own concern, separate from the shared reducer.
+- **Phase 6 — Floer front end (peer engine).** *In progress.* Grid homology (MOS
+  rectangles) feeding the *same* back end. Landed: the grid model (KnotInfo markers →
+  O/X by tracing and 2-colouring the knot cycle), Maslov/Alexander gradings (validated
+  via the graded Euler characteristic = (1−t)^{n−1}·Δ_K), the empty-rectangle
+  differential (d² = 0, lowers Maslov, preserves Alexander), and the reduction to HFK-hat
+  (dividing out the V^{n−1} factor) with the Seifert genus — HFK-hat validated against
+  KnotInfo *up to mirror* (the flat marker list does not fix chirality; τ will), genus
+  against the three-genus. Next: τ (needs the filtered theory), then ε, ν. The Szabó HFK
+  cube is an alternative front end, not yet pursued. The n! generation bottleneck →
+  generation-side parallelism is its own concern, separate from the shared reducer.
 
 Ordering rationale: general and faithful first (Phases 0–3 produce correct answers
 with the reference reducer), exact reductions second (Phase 4, still answer-identical
