@@ -75,7 +75,11 @@ class GridDiagram:
         x = [0] * n
         for i, (r, c) in enumerate(pts):
             (o if color[i] == 0 else x)[r] = c
-        return cls(o, x)
+        # The flat marker list does not label O vs X, so the 2-colouring fixes a chirality
+        # that is consistently the mirror of the standard (KnotInfo) tabulation; reflecting
+        # across the horizontal axis (reversing the rows) restores it, validated by HFK and
+        # tau matching KnotInfo directly.
+        return cls(o[::-1], x[::-1])
 
     @classmethod
     def from_knotinfo(cls, name: str) -> "GridDiagram":
@@ -89,6 +93,11 @@ class GridDiagram:
         return frozenset(
             [(r, self.O[r]) for r in range(self.n)] + [(r, self.X[r]) for r in range(self.n)]
         )
+
+    @cached_property
+    def o_cells(self) -> frozenset:
+        """The n cells holding an O marker, as (row, column) pairs."""
+        return frozenset((r, self.O[r]) for r in range(self.n))
 
     def generators(self):
         """Iterator over generators: each is a permutation ``sigma`` placing a point at

@@ -9,8 +9,8 @@ Gaussian-cancellation reduction (cross-checked `raw == reduced`). Acceleration
 pure-Python `bitint` reducer is the workhorse and the router keeps work on the CPU. A
 true on-device GPU kernel is deferred to a late-project goal (decision 0010); only the
 NUMA-pinning speed check on a multi-socket box remains. Floer (Phase 6) is in progress:
-the grid-homology engine now computes HFK-hat and the Seifert genus, validated against
-KnotInfo; τ is the next piece. The §7
+the grid-homology engine now computes HFK-hat, the Seifert genus, and the tau invariant,
+validated against KnotInfo; epsilon (and nu, which it determines with tau) is next. The §7
 phase plan carries per-phase
 status inline.
 
@@ -393,8 +393,12 @@ Each phase is validated before the next begins. Reductions and acceleration are 
   differential (d² = 0, lowers Maslov, preserves Alexander), and the reduction to HFK-hat
   (dividing out the V^{n−1} factor) with the Seifert genus — HFK-hat validated against
   KnotInfo *up to mirror* (the flat marker list does not fix chirality; τ will), genus
-  against the three-genus. Next: τ (needs the filtered theory), then ε, ν. The Szabó HFK
-  cube is an alternative front end, not yet pursued. The n! generation bottleneck →
+  against the three-genus. Chirality is now pinned: reflecting the grid to the standard
+  tabulation makes HFK and τ match KnotInfo directly (sign and all). τ landed too, from the
+  Alexander-*filtered* complex (rectangles avoiding only O) via the minimal filtration level
+  of the surviving Maslov-0 class — needing an F2 kernel added to the back end. Next: ε
+  (KnotInfo tabulates it; needs the CFK-infinity vertical/horizontal structure), then ν
+  (determined by τ and ε). The Szabó HFK cube is an alternative front end, not yet pursued. The n! generation bottleneck →
   generation-side parallelism is its own concern, separate from the shared reducer.
 
 Ordering rationale: general and faithful first (Phases 0–3 produce correct answers

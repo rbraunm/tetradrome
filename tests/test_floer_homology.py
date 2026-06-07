@@ -17,9 +17,6 @@ HFK_KNOTS = ["3_1", "4_1", "5_1", "5_2"]   # n up to 7
 STRUCTURAL_KNOTS = ["3_1", "4_1"]          # the d^2 sweep over all n! states, kept cheap
 
 
-def _mirror(ranks):
-    return {(-m, -a): c for (m, a), c in ranks.items()}
-
 
 @pytest.mark.parametrize("name", STRUCTURAL_KNOTS)
 def test_differential_grades_and_squares_to_zero(name):
@@ -36,11 +33,9 @@ def test_differential_grades_and_squares_to_zero(name):
 
 
 @pytest.mark.parametrize("name", HFK_KNOTS)
-def test_hfk_matches_knotinfo_up_to_mirror(name):
+def test_hfk_matches_knotinfo(name):
     grid = GridDiagram.from_knotinfo(name)
-    computed = hfk_hat(grid)
-    oracle = ki.hfk_ranks(name)
-    assert computed == oracle or computed == _mirror(oracle)
+    assert hfk_hat(grid) == ki.hfk_ranks(name)
 
 
 @pytest.mark.parametrize("name", HFK_KNOTS)

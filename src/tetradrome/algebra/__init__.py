@@ -15,7 +15,7 @@ from .rational_reduce import rational_homology, rational_rank
 from .reduce_f2_jit import f2_rank_jit
 from .reduce_f2_packed import f2_rank_bitint, f2_rank_dense, f2_rank_words
 from .reduce_gaussian import gaussian_homology
-from .reduce_reference import f2_rank, homology
+from .reduce_reference import f2_kernel, f2_rank, homology
 from .tiers import available_f2_backends, best_available_backend, f2_homology, rank_backend
 
 __all__ = [
@@ -28,6 +28,7 @@ __all__ = [
     "detect_gpu",
     "enablement_instructions",
     "f2_homology",
+    "f2_kernel",
     "f2_rank",
     "f2_rank_bitint",
     "f2_rank_dense",

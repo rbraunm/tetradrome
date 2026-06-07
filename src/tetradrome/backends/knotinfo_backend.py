@@ -157,6 +157,14 @@ def hfk_ranks(name: str) -> dict[tuple[int, int], int]:
     return out
 
 
+def tau_invariant(name: str) -> int:
+    """KnotInfo's Ozsvath-Szabo tau invariant (the oracle for the grid tau)."""
+    raw = lookup(name).get("ozsvath_szabo_tau_invariant")
+    if raw is None or str(raw).strip() == "":
+        raise UnknownKnot(f"{name!r} has no tau invariant in KnotInfo.")
+    return int(str(raw).strip())
+
+
 def braid_word(name: str) -> list[int]:
     """Parse a knot's braid word from KnotInfo into a list of nonzero ints.
 

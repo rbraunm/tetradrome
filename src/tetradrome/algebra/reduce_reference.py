@@ -41,6 +41,31 @@ def f2_rank(columns: Sequence[frozenset[int]]) -> int:
     return rank
 
 
+def f2_kernel(columns: Sequence[frozenset[int]]) -> list[frozenset[int]]:
+    """Basis for the kernel over F2 of the 0/1 matrix given column-wise as sets of row
+    indices: each returned element is the set of *column* indices whose columns sum to the
+    zero vector. Same leading-row column reduction as `f2_rank`, but carrying the
+    combination of original columns so a column that reduces to zero yields a relation.
+    """
+    pivots: dict[int, tuple[set[int], set[int]]] = {}   # leading row -> (column, combo)
+    kernel: list[frozenset[int]] = []
+    for i, col in enumerate(columns):
+        v = set(col)
+        combo = {i}
+        while v:
+            lead = max(v)
+            piv = pivots.get(lead)
+            if piv is None:
+                pivots[lead] = (v, combo)
+                break
+            piv_col, piv_combo = piv
+            v ^= piv_col
+            combo ^= piv_combo
+        if not v:
+            kernel.append(frozenset(combo))
+    return kernel
+
+
 def homology(cx: GradedComplex, *, verify: bool = True) -> dict[int, int]:
     """F2 homology of the complex `cx`, as {degree: dim H^n} for every degree with
     non-zero homology (an omitted degree has H^n = 0).
