@@ -91,7 +91,7 @@ Common flags (`--help` for the full set):
 - `--cores` / `--memory` — vCPUs and RAM in MiB (default `4` / `4096`; size up for real sweeps).
 - `--ctid` — container ID (default `250`).
 - `--ip` / `--gateway` / `--vlan` — static networking; defaults to DHCP, untagged.
-- `--branch` — repo branch to install (default `claude`).
+- `--branch` — repo branch to install (default `main`).
 - `--recreate` — destroy and rebuild an existing CTID.
 
 Standing up the environment is deliberately engineer-side scaffolding — one command, kept out of the way — so the work that needs a mathematician stays the focus (see *Contributing*).

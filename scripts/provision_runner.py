@@ -204,7 +204,7 @@ def main() -> None:
                         help="destroy and rebuild if the CTID already exists")
     # Project -- baked in, overridable:
     parser.add_argument("--repo", default=DEFAULT_REPO, help="git URL to clone")
-    parser.add_argument("--branch", default="claude", help="repo branch (default claude)")
+    parser.add_argument("--branch", default="main", help="repo branch (default main)")
     parser.add_argument("--extras", default="accel",
                         help="pip extras, comma-separated (default accel; numpy reducer)")
     parser.add_argument("--smoke", default=DEFAULT_SMOKE,
