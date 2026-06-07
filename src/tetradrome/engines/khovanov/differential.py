@@ -57,12 +57,14 @@ def _edge_sign(state, c: int) -> int:
     return -1 if (sum(state[:c]) & 1) else 1
 
 
-def _edge_targets(state, labeling, resolved):
+def _edge_targets(state, labeling, resolved, *, multiply=_multiply, comultiply=_comultiply):
     """Apply the differential along every 0 -> 1 edge from `state`.
 
     `labeling` maps each circle of `state` (a frozenset of arcs) to its sign; `resolved`
-    maps a state to its tuple of circles. Yields (crossing, state', labeling') for each
-    target generator; the crossing is the flipped coordinate, so the caller can sign it.
+    maps a state to its tuple of circles. `multiply` / `comultiply` are the Frobenius
+    maps (Khovanov by default; Lee passes its deformed pair). Yields (crossing, state',
+    labeling') for each target generator; the crossing is the flipped coordinate, so the
+    caller can sign it.
     """
     n = len(state)
     A = set(resolved[state])
@@ -77,14 +79,14 @@ def _edge_targets(state, labeling, resolved):
         if len(B) == len(A) - 1:                 # merge: two circles -> one
             c1, c2 = tuple(a_only)
             (merged,) = tuple(b_only)
-            label = _multiply(labeling[c1], labeling[c2])
-            if label is None:                    # x . x = 0, edge contributes nothing
+            label = multiply(labeling[c1], labeling[c2])
+            if label is None:                    # x . x = 0 (Khovanov), edge drops
                 continue
             yield c, s2, {**carried, merged: label}
         elif len(B) == len(A) + 1:               # split: one circle -> two
             (split,) = tuple(a_only)
             c1, c2 = tuple(b_only)
-            for l1, l2 in _comultiply(labeling[split]):
+            for l1, l2 in comultiply(labeling[split]):
                 yield c, s2, {**carried, c1: l1, c2: l2}
         else:
             raise RuntimeError(
@@ -93,12 +95,12 @@ def _edge_targets(state, labeling, resolved):
             )
 
 
-def _raw_differential(pd: PDCode):
-    """Shared scaffolding for both lanes: enumerate and index the enhanced generators,
-    then for each generator collect its differential targets as (target_index, crossing)
-    pairs. The crossing lets the rational lane sign each contribution; the F2 lane
-    ignores it. Returns (by_grading, raw), where by_grading[(i,j)] lists the generator
-    keys in index order and raw[key] is the list of (target_index, crossing) pairs.
+def _enumerate_generators(pd: PDCode):
+    """Enumerate the enhanced-state generators with their bigradings -- shared by the
+    Khovanov (split by (i, j)) and Lee (graded by i alone) front ends. Returns
+    (resolved, gens), where resolved maps a state to its circles and gens is a list of
+    (i, j, state, labeling, key): labeling is {circle: sign} and key is the canonical
+    hashable identity (state, frozenset(labeling.items())).
     """
     if not pd:
         raise ValueError(
@@ -107,10 +109,7 @@ def _raw_differential(pd: PDCode):
         )
     n_plus, n_minus = crossing_counts(pd)
     resolved = {state: resolve(pd, state) for state in states(len(pd))}
-
-    by_grading: dict[tuple[int, int], list] = {}
-    index: dict[tuple, tuple[int, int, int]] = {}
-    labeling_of: dict[tuple, dict] = {}
+    gens = []
     for state, circles in resolved.items():
         s = sum(state)
         i = s - n_minus
@@ -118,10 +117,26 @@ def _raw_differential(pd: PDCode):
             labeling = dict(zip(circles, bits))
             j = sum(bits) + s + n_plus - 2 * n_minus
             key = (state, frozenset(labeling.items()))
-            bucket = by_grading.setdefault((i, j), [])
-            index[key] = (i, j, len(bucket))
-            bucket.append(key)
-            labeling_of[key] = labeling
+            gens.append((i, j, state, labeling, key))
+    return resolved, gens
+
+
+def _raw_differential(pd: PDCode):
+    """Shared scaffolding for both Khovanov lanes: index the enhanced generators by
+    (i, j), then for each generator collect its differential targets as (target_index,
+    crossing) pairs. The crossing lets the rational lane sign each contribution; the F2
+    lane ignores it. Returns (by_grading, raw), where by_grading[(i,j)] lists the
+    generator keys in index order and raw[key] is the list of (target_index, crossing).
+    """
+    resolved, gens = _enumerate_generators(pd)
+    by_grading: dict[tuple[int, int], list] = {}
+    index: dict[tuple, tuple[int, int, int]] = {}
+    labeling_of: dict[tuple, dict] = {}
+    for i, j, _state, labeling, key in gens:
+        bucket = by_grading.setdefault((i, j), [])
+        index[key] = (i, j, len(bucket))
+        bucket.append(key)
+        labeling_of[key] = labeling
 
     raw: dict[tuple, list[tuple[int, int]]] = {}
     for (i, j), keys in by_grading.items():

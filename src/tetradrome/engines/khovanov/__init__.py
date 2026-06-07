@@ -12,6 +12,7 @@ from .gradings import (
     unreduced_size,
 )
 from .homology import khovanov_homology, khovanov_homology_q
+from .lee import lee_complex, lee_homology
 
 __all__ = [
     "chain_dimensions",
@@ -22,5 +23,7 @@ __all__ = [
     "khovanov_complexes_q",
     "khovanov_homology",
     "khovanov_homology_q",
+    "lee_complex",
+    "lee_homology",
     "unreduced_size",
 ]
