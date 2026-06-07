@@ -68,6 +68,12 @@ def main():
     parser.add_argument("--workers", type=int, default=1, help="reduction worker processes")
     parser.add_argument("--gen-workers", type=int, default=1, help="generation worker processes")
     parser.add_argument("--pin", action="store_true", help="NUMA-pin reduction workers (Linux)")
+    parser.add_argument("--mem-budget-gib", type=float, default=0.0,
+                        help="skip any size whose projected peak exceeds this many GiB "
+                             "(0 = no guard); fails early instead of OOMing mid-sweep")
+    parser.add_argument("--bytes-per-gen", type=float, default=3000.0,
+                        help="bytes-per-generator used for the projection (measured ~2.6 KiB "
+                             "at n=10, climbing with n; calibrate from a completed row)")
     args = parser.parse_args()
 
     if args.pin and not hasattr(os, "sched_setaffinity"):
@@ -88,6 +94,12 @@ def main():
     print(header)
     print("-" * len(header))
     for name, grid in targets:
+        projected_gib = math.factorial(grid.n) * args.bytes_per_gen / 2**30
+        if args.mem_budget_gib and projected_gib > args.mem_budget_gib:
+            print(f"{name:<14}{grid.n:>3}{math.factorial(grid.n):>12,}"
+                  f"   skipped: ~{projected_gib:.1f} GiB projected > "
+                  f"{args.mem_budget_gib:.1f} GiB budget")
+            continue
         gen_s, red_s, peak, count, support = measure(
             grid, backend=args.backend, workers=args.workers, pin=args.pin,
             gen_workers=args.gen_workers,
