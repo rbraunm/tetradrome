@@ -302,11 +302,15 @@ Each phase is validated before the next begins. Reductions and acceleration are 
   complex (chain groups by grading; sparse boundary maps over a ring) and a
   pure-Python F2 reducer (rank / kernel / image → homology dimension), with the
   `d² = 0` check. This is the general, faithful core, and the reference for
-  everything later. Land the *exact* complex-size predictor here (cheap; §5).
+  everything later. The exact unreduced size of a *built* complex lives here
+  (`total_dim`); the cheaper predictor that reads size off the *diagram* without
+  building it is cube-specific (2ⁿ vertices, 2^circles generators) and lands with
+  Khovanov in Phase 2, so the invariant-agnostic back end never imports a front end.
 - **Phase 2 — Khovanov front end (raw/faithful).** Build the unreduced cube complex
   over F2 (enhanced states, gradings, differentials); feed the reference reducer;
   validate Khovanov homology against KnotInfo's mod-2 data. First full faithful path
-  end to end.
+  end to end. Includes the cheap-from-diagram exact size predictor (2ⁿ vertices,
+  2^circles generators; §5), which belongs here with the cube it profiles.
 - **Phase 3 — Lee / Rasmussen *s*.** Lee deformation, filtered complex, extract *s*
   under documented conventions. Work over ℚ via multimodular (primes + CRT + rational
   reconstruction) to stay exact and fixed-width. Validate *s* against KnotInfo.
