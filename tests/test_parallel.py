@@ -4,6 +4,8 @@ Parallelism must not change answers, only timing -- so the contract is parallel 
 `workers=2` forces the process-pool path even on a single-CPU host, so the agreement is
 exercised rather than skipped via the in-process shortcut.
 """
+import os
+
 import pytest
 
 from tetradrome import knots
@@ -56,3 +58,29 @@ def test_single_item_skips_pool():
 def test_gpu_backend_rejected():
     with pytest.raises(ValueError):
         parallel_f2_homology({}, backend="packed-gpu", workers=2)
+
+
+def test_cpulist_parsing():
+    from tetradrome.algebra.parallel import _parse_cpulist
+    assert _parse_cpulist("0-3,8,10-11") == [0, 1, 2, 3, 8, 10, 11]
+    assert _parse_cpulist("5") == [5]
+    assert _parse_cpulist("") == []
+
+
+def test_numa_core_order_is_a_permutation_of_cpus():
+    from tetradrome.algebra.parallel import _numa_core_order
+    order = _numa_core_order()
+    assert order and len(order) == len(set(order))      # distinct cpu ids
+
+
+@pytest.mark.skipif(not hasattr(os, "sched_setaffinity"), reason="pinning is Linux-only")
+def test_pinned_run_matches_serial():
+    # pinning must not change the answer; forces the pool (workers=2) even on one CPU.
+    items = _batch()
+    assert parallel_f2_homology(items, backend="bitint", workers=2, pin=True) == _serial(items, "bitint")
+
+
+def test_pin_on_unsupported_platform_raises(monkeypatch):
+    monkeypatch.delattr(os, "sched_setaffinity", raising=False)
+    with pytest.raises(RuntimeError):
+        parallel_f2_homology(_batch(), backend="bitint", workers=2, pin=True)
