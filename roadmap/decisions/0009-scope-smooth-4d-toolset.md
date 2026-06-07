@@ -49,4 +49,5 @@ calculator.
   narrowing does not creep back.
 - This decision is about the **breadth of objects**, deliberately separate from *how*
   invariants are computed (natively) and *how* external tools are used (validators
-  only) — those are decided in 0006 and 0007.
+  only) — those are decided in 0006 and 0007. How far each engine can reach within that
+  breadth, and which engine binds a given 4D target, is decided in 0011.

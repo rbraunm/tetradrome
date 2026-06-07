@@ -63,4 +63,6 @@ and must not preempt capability work (e.g. the Floer engine).
 - This is a speed/scale decision, deliberately separate from object scope (0009) and the
   faithful-compute and validation discipline (0006/0007), which continue to govern: the
   deferred kernel earns its place only by passing the same `== reference` agreement, never
-  by being fast.
+  by being fast. 0011 places this deferral in the wider frame: the kernel is a
+  (B)-class accelerator of the reference reduction path, deferred at present sizes, not a
+  statement that reference performance is out of scope.
