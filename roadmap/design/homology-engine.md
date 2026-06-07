@@ -408,6 +408,29 @@ Each phase is validated before the next begins. Reductions and acceleration are 
   lever; the actual walls (time vs memory) are for the hardware sweep to locate. The n! generation bottleneck →
   generation-side parallelism is its own concern, separate from the shared reducer.
 
+- **Phase 7 — The filtered complex as an auditable artifact.** *Planned.* The distinctive
+  value of a native grid engine over the black-box calculators (KnotInfo, Szabó's HFK
+  Calculator) is not the invariant *values* — those are already tabulated up to grid 15 —
+  but the *full filtered chain complex* exposed transparently. Staged:
+  (a) emit the bigraded grid complex with the **bifiltered** differential as a first-class,
+  serializable object — generators carrying (Maslov, Alexander), and the differential arrows
+  annotated by their O- and X-crossing counts (the U/V drops); we already produce the states,
+  the gradings, and both differential flavours, so this records marker counts per rectangle
+  instead of discarding marked rectangles;
+  (b) reduce to a canonical model over F2 — filtered change of basis cancelling acyclic pairs
+  down to the simplified CFK (a staircase ⊕ boxes); this is the auditable presentation and the
+  object the concordance invariants read off (genuine filtered-homotopy machinery, not a quick
+  add);
+  (c) derive ε, ν, and Υ(t) from the reduced model, so they become consequences of the exposed
+  structure rather than one-off computations.
+  ε/ν (queued under Phase 6) are the bridge: they need exactly this vertical/horizontal
+  structure, so they can land as direct numbers first, or fall out of the reduced model here.
+  Validation: the complex's homology stays HFK (already checked); τ and ε against KnotInfo
+  (ε is tabulated); Υ against torus-knot closed forms or the HFK Calculator (KnotInfo has no Υ
+  column). Same n! small-knot bound — auditable at small knots, scaled via the bench harness.
+  This is the project's audit-friendly thesis applied to Floer: a from-first-principles complex
+  an expert can inspect and check against the fast tools, not just a number to trust.
+
 Ordering rationale: general and faithful first (Phases 0–3 produce correct answers
 with the reference reducer), exact reductions second (Phase 4, still answer-identical
 and individually validated), acceleration last (Phase 5, validated against the
