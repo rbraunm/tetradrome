@@ -6,6 +6,13 @@ it. KnotInfo (and the programs it aggregates: KnotTheory`, Szabó's HFK Calculat
 SnapPy/SnapPea, …) is the ground truth we check *against*; the value we add is the auditable
 derivation, not the number.
 
+This is the *feeder*, not the goal: the project is a 4D-topology workbench, and knot/concordance
+invariants matter here because they obstruct surfaces and slice disks in 4-manifolds. The
+4-dimensional objects those invariants feed into — sliceness, knot traces, Kirby calculus,
+d-invariants, concordance structure, trisections, skein lasagna — are mapped in
+`four-manifold-objectives.md`. Knots are dense in checkable invariants, so they get implemented
+first and right; they are not the subject.
+
 This document is the map: every substantive KnotInfo column, the method that would compute it,
 what we already have, and — critically — an honest cost/feasibility tier. Column names are the
 machine keys from `database_knotinfo` (122 non-identifier columns out of 244 fields), so each row
