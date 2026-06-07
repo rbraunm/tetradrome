@@ -4,9 +4,11 @@
 back end, native Khovanov over F2 and ℚ, the Lee deformation, the Rasmussen
 *s*-invariant (all wired into `compute()` and checked against KnotInfo), and exact
 Gaussian-cancellation reduction (cross-checked `raw == reduced`). Acceleration
-(Phase 5) is under way — the bit-packed F2 tier, the runtime registry, and the
-CPU/GPU benchmark harness are in; JIT/NUMA/GPU-proper, the multimodular ℚ path, and
-memory routing remain. Floer (Phase 6) follows. The §7 phase plan carries per-phase
+(Phase 5) is code-complete — every tier (bit-packed CPU, numba JIT, dense GPU kernel,
+multi-core + NUMA pinning, size/VRAM routing, multimodular ℚ) is written and validated
+`== reference` here through shared code, with a CPU/GPU benchmark harness; what remains
+is validating the GPU/numba/multi-socket *speed* on real hardware and calibrating the
+routing threshold. Floer (Phase 6) follows. The §7 phase plan carries per-phase
 status inline.
 
 **Scope:** The computational substrate for the homological invariants — Khovanov
@@ -366,8 +368,16 @@ Each phase is validated before the next begins. Reductions and acceleration are 
   it fits the measured budget and clears a calibratable threshold, loud failure over a RAM
   budget), and the multimodular ℚ path (`multimodular.py` — rank over ℚ as the max of ranks
   mod several large primes, dodging `Fraction` coefficient explosion; validated identical to
-  the exact reducer). *Remaining:* Numba JIT, a batched (non-sync-bound) GPU kernel, and
-  NUMA pinning — each better calibrated on real hardware than built blind.
+  the exact reducer), the Numba JIT tier (`reduce_f2_jit.py` — njit-compatible packed
+  reducer, compiled when numba is present, plain numpy otherwise), the batched dense GPU
+  kernel (`f2_rank_dense` — vectorized row reduction, one host sync per column instead of
+  per step), and NUMA-aware core pinning for the parallel pool (`parallel.py`, Linux).
+  Every tier is validated `== reference` here via shared code (the GPU and numba paths
+  through their un-accelerated equivalents). *Remaining is hardware validation, not new
+  code:* on a CUDA box, a multi-socket box, and with numba installed, run the suite
+  (agreement) and `scripts/bench_reducers.py` (`--sizes`, `--workers`, `--pin`) to confirm
+  each accelerator is correct and faster on real silicon, then calibrate the GPU routing
+  threshold (`memory.py`) from the measured crossover.
 - **Phase 6 — Floer front end (peer engine).** Grid homology (MOS rectangles)
   and/or the Szabó HFK cube, feeding the *same* back end; τ, ε, ν, HFK ranks;
   validate against KnotInfo. Note the n! generation bottleneck → generation-side
