@@ -1,39 +1,38 @@
 # Tetradrome Project Specification
 
 **Working title:** Tetradrome  
-**Project type:** Python-first computational topology workbench for knot-invariant experiments  
-**Revised strategic focus:** Orchestration, validation, reproducibility, and selective native acceleration rather than immediate from-scratch reinvention  
-**Initial technical focus:** Conway-adjacent Khovanov / Lee / Rasmussen workflows using existing tools as reference backends, then selectively replacing components with native Python/CUDA implementations  
-**Long-term direction:** Extensible computational library for exploring 3D knot diagrams through invariants that constrain smooth 4D behavior  
-**Status:** Concept / architecture specification, revised after survey of existing tooling  
+**Project type:** Python-first computational workbench for the invariants of smooth 4-dimensional topology — knots, links, and braids, not knots alone  
+**Strategic focus:** Native, faithful computation of the invariants on one validated, auditable surface, with existing tools used only as opt-in validators (decisions 0006, 0007, 0009)  
+**Initial technical focus:** Conway-adjacent Khovanov / Lee / Rasmussen invariants, computed natively, validated against KnotInfo and cross-checked against existing tools  
+**Long-term direction:** Extensible library that consolidates the smooth-4D-topology tool sprawl — diagrams compiled into graded chain complexes, processed by exact-algebra engines, validated against known results  
+**Status:** Architecture specification. The strategic framing was revised from the earlier orchestrate-first survey to native-first; where older orchestration language survives below it is being reconciled, and `roadmap/decisions/` (esp. 0006, 0007, 0009) and `roadmap/design/homology-engine.md` govern on any conflict.  
 
 ---
 
 ## 1. Executive Summary
 
-Tetradrome is a proposed Python-first computational workbench for building, validating, reproducing, and eventually extending knot-invariant calculations relevant to smooth 4-dimensional topology.
+Tetradrome is a Python-first computational workbench for building, validating, reproducing, and reporting the invariants of smooth 4-dimensional topology — the Rasmussen \(s\)-invariant, \(\tau\), \(\epsilon\), \(\nu\), the classical and concordance invariants, and the Khovanov / Lee / knot Floer homologies they are read from — for knots, links, and braids on one normalized, fully-provenanced surface.
 
-The project should not begin as a claim that no tooling exists. Serious tooling already exists for Khovanov homology, Rasmussen's \(s\)-invariant, knot Floer homology, knot databases, and planar diagram manipulation. The useful version of Tetradrome is therefore not “the first program that computes these invariants.” It is a modern, Python-first, audit-friendly, reproducible, extensible workbench that can orchestrate existing tools, compare results, document conventions, produce readable reports, and eventually add native Python/CUDA components where they provide clear value.
+Serious tooling for these invariants already exists (Khovanov via KnotJob / Khoca, knot Floer via Szabó's HFK calculator, diagrams via Spherogram / SnapPy, the KnotInfo database). Tetradrome does not pretend otherwise, and it credits and cross-checks against those tools. But it does not orchestrate them to produce answers: **the compute path is native** (decision 0006). Each invariant is computed by Tetradrome's own code, and the existing tools are used only as opt-in validators — the role KnotInfo already plays — never as a runtime dependency of a computation.
 
-The stronger modernization thesis is that much of the existing software is research-tool shaped: valuable, mathematically serious, and sometimes very fast, but often bound to older ecosystems, command-line workflows, Java/Mathematica/C++ packaging, Sage-specific environments, or fragile installation paths. Tetradrome should treat those tools as reference instruments first, then gradually migrate selected capabilities into a modern Python package with explicit backend contracts, regression tests, reproducible reports, and optional GPU acceleration for exact algebra workloads.
+That choice is deliberate and is the project's value proposition. Much of the existing software is research-tool shaped: mathematically serious and often fast, but bound to older ecosystems, Java / Mathematica / C++ packaging, Sage-specific environments, GPL licensing, or binary-wheel install paths that fail wherever no prebuilt wheel exists. A native, permissively-licensed, pure-Python core that runs anywhere — and that owns its kernel well enough to accelerate it (JIT, multi-core / NUMA, optional GPU) — consolidates that sprawl into one auditable place. The raw, faithful computation is first-class and always runnable; only exact, answer-preserving reductions optimize it; no heuristics enter the core (decision 0007).
 
-The immediate goal is a **Conway-focused reproducibility and validation pipeline**:
+The immediate goal is a **Conway-adjacent reproducibility and validation pipeline**:
 
 ```text
-known knot input
+knot / link / braid input
   -> normalized diagram representation
-  -> backend selection
-  -> invariant computation
-  -> independent cross-checks
+  -> native invariant computation
+  -> validation (KnotInfo oracle, cross-checks, d^2 = 0)
   -> reproducible report
   -> carefully limited 4D-topology interpretation
 ```
 
-The long-term goal is broader: Tetradrome should become a modular Python library where knot diagrams can be compiled into algebraic chain complexes, processed by exact algebra engines, validated against known results, and extended toward additional invariants such as grid-homology versions of knot Floer homology.
+The longer-term goal is broader: Tetradrome should become a modular library where diagrams are compiled into graded chain complexes, processed by exact-algebra engines, validated against known results, and extended across the invariants that bear on smooth 4D structure — consolidating tools that today live in separate, differently-packaged ecosystems.
 
-The guiding phrase is:
+The guiding phrase is unchanged in spirit, sharpened in target:
 
-> Build the bench before building every instrument. Use existing instruments honestly, validate them against one another, and only machine new parts where Tetradrome adds real value.
+> Use existing instruments honestly — as the gold-master check — and own the mathematics we compute. Faithful and portable beats fast-but-won't-install, and a validated number is the only kind we report.
 
 ---
 
@@ -43,43 +42,42 @@ A knot is drawn in 3-dimensional space, but some of the most interesting questio
 
 Tetradrome is motivated by the idea that these 4-dimensional questions require a kind of mathematical measuring apparatus. The apparatus is not a physical device. It is an algebraic and computational system: knot diagrams, chain complexes, differentials, gradings, homology calculations, known-answer tables, and carefully limited interpretations of the resulting invariants.
 
-The immediate need is not to pretend no apparatus exists. The immediate need is to build a **disciplined engineering layer** around that apparatus:
+The immediate need is not to pretend no apparatus exists; it is to build that apparatus as one disciplined, native engineering layer:
 
-- make existing computations easier to run from Python;
-- normalize inputs and outputs;
-- record conventions and assumptions;
-- cross-check results across independent sources;
+- compute the invariants natively, in portable Python;
+- normalize inputs and outputs into one schema;
+- record conventions, assumptions, and versions;
+- validate against KnotInfo and cross-check against independent tools;
 - produce reproducible reports;
-- isolate places where native implementation would genuinely add value;
-- eventually accelerate exact algebra workloads where GPU computation is appropriate.
+- keep the raw, faithful computation first-class and accelerate it (JIT / multi-core / GPU) without ever changing its answers.
 
 ---
 
 ## 3. Project Identity: What Is a Tetradrome?
 
-The word **Tetradrome** is used here as a project name for a computational instrument aimed at 4-dimensional knot mathematics.
+The word **Tetradrome** is used here as a project name for a computational instrument aimed at smooth 4-dimensional topology.
 
 Conceptually:
 
 - An **orrery** models celestial motion.
 - An **armillary sphere** models astronomical reference frames.
-- A **tetradrome** models algebraic constraints on how 3D knots may behave when considered through 4D topology.
+- A **tetradrome** models the algebraic constraints on how knots and links may behave when considered through 4-dimensional topology.
 
-In software terms, Tetradrome is a workbench-and-instrument architecture:
+In software terms, Tetradrome is a workbench-and-instrument architecture — and the instruments are native:
 
 ```text
-knot diagram / knot database entry
+knot / link / braid input
   -> normalized representation
-  -> one or more computational backends
+  -> native invariant engine
   -> validated invariant result
   -> reproducibility metadata
   -> report and claim ledger
 ```
 
-Later, Tetradrome may also include native chain-complex compilers:
+For the homological invariants the engine is a chain-complex compiler:
 
 ```text
-knot diagram
+diagram
   -> combinatorial state space
   -> graded chain complex
   -> exact sparse algebra
@@ -87,74 +85,62 @@ knot diagram
   -> carefully limited 4D-topology interpretation
 ```
 
-The revised priority is to build the **workbench** first, then build selected instruments.
+The priority is to build the **workbench** — the normalized, validated surface and the native engines behind it — and to grow the set of instruments incrementally, validating each against known results before it is trusted.
 
 ---
 
 ## 4. Existing Tooling Landscape
 
-The field already has meaningful computational tooling. Tetradrome should acknowledge this explicitly and use it strategically.
+The field already has meaningful computational tooling. Tetradrome acknowledges it explicitly and uses it as the validation reference — the gold master a native result is checked against — not as a compute backend (decision 0006).
 
 | Tool / ecosystem | Area | What it provides | Relevance to Tetradrome |
 |---|---|---|---|
-| **KnotTheory` / Knot Atlas** | Mathematica / knot tables / Khovanov | KnotTheory` was a main tool used to produce the Knot Atlas. Knot Atlas documents Khovanov computations and mentions FastKh and JavaKh backends, with JavaKh supporting different coefficient choices. | Important reference backend and historical ecosystem. Tetradrome should not claim novelty for basic Khovanov computation. |
+| **KnotTheory` / Knot Atlas** | Mathematica / knot tables / Khovanov | KnotTheory` was a main tool used to produce the Knot Atlas. Knot Atlas documents Khovanov computations and mentions FastKh and JavaKh backends, with JavaKh supporting different coefficient choices. | Historical reference and Khovanov cross-check; Tetradrome claims no novelty for basic Khovanov computation, only a native, portable implementation of it. |
 | **FastKh / JavaKh** | Khovanov computation | Khovanov-focused computational engines associated with KnotTheory` / Knot Atlas. Knot Atlas notes JavaKh programs are much faster than the Mathematica implementation. | Potential external backend or validation reference. |
-| **KnotJob** | Java knot homology software | Computes several knot invariants, including Khovanov-related data and Rasmussen-style invariants. KnotInfo notes that its displayed Khovanov homology invariants were calculated using Dirk Schütz's KnotJob and reformatted by Jason Garcia. | Strong candidate for independent validation and perhaps backend integration. |
+| **KnotJob** | Java knot homology software | Computes several knot invariants, including Khovanov-related data and Rasmussen-style invariants. KnotInfo notes that its displayed Khovanov homology invariants were calculated using Dirk Schütz's KnotJob and reformatted by Jason Garcia. | Primary validator for Khovanov data and the Rasmussen-style \(s\)-invariant. |
 | **SageMath knot tools** | Python-based computer algebra ecosystem | Sage provides link/knot objects, knot diagrams, invariant functionality, and optional access to KnotInfo data. Its documentation notes support for planar diagrams, braids, Gauss codes, and a connection to KnotInfo / LinkInfo. | Useful Python-adjacent ecosystem. Tetradrome should interoperate where possible rather than duplicate all infrastructure. |
 | **SageMath chain-complex tools** | Algebra / homology | Sage includes chain-complex and homology functionality over appropriate rings/fields. | Useful reference for algebra validation and exact homology work. |
 | **Khoca** | Khovanov-Rozansky homology | C++/Python research program for computing certain Khovanov-Rozansky homologies of knots. | Demonstrates that advanced homology computation already exists; potential reference for higher homology directions. |
 | **HFKcalc** | Knot Floer homology | C++11 program by Ozsváth/Szabó ecosystem using planar diagrams for knots and computing knot Floer data modulo a prime. | Important reference for Floer-side computation; possible backend or validation reference. |
-| **knot-floer-homology PyPI package** | Python wrapper for HFKcalc | Python package wrapping Zoltán Szabó's HFK Calculator. Accepts PD input and Spherogram links; returns knot Floer data such as ranks, \(\tau\), \(\epsilon\), \(\nu\), fibered status, genus, and related data. | Very strong reason not to build Floer from scratch first. Use as a backend. |
-| **Spherogram / SnapPy** | Planar diagrams and 3-manifold topology | Python module in the SnapPy ecosystem for planar diagrams arising in 3-dimensional topology, including links and Heegaard diagrams. It can create links programmatically and return PD codes and DT codes. | Strong candidate for Tetradrome's first diagram layer instead of writing diagram mechanics from zero. |
+| **knot-floer-homology PyPI package** | Python wrapper for HFKcalc | Python package wrapping Zoltán Szabó's HFK Calculator. Accepts PD input and Spherogram links; returns knot Floer data such as ranks, \(\tau\), \(\epsilon\), \(\nu\), fibered status, genus, and related data. | Floer-side validator. Rejected as a compute dependency — GPLv2+, binary-wheels-only with no sdist, and not our math (decision 0006); used only to cross-check the native Floer engine. |
+| **Spherogram / SnapPy** | Planar diagrams and 3-manifold topology | Python module in the SnapPy ecosystem for planar diagrams arising in 3-dimensional topology, including links and Heegaard diagrams. It can create links programmatically and return PD codes and DT codes. | Diagram-format reference and optional interop bridge; diagram handling itself is native. |
 | **KnotInfo** | Knot invariant database | Database of knot invariants, downloadable data, polynomial invariants, Khovanov variants, Heegaard Floer polynomial data, and references. Its about page notes HFK invariants computed using HFKcalc and Khovanov data calculated using KnotJob. | Validation oracle and known-answer source. Tetradrome should integrate it as a reference dataset. |
 | **pyknotid** | Knots as 3D curves | Python package for knots and links represented as three-dimensional space curves, including diagram generation and topological analysis. | Adjacent utility for geometric/visual input, not likely central to the first Conway/Khovanov pipeline. |
 
 ### Strategic conclusion
 
-Tetradrome should not start as a from-scratch replacement for these tools.
-
-The project should start as:
+Tetradrome computes its invariants itself and validates them against these tools:
 
 ```text
-Tetradrome = orchestration + normalization + validation + reporting + selective native acceleration
+Tetradrome = native computation + normalization + validation + reporting + hardware-adaptive acceleration
 ```
 
 not:
 
 ```text
+Tetradrome = orchestrate existing tools to produce the answer
+```
+
+and not:
+
+```text
 Tetradrome = pretend existing knot software does not exist
 ```
 
-### 4.1 Modernization Opportunity
+### 4.1 Why native, not orchestration
 
-The most useful version of Tetradrome is a modernization and force-multiplier project. Existing computational topology tools should be treated with respect: they encode years of mathematical work and should become validation references, not discarded competitors. But the engineering surface around them can be improved dramatically.
+The existing tools encode years of mathematical work and are treated with respect — as validation references, not discarded competitors. But the engineering case for owning the compute path is decisive (decisions 0006, 0007):
 
-The modernization target is:
+- **Portability.** A pure-Python core runs anywhere Python runs — no compiler, no JVM, no Sage environment, no GPL, no binary-wheel platform lottery. "Runs at all" beats "faster but won't install."
+- **License.** Tetradrome is Apache-2.0; several of the strongest tools are GPL. As validators — separate programs or optional installs — that is fine; as bundled compute dependencies it would not be.
+- **Our math.** A native result is one we computed and can audit end to end, not an opaque number from someone else's binary.
+- **The kernel is the opportunity.** The compute kernel — exact sparse linear algebra over a cube of resolutions — is exactly what we can own and accelerate (JIT, multi-core / NUMA, optional GPU). It is the value, not a cost to outsource.
 
-```text
-legacy / research-shaped tool
-  -> stable adapter
-  -> normalized schema
-  -> golden-master tests
-  -> reproducible reports
-  -> selected native Python/CUDA replacement only where justified
-```
+Owning the kernel still demands the engineering discipline the modernization framing called for — installability, Python ergonomics, reproducibility, raw-output capture, cross-tool comparison, test coverage, exact-algebra performance, documentation for non-specialist engineers — now applied to our own code rather than to wrappers around others'.
 
-This is closer to porting, packaging, validating, and accelerating a scientific software ecosystem than to inventing a new invariant. The project should aim to preserve mathematical behavior while improving:
+The rule, restated for native-first:
 
-- installability;
-- Python API ergonomics;
-- backend interchangeability;
-- reproducibility;
-- raw-output capture;
-- cross-tool comparison;
-- test coverage;
-- exact algebra performance;
-- documentation for non-specialist software engineers.
-
-A good migration rule is:
-
-> Existing tools are the gold masters until Tetradrome proves otherwise. Native code must match them on known examples before it is trusted.
+> Existing tools are the gold masters. A native computation must match them on known examples before it is trusted — and the raw, faithful computation is the reference every optimization is checked against.
 
 ### 4.2 Why GPU Support Is a Real, but Narrow, Opportunity
 
@@ -169,69 +155,57 @@ chain complex / grading block
   -> homology dimension
 ```
 
-The engineering principle remains:
+The engineering principle remains, pointed at our own code (decision 0007):
 
 ```text
-external backend reference
-  -> clear CPU reference implementation
+raw, faithful CPU computation (the reference)
   -> optimized CPU implementation
   -> GPU implementation
-  -> CPU/GPU/reference agreement tests
+  -> raw / optimized / GPU agreement tests, cross-checked against the external gold masters
 ```
 
 ---
 
 ## 5. Revised End Goal
 
-The end goal is to build an extensible Python-first workbench for computational experiments in low-dimensional topology, beginning with knot invariants relevant to smooth 4-dimensional questions.
+The end goal is an extensible, Python-first workbench for computational experiments in smooth 4-dimensional topology, spanning the invariants that constrain it — for knots, links, and braids.
 
 A mature version of Tetradrome should support:
 
-1. **Formal knot input and normalization**
-   - Spherogram links
-   - PD codes
-   - braid words
-   - fixed knot catalogs
-   - eventually grid diagrams
+1. **Input and normalization**
+   - knots, links, and braids
+   - PD codes, DT codes, Gauss codes, braid words, and fixed catalogs (KnotInfo by name)
+   - eventually grid and surgery descriptions
 
-2. **Backend orchestration**
-   - SageMath where useful
-   - KnotJob / JavaKh where callable
-   - KnotInfo as validation data
-   - `knot-floer-homology` as a Floer backend
-   - native Tetradrome implementations when justified
+2. **Native invariant engines**
+   - a Seifert-form engine (determinant, signature, Alexander) — done
+   - a resolution-cube engine feeding Khovanov / Lee / Rasmussen \(s\)
+   - a knot Floer engine (grid and/or HFK-cube)
+   - a shared graded-complex back end with hardware-adaptive acceleration
 
-3. **Invariant construction and retrieval**
-   - Khovanov homology through external backends first
-   - Lee deformation / Rasmussen \(s\)-invariant where supported
-   - knot Floer invariants through existing HFK tooling first
-   - native mod-2 Khovanov implementation later
-   - native exact algebra backend later
+3. **Validators (opt-in, never compute)**
+   - KnotInfo as the known-answer oracle
+   - KnotJob, Szabó's HFK calculator, SageMath, Khoca as cross-checks behind the §13.8 adapter contract
 
-4. **Exact algebra backend**
-   - finite-field chain complexes
-   - sparse matrices over \(\mathbb{F}_2\)
-   - packed-bit rank algorithms
-   - CPU reference implementation
-   - optional CUDA/JIT acceleration for heavy exact algebra
+4. **Exact algebra back end**
+   - finite-field and \(\mathbb{Q}\) (multimodular) graded chain complexes
+   - sparse / packed-bit matrices over \(\mathbb{F}_2\)
+   - a pure-Python reference reducer, then JIT / multi-core / optional GPU tiers, each validated against the reference
 
 5. **Validation tooling**
    - \(d^2 = 0\) checks for native complexes
-   - known-answer tests
-   - independent implementation comparisons
-   - backend agreement reports
-   - reproducibility logs
-   - claim-status ledger
+   - known-answer tests against KnotInfo
+   - cross-checks against independent tools
+   - reproducibility logs and a claim-status ledger
 
 6. **Research-grade humility**
-   - clear distinction between computing an invariant, obstructing a property, and proving a property
-   - explicit documentation of conventions
-   - explicit documentation of what is not yet validated
+   - a clear distinction between computing an invariant, obstructing a property, and proving a property
+   - explicit documentation of conventions and of what is not yet validated
    - no claims of new mathematics without expert review
 
 The mature project should make it possible to say:
 
-> For this knot diagram, under these coefficient and grading conventions, Tetradrome requested or constructed the relevant invariant, recorded the backend and version, compared the output against known examples or independent data when possible, and reported only the conclusions justified by that invariant.
+> For this diagram, under these coefficient and grading conventions, Tetradrome computed the relevant invariant natively, recorded its version and conventions, checked the raw computation against any exact reduction and against known examples or independent tools, and reported only the conclusions that invariant justifies.
 
 ---
 
@@ -239,17 +213,17 @@ The mature project should make it possible to say:
 
 The immediate need is to build the **Tetradrome workbench**, not the entire universe of homological knot theory.
 
-The first successful version should be a **Conway Workflow Reproducer**, not a general-purpose theorem machine.
+The first successful version should be a **Conway-adjacent workflow**, not a general-purpose theorem machine.
 
 The first release should focus on:
 
-- a small fixed catalog of knots;
-- normalized PD/Spherogram input;
-- wrappers around existing invariant tools;
-- known-answer validation using KnotInfo and small examples;
+- a small fixed catalog of knots, plus off-table input by PD / braid;
+- normalized native diagram input;
+- native computation of the classical invariants (determinant, signature, Alexander, Jones) — done — then the Khovanov / Lee / \(s\) path;
+- known-answer validation against KnotInfo, with cross-checks where a tool is installed;
 - reproducible report generation;
 - a clear claim ledger;
-- an architecture that leaves room for native computation later.
+- a generic core that the later homology engines extend without rework.
 
 The immediate build should not attempt to do everything. It should build the extensible workbench correctly.
 
@@ -262,13 +236,13 @@ The immediate build should not attempt to do everything. It should build the ext
 The first mathematical workflow is:
 
 ```text
-normalized knot diagram
-  -> external/backend Khovanov or Rasmussen computation
-  -> validation against known data
+normalized diagram
+  -> native Khovanov / Lee / Rasmussen s computation
+  -> validation against KnotInfo (and cross-checks where available)
   -> reproducible Conway-adjacent report
 ```
 
-The relevant conceptual pipeline remains:
+The conceptual pipeline:
 
 ```text
 Khovanov homology
@@ -276,22 +250,18 @@ Khovanov homology
   -> Rasmussen s-invariant
 ```
 
-This is the most relevant first pipeline because Piccirillo's Conway-knot result uses a related knot with the same 4-dimensional trace and applies Rasmussen's \(s\)-invariant to obstruct sliceness.[^piccirillo-arxiv]
+This is the most relevant first pipeline because Piccirillo's Conway-knot result uses a related knot with the same 4-dimensional trace and applies Rasmussen's \(s\)-invariant to obstruct sliceness.[^piccirillo-arxiv] \(s\) — read from Khovanov/Lee — is therefore higher priority than the Floer side: \(\tau\), \(s\), \(\epsilon\), and \(\nu\) all vanish on the Conway knot itself, and the obstruction came from \(s\) applied to its trace-sibling.
 
-### 7.2 Floer-side v1 target
+### 7.2 Floer-side target
 
-Floer functionality should not be implemented from scratch in v1.
-
-The v1 Floer goal should be:
+The Floer side is a **native engine** (grid homology and/or the Szabó HFK cube), not a wrapper — `knot_floer_homology` is a validator only, never a backend (decision 0006). It is sequenced after the Khovanov / \(s\) path, since \(s\) is what bears on the Conway-adjacent question:
 
 ```text
-Spherogram/PD input
-  -> knot-floer-homology backend
-  -> Tetradrome normalized output schema
-  -> comparison against KnotInfo where available
+diagram
+  -> native knot Floer engine (grid / HFK-cube)
+  -> tau, epsilon, nu, HFK ranks
+  -> validation against KnotInfo, cross-checked against Szabó's HFK calculator where installed
 ```
-
-Native grid homology can be a later module.
 
 ### 7.3 Initial knot catalog
 
@@ -312,15 +282,12 @@ Conway-adjacent knots:
 
 The Conway knot should not be the first test case. It should be a later integration target after the machinery has passed simpler cases.
 
-### 7.4 Deferred mathematical scope
+### 7.4 Deferred scope
 
-The following should be intentionally deferred:
+Native Khovanov, Lee, and knot Floer are *sequenced* (see the roadmap phases), not deferred. What is intentionally deferred:
 
-- full native Heegaard-Floer machinery;
-- full native Khovanov implementation beyond exploratory mod-2 work;
 - general 3-manifold surgery calculations;
-- arbitrary knot database support beyond selected importers;
-- full integer torsion computations;
+- arbitrary knot-database support beyond selected importers;
 - polished diagram editing;
 - a graphical user interface;
 - automated theorem proving;
@@ -333,14 +300,14 @@ The following should be intentionally deferred:
 Tetradrome v1 is **not** intended to:
 
 1. prove new theorems;
-2. replace existing mathematical software;
-3. pretend Khovanov/Floer tooling does not already exist;
+2. deprecate or replace the existing tools — they remain Tetradrome's validation references;
+3. pretend Khovanov / Floer tooling does not already exist;
 4. claim that a knot is slice merely because an obstruction vanishes;
-5. provide a complete implementation of all Khovanov variants;
+5. provide a complete implementation of every Khovanov variant;
 6. provide a complete implementation of Heegaard-Floer theory;
 7. hide conventions behind a black-box interface;
-8. rely on GPU acceleration before CPU correctness is established;
-9. confuse a wrapper result with an independently implemented theorem.
+8. rely on GPU acceleration before the pure-Python reference is correct;
+9. confuse a computed invariant with a proof, or a validator's number with our own computation.
 
 The project should be built around the principle:
 
@@ -350,101 +317,53 @@ The project should be built around the principle:
 
 ## 9. Architecture Overview
 
-Recommended repository layout:
+Repository layout (current and planned; `src/`-layout package):
 
 ```text
-tetradrome/
-  diagrams/
-    model.py
-    pd.py
-    spherogram_adapter.py
-    braid.py                  # future
-    grid.py                   # future
+src/tetradrome/
+  diagrams/                 # native diagram handling
+    model.py                #   NormalizedDiagram, PDCode
+    pd.py                   #   PD parse / normalize
+    build.py                #   from_name / from_pd / from_braid construction
+    seifert_construction.py #   PD -> oriented Seifert structure (signs, circles, writhe)
+    braid.py                #   future: braid -> diagram
+    grid.py                 #   future: grid diagrams
 
-  backends/
-    base.py
-    sage_backend.py
-    knotjob_backend.py
-    knotinfo_backend.py
-    knot_floer_backend.py
-    java_kh_backend.py        # possible future
-    native_backend.py         # future
+  engines/                  # front-end engines (per-theory machinery)
+    cube.py                 #   resolution-cube skeleton (shared scaffold)
+    khovanov/               #   future: Khovanov / Lee
+    floer/                  #   future: grid / HFK-cube
+
+  algebra/                  # future: shared graded-complex back end (acceleration lives here)
+    complex.py              #   graded chain complex
+    reduce_reference.py     #   pure-Python reference reducer
+    reduce_f2_packed.py     #   packed-bit F2 (later)
+    multimodular.py         #   Q via primes + CRT (later)
+    memory.py / tiers.py    #   memory predictor + tier selector (later)
 
   invariants/
-    schema.py
-    khovanov.py
-    rasmussen.py
-    knot_floer.py
-    concordance.py
-    traces.py             # public: trace / same-trace / slice certificate
+    schema.py               #   Provenance / ValidationStatus / InvariantResult
+    seifert.py              #   determinant, signature, Alexander (Seifert form)
+    jones.py                #   Kauffman bracket -> Jones
+    compute.py              #   dispatch + validate-by-default
+    khovanov.py / rasmussen.py / knot_floer.py   # future
+    concordance.py / traces.py                   # future: slice status, trace machinery
 
-  native/
-    khovanov/
-      cube.py
-      resolutions.py
-      frobenius.py
-      differential.py
-      gradings.py
-      complex.py
+  backends/                 # VALIDATORS only (never compute) -- §13.8 adapter contract
+    knotinfo_backend.py     #   the known-answer oracle + name resolution
+    knotjob_adapter.py      #   future: Khovanov / s cross-check
+    hfk_adapter.py          #   future: Szabo HFK cross-check
+    sage_adapter.py         #   future: optional interop
 
-    lee/
-      deformation.py
-      filtered_complex.py
+  export/                   # future: validated, content-hashed roster
+  reports/                  # future: report templates
 
-    grid_floer/               # future placeholder
-      README.md
-
-  algebra/
-    chain_complex.py
-    graded_complex.py
-    gf2_matrix.py
-    homology.py
-    backends/
-      cpu.py
-      cuda.py
-
-  catalog/
-    knots.yaml
-    known_answers.yaml
-    sources.yaml
-
-  experiments/
-    conway_workflow_reproducer.py
-    piccirillo_trace_notes.md
-
-  validation/
-    known_answer.py
-    backend_agreement.py
-    d_squared.py
-    compare_known.py
-    claim_ledger.py
-    reports.py
-    roster_export.py      # public: build / load the validated RosterExport
-
-  reports/
-    templates/
-      computation_report.md.j2
-      backend_comparison.md.j2
-      claim_ledger.md.j2
-
-  tests/
-    test_pd_parser.py
-    test_spherogram_adapter.py
-    test_backend_schema.py
-    test_knotinfo_import.py
-    test_unknot.py
-    test_trefoil.py
-    test_figure_eight.py
-    test_conway_pipeline.py
-
-  docs/
-    conventions.md
-    validation.md
-    backend_matrix.md
-    existing_tools.md
-    conway_notes.md
-    outreach.md
+roadmap/                    # decisions (ADRs), design docs, milestones, research
+docs/                       # conventions, validation, backend_matrix, conway_notes, outreach
+tests/                      # known-answer + structural tests (pytest)
 ```
+
+The split that matters: **engines** are theories (different mathematics), the **algebra** back end is invariant-agnostic and is where acceleration lives, and **backends/** holds validators, not compute.
 
 ---
 
@@ -455,24 +374,16 @@ The v1 mission is narrow, but the core should be generic.
 Good:
 
 ```python
-diagram = tetradrome.diagrams.load("conway_11n34")
-result = tetradrome.compute(
-    diagram,
-    invariant="rasmussen_s",
-    backend="knotjob",
-)
-report = tetradrome.report(result)
+k = td.knots.from_name("K11n34")
+result = td.invariants.compute(k, "rasmussen_invariant")   # native, validated
+report = td.report(result)
 ```
 
-Also good:
+Also good — off-table, by braid:
 
 ```python
-diagram = tetradrome.diagrams.from_spherogram("K11n34")
-result = tetradrome.compute(
-    diagram,
-    invariant="tau",
-    backend="knot_floer_homology",
-)
+k = td.knots.from_braid([1] * 15)                          # T(2,15)
+result = td.invariants.compute(k, "determinant", validate=False)
 ```
 
 Bad:
@@ -480,6 +391,8 @@ Bad:
 ```python
 result = compute_conway_answer()
 ```
+
+There is no `backend=` argument: the computation is native, and the invariant name selects the engine (decision 0006). Where a validator is installed it is consulted automatically as a cross-check, never to produce the value.
 
 The code should be Conway-focused at the experiment level, not Conway-specific at the invariant level.
 
@@ -499,13 +412,13 @@ Example:
 knot:
   id: conway_11n34
   name: Conway knot
-  input_format: spherogram
+  input_format: name
   input_value: K11n34
   pd_code_hash: ...
 
 computation:
   invariant: rasmussen_invariant
-  backend: knotjob
+  backend: tetradrome-native
   backend_version: ...
   coefficient_field: ...
   grading_convention: ...
@@ -542,9 +455,11 @@ The YAML above is the on-disk / report form. In memory the same schema is a smal
 ```python
 @dataclass(frozen=True)
 class Provenance:                 # mirrors `computation:`
-    backend: str                  # "spherogram" | "knot_floer_homology" | "knotjob" | "knotinfo" | "sage" | "native"
+    backend: str                  # "tetradrome-native" for computed values; a cross-check validator is recorded in `validation`, not here
     backend_version: str
-    input_format: str             # "spherogram" | "pd" | "dt" | "gauss" | "braid" | "name"
+    method: str                   # how it was computed, e.g. "seifert_form_from_braid" | "kauffman_bracket"
+    inputs: str                   # source of the diagram, e.g. "braid_word" | "knotinfo:braid_notation" | "pd_code"
+    input_format: str             # "pd" | "dt" | "gauss" | "braid" | "name"
     input_value: str
     pd_code_hash: str
     coefficient_field: Optional[str]     # "F2" | "Q" | ...; None where N/A
@@ -579,52 +494,58 @@ No result is returned as a bare value: each carries its provenance, its validati
 
 ---
 
-## 12. Backend Strategy
+## 12. Compute, Validators, and Vocabulary
 
-### 12.1 Backend classes
+### 12.1 Validator adapters
 
-Each backend should expose a minimal interface:
+Computation is native; external tools are validators behind one adapter contract (§13.8). Each validator exposes a minimal, read-only interface:
 
 ```python
-class InvariantBackend:
+class Validator:
     name: str
-    supported_invariants: set[str]
+    covered_invariants: set[str]
 
     def is_available(self) -> bool: ...
     def version_info(self) -> dict: ...
-    def compute(self, diagram, invariant, options) -> InvariantResult: ...
+    def known_value(self, knot, invariant) -> Any | None: ...   # to cross-check a native result
 ```
 
-### 12.2 Backend priorities
+A validator never produces the value a user receives; it only confirms or contradicts the native one (decision 0006).
 
-Initial integration priority:
+### 12.2 Build and validator priorities
 
-1. **Spherogram adapter** for diagram handling.
-2. **KnotInfo importer** for validation data.
-3. **knot-floer-homology backend** for Floer invariants such as \(\tau\), \(\epsilon\), \(\nu\), and rank data.
-4. **SageMath adapter** where feasible.
-5. **KnotJob / JavaKh adapter** if command-line invocation can be made reliable.
-6. **Native Tetradrome mod-2 Khovanov engine** after the validation harness exists.
-7. **Native CUDA exact algebra backend** after CPU reference correctness exists.
+Native build order:
 
-### 12.3 Backend matrix
+1. **Seifert-form engine** — determinant, signature, Alexander. Done.
+2. **Resolution cube + Kauffman bracket / Jones.** Done.
+3. **Shared graded-complex back end** + pure-Python reference reducer.
+4. **Khovanov / Lee / Rasmussen \(s\)** on the cube.
+5. **Acceleration tiers** (packed-bit F2 → JIT → NUMA → GPU), each validated against the reference.
+6. **Knot Floer engine** (grid / HFK-cube).
 
-Tetradrome should maintain a table like:
+Validator priority (opt-in, never compute):
 
-| Invariant | KnotInfo lookup | Sage | KnotJob / JavaKh | knot-floer-homology | Tetradrome native CPU | Tetradrome CUDA |
-|---|---:|---:|---:|---:|---:|---:|
-| Jones polynomial | planned | possible | possible | n/a | future | n/a |
-| Khovanov ranks | planned | possible | planned | n/a | future | future |
-| Rasmussen \(s\) | planned | possible | planned | n/a | future | future? |
-| Knot Floer ranks | planned | n/a/possible | n/a | planned | future | future? |
-| \(\tau\) | planned | n/a/possible | n/a | planned | future | future? |
-| \(\epsilon\), \(\nu\) | planned | n/a/possible | n/a | planned | future | future? |
+1. **KnotInfo** — the known-answer oracle (already integrated).
+2. **KnotJob** — Khovanov / \(s\) cross-check.
+3. **Szabó's HFK calculator** — Floer cross-check.
+4. **SageMath** — optional interop / cross-check.
 
-This matrix should be maintained in `docs/backend_matrix.md`.
+### 12.3 Coverage matrix
+
+The native column is the producer; the rest are validators that can cross-check it. Maintained in `docs/backend_matrix.md`.
+
+| Invariant | Tetradrome native | KnotInfo (oracle) | KnotJob | HFK calc | Sage |
+|---|---|---|---|---|---|
+| determinant / signature / Alexander | done | yes | — | — | yes |
+| Jones polynomial | done | yes | — | — | yes |
+| Khovanov ranks | planned (M4) | yes | yes | — | — |
+| Rasmussen \(s\) | planned (M5) | yes | yes | — | — |
+| knot Floer ranks | planned (M8) | yes | — | yes | — |
+| \(\tau\), \(\epsilon\), \(\nu\) | planned (M8) | partial | — | yes | — |
 
 ### 12.4 Vocabulary alignment with the referenced tools
 
-The §12.3 matrix says *which* backend can produce an invariant. This table fixes the *names*. The left column is Tetradrome's canonical name — the standard term for the object in the knot-theory literature, chosen on the mathematics and independent of any tool. The remaining columns record how each backend happens to spell that same object, so one normalizer can translate a backend's output into the schema. Listing a tool's spelling here is interop, not adoption: the right columns tell the normalizer how to read each backend; the canonical column stands on the mathematics. Where these coincide with KnotInfo's column names, it is because KnotInfo also uses the standard literature names — not because Tetradrome takes them from it.
+The §12.3 matrix says *which* native engine produces an invariant and which tools can validate it. This table fixes the *names*. The left column is Tetradrome's canonical name — the standard term for the object in the knot-theory literature, chosen on the mathematics and independent of any tool. The remaining columns record how each tool happens to spell that same object, so one normalizer can read a validator's output for comparison. Listing a tool's spelling here is interop, not adoption: the right columns tell the normalizer how to read each validator; the canonical column stands on the mathematics. Where these coincide with KnotInfo's column names, it is because KnotInfo also uses the standard literature names — not because Tetradrome takes them from it.
 
 The exact canonical spelling is a deliberate open design decision, localized to the normalizer (§13.3), not a commitment baked across the code. Where the literature gives more than one proper name for the same object — the symbol `tau` versus the attributed `ozsvath_szabo_tau`, or `three_genus` versus `seifert_genus` — either is mathematically legitimate; pick one in the normalizer and every result and export follows, with no effect on the mathematics or on any consumer.
 
@@ -653,7 +574,7 @@ The exact canonical spelling is a deliberate open design decision, localized to 
 
 **Diagram notation.** All four Spherogram / KnotInfo notations are first-class inputs and map name-for-name: PD code (list of 4-tuples) ↔ `pd_notation`; DT code (`DT[...]`) ↔ `dt_notation`; Gauss code ↔ `gauss_notation`; braid word (`braid_closure`) ↔ `braid_notation`.
 
-**Bridges.** `Knot.to_spherogram()` → `spherogram.Link`; `Knot.sage_link()` → Sage `Knot`; `Knot.exterior()` → SnapPy `Manifold`. The Floer backend is fed a Spherogram link or PD directly (`knot_floer_homology.pd_to_hfk(...)`), so there is no lossy round-trip.
+**Bridges (opt-in interop).** `Knot.to_spherogram()` → `spherogram.Link`; `Knot.sage_link()` → Sage `Knot`; `Knot.exterior()` → SnapPy `Manifold`. These are convenience exports for users who want to hand a diagram to another tool; the native engines take the normalized diagram directly, and any Floer cross-check feeds the validator from the same PD.
 
 ---
 
@@ -663,7 +584,7 @@ The exact canonical spelling is a deliberate open design decision, localized to 
 
 Responsible for:
 
-- accepting Spherogram links;
+- parsing knot, link, and braid inputs (name, PD, DT, Gauss, braid);
 - parsing and normalizing PD codes;
 - storing crossings and arcs;
 - tracking orientation where needed;
@@ -680,21 +601,21 @@ KnotDiagram
   orientation
   crossing_signs
   metadata
-  source_backend
+  source_notation
   canonical_hash
 ```
 
-The diagram layer should prefer interoperability over purity. If Spherogram already handles a representation well, use it.
+The diagram layer is native: it parses and normalizes the standard notations itself. Spherogram remains available as an optional interop target (§12.4), not as the parser.
 
-### 13.2 Backend Layer
+### 13.2 Validator Layer
 
-Responsible for:
+Responsible for (validators only — never the source of a returned value):
 
-- calling existing tools;
-- parsing raw outputs;
+- consulting opt-in validators to cross-check a native result;
+- parsing their raw outputs;
 - recording versions;
-- handling unavailable backends gracefully;
-- normalizing results;
+- treating an absent validator as a skipped cross-check, not an error;
+- normalizing results for comparison;
 - storing raw outputs for auditability.
 
 ### 13.3 Invariant Schema Layer
@@ -747,9 +668,9 @@ Responsible for:
 
 The algebra layer should not know anything about the Conway knot.
 
-### 13.7 GPU / CUDA Backend
+### 13.7 GPU / CUDA Acceleration
 
-CUDA should be treated as an acceleration backend, not as the source of mathematical truth.
+CUDA should be treated as an acceleration tier, not as the source of mathematical truth.
 
 Potential CUDA/JIT acceleration points:
 
@@ -894,19 +815,19 @@ class RosterExport:               # the consumption contract
 **Public functions:**
 
 ```python
-# tetradrome.knots — construction & normalization (Spherogram-backed, §12.4)
+# tetradrome.knots — construction & normalization (native, §12.4)
 knots.from_name(name)         # "K11n34", "4_1", ...
 knots.from_pd(pd); knots.from_dt(dt); knots.from_gauss(code); knots.from_braid(word)
-knots.from_spherogram(link); knots.normalize(knot); knots.mirror(knot)
+knots.normalize(knot); knots.mirror(knot)
 
-# tetradrome.invariants — compute; always returns a typed InvariantResult (§11.1)
+# tetradrome.invariants — native compute; always returns a typed InvariantResult (§11.1)
 invariants.list()
-invariants.compute(knot, name, *, backend=None, validate=True) -> InvariantResult
-invariants.compute_all(knot, *, backend=None, validate=True) -> dict[str, InvariantResult]
+invariants.compute(knot, name, *, validate=True) -> InvariantResult
+invariants.compute_all(knot, *, validate=True) -> dict[str, InvariantResult]
 
 # tetradrome.concordance — sliceness / obstructions
-concordance.obstruction_profile(knot, *, backend=None) -> ObstructionProfile
-concordance.slice_status(knot, *, backend=None) -> SlicenessVerdict
+concordance.obstruction_profile(knot) -> ObstructionProfile
+concordance.slice_status(knot) -> SlicenessVerdict
 
 # tetradrome.traces — trace embedding lemma surface (promotes experiments/piccirillo_trace_notes.md)
 traces.trace(knot, framing=0) -> KnotTrace
@@ -918,14 +839,14 @@ traces.slice_certificate(knot) -> Optional[SliceCertificate]
 catalog.names(); catalog.get(name) -> Knot
 
 # tetradrome.export — build / load the validated consumption contract (promotes catalog/ + validation/)
-export.build(names=None, *, backend=None, validate=True) -> RosterExport
+export.build(names=None, *, validate=True) -> RosterExport
 export.save(roster, path); export.load(path) -> RosterExport   # verifies content_hash
 
-# tetradrome.backends — selection (authoring-time; §12)
-backends.available(); backends.capabilities(); backends.require(name)
+# tetradrome.validators — opt-in cross-checks (authoring-time; §12)
+validators.available(); validators.capabilities(); validators.require(name)
 ```
 
-**The consumption contract.** A downstream consumer depends on exactly one artifact: a `RosterExport`, produced offline by `export.build(..., validate=True)`, saved, and content-hashed. At read time no backend is touched — the Java / C++ / Sage tools are an authoring-only dependency. Every value reachable through the export carries its `Provenance` and `ValidationStatus`, so a consumer can assert validation and refuse to proceed otherwise. This boundary is what keeps consumers thin and the mathematics pure: the consumer reads knot-math facts and never reaches into computation.
+**The consumption contract.** A downstream consumer depends on exactly one artifact: a `RosterExport`, produced offline by `export.build(..., validate=True)`, saved, and content-hashed. At read time nothing external is touched; any validator (KnotJob, HFK, Sage) is consulted only at authoring time, and only as a cross-check — never to produce a value. Every value reachable through the export carries its `Provenance` and `ValidationStatus`, so a consumer can assert validation and refuse to proceed otherwise. This boundary is what keeps consumers thin and the mathematics pure: the consumer reads knot-math facts and never reaches into computation.
 
 ```python
 roster = export.load("roster-vN.json")            # verifies hash; raises on mismatch
@@ -973,16 +894,15 @@ Tetradrome should maintain a claim ledger similar to this:
 
 | Claim | Status | Evidence | Notes |
 |---|---:|---|---|
-| Existing tooling survey completed | Yellow | Initial list assembled | Needs maintenance and expert review |
-| Spherogram adapter handles initial knot catalog | Red | Not implemented | First engineering milestone |
-| KnotInfo importer retrieves known-answer data | Red | Not implemented | Required for validation-first workflow |
-| knot-floer-homology backend runs on small knots | Red | Not implemented | Floer v1 target |
-| Khovanov/Rasmussen backend selected and callable | Red | Not implemented | Requires Sage/KnotJob/JavaKh evaluation |
-| Backend outputs normalize into shared schema | Red | Not implemented | Required before reports are meaningful |
-| Conway workflow report is reproducible | Red | Not implemented | Requires input, backend, validation, and report trail |
-| Native mod-2 Khovanov complex builds for unknot/trefoil | Red | Deferred | Native v2/v3 feature |
-| Native differential satisfies \(d^2 = 0\) | Red | Deferred | Required for every native complex |
-| GPU backend agrees with CPU backend | Red | Deferred | GPU is optional until CPU is trusted |
+| Classical invariants (det, signature, Alexander) match KnotInfo | Green | Validated across the tables | Seifert-form engine |
+| Native Jones matches KnotInfo | Green | Validated through ~11 crossings | Kauffman bracket |
+| KnotInfo oracle retrieves known-answer data | Green | Implemented | Validation-first workflow |
+| Shared graded-complex back end + reference reducer | Red | Not implemented | M3 |
+| Native Khovanov ranks match KnotInfo (mod 2) | Red | Not implemented | M4 |
+| Native differential satisfies \(d^2 = 0\) | Red | Not implemented | Required for every native complex |
+| Native \(s\) matches KnotInfo | Red | Not implemented | M5 |
+| raw == reduced after exact reductions | Red | Not implemented | M6 (decision 0007) |
+| GPU tier agrees with the pure-Python reference | Red | Not implemented | M7; the reference is the gold master |
 
 Claim statuses should be updated as the project matures:
 
@@ -997,128 +917,19 @@ Blue    = independently reproduced or externally reviewed
 
 ## 16. Milestones
 
-### Milestone 0: Project scaffold
+The canonical, maintained roadmap lives in `roadmap/milestones.md` and `roadmap/design/homology-engine.md`; this is a summary. Sequencing is native-first (decisions 0006, 0007): each invariant is computed by Tetradrome and validated against KnotInfo before any optimization or cross-tool comparison.
 
-Deliverables:
-
-- repository structure;
-- package metadata;
-- test framework;
-- documentation skeleton;
-- coding conventions;
-- claim ledger.
-
-### Milestone 1: Existing tooling integration map
-
-Deliverables:
-
-- `docs/existing_tools.md`;
-- backend matrix;
-- install notes;
-- license notes;
-- assessment of which tools are reference-only, callable backends, validation data, or future inspiration.
-
-### Milestone 2: Diagram input and catalog
-
-Deliverables:
-
-- Spherogram adapter;
-- PD-code normalizer;
-- hardcoded knot catalog;
-- unknot / trefoil / figure-eight examples;
-- Conway / Kinoshita-Terasaka entries if reliable identifiers and encodings are available.
-
-### Milestone 3: Validation data import
-
-Deliverables:
-
-- KnotInfo data importer or manual known-answer loader;
-- known-answer schema;
-- comparison tool;
-- reproducible source metadata.
-
-### Milestone 4: First backend adapters
-
-Deliverables:
-
-- `knot-floer-homology` adapter;
-- SageMath adapter if feasible;
-- KnotJob/JavaKh feasibility spike;
-- backend availability checks;
-- normalized output schema.
-
-### Milestone 4A: Modernization harness
-
-Deliverables:
-
-- adapter contract for external tools;
-- backend installation probes;
-- raw-output capture format;
-- parser fixtures for each integrated tool;
-- golden-master outputs for unknot, trefoil, figure-eight, and selected small knots;
-- container or environment notes for brittle dependencies;
-- a migration matrix identifying which backend capabilities are wrapper-only, reproducible, native-candidate, or not worth replacing.
-
-### Milestone 5: Report generator
-
-Deliverables:
-
-- computation report template;
-- backend comparison report;
-- claim-ledger report;
-- reproducibility hash;
-- raw-output capture.
-
-### Milestone 6: Conway workflow reproducer
-
-Deliverables:
-
-- Conway-knot input;
-- Kinoshita-Terasaka input;
-- Piccirillo-related \(K'\) input if reliably encoded;
-- Conway-adjacent computation report;
-- clear statement of what the reproducer does and does not establish.
-
-### Milestone 7: Native mod-2 Khovanov engine
-
-Deliverables:
-
-- cube-of-resolutions enumeration;
-- resolution-circle detection;
-- chain group construction;
-- differential construction over \(\mathbb{F}_2\);
-- \(d^2 = 0\) verification;
-- known-answer validation against external backends.
-
-### Milestone 8: Native exact algebra / performance backend
-
-Deliverables:
-
-- packed-bit \(\mathbb{F}_2\) matrix representation;
-- CPU optimized rank computation;
-- optional Numba/CUDA backend;
-- CPU/GPU agreement tests;
-- benchmarks against native CPU and external tools where appropriate.
-
-### Milestone 9: Native Lee / Rasmussen experiments
-
-Deliverables:
-
-- Lee deformation implementation;
-- filtered-complex handling;
-- Rasmussen \(s\)-invariant extraction;
-- validation on known knots;
-- comparison with external backends.
-
-### Milestone 10: External review package
-
-Deliverables:
-
-- compact technical summary;
-- reproducibility instructions;
-- validation report;
-- limitations page;
-- polite outreach note for researchers.
+- **M0 — Scaffold.** Repository, package metadata, tests, conventions, claim ledger, decision records. *Done.*
+- **M1 — Classical invariants (Seifert form).** Native determinant, signature, Alexander from a braid / PD; validated across the KnotInfo tables. *Done.*
+- **M2 — Resolution cube + Jones.** Native Kauffman bracket → Jones; validated against KnotInfo. *Done.*
+- **M3 — Shared graded-complex back end.** Graded chain complex, pure-Python reference reducer, F2 rank / kernel / image homology, \(d^2 = 0\) check, exact complex-size predictor.
+- **M4 — Native Khovanov over F2.** Khovanov ranks on the cube; validated against KnotInfo's mod-2 data.
+- **M5 — Native Lee / Rasmussen \(s\).** Lee deformation, filtered complex over \(\mathbb{Q}\) (multimodular), \(s\) extraction; validated on known knots.
+- **M6 — Exact reductions.** Delooping + Bar-Natan local elimination; verify raw == reduced (decision 0007).
+- **M7 — Acceleration tiers.** Packed-bit F2 → JIT → multi-core / NUMA → optional GPU, behind a memory-prediction gate (decision 0008); each tier validated against the reference.
+- **M8 — Native knot Floer.** Grid / HFK-cube engine; \(\tau, \epsilon, \nu\); validated against KnotInfo, cross-checked against Szabó's HFK calculator where installed.
+- **M9 — Validators, report, export.** Opt-in cross-check adapters (KnotJob, HFK, Sage) behind the §13.8 contract; reproducible reports; content-hashed roster export.
+- **M10 — External review package.** Technical summary, reproducibility instructions, validation report, limitations, outreach.
 
 ---
 
@@ -1130,7 +941,7 @@ Each serious run should output a report like:
 experiment: conway_workflow_reproducer
 input:
   knot: conway_11n34
-  input_format: spherogram
+  input_format: name
   canonical_pd_hash: ...
 
 computation:
@@ -1138,27 +949,27 @@ computation:
     - khovanov
     - lee
     - rasmussen_s
-  requested_backend: knotjob
-  actual_backend: knotjob
-  backend_version: ...
+  backend: tetradrome-native
+  method: cube_kauffman / lee_rasmussen
+  tetradrome_version: ...
   coefficient_field: ...
   grading_convention: ...
 
-backend_result:
+result:
   raw_output_file: reports/raw/...
   normalized_value: ...
 
 validation:
   known_answer_source: knotinfo
   known_answer_match: PASS/FAIL/NOT_AVAILABLE
-  independent_backend: sage/java_kh/native/not_run
-  independent_backend_match: PASS/FAIL/NOT_RUN
-  d_squared_check: NOT_APPLICABLE_FOR_WRAPPED_BACKEND
+  cross_check_validator: knotjob / hfk / sage / not_run
+  cross_check_match: PASS/FAIL/NOT_RUN
+  d_squared_check: PASS/FAIL/NOT_APPLICABLE
 
 interpretation:
   computed_invariant: ...
   mathematical_claim: ...
-  claim_strength: backend_computation / known_table_match / theorem_reference
+  claim_strength: native_computation / known_table_match / theorem_reference
   limitations: ...
 
 reproducibility:
@@ -1196,15 +1007,15 @@ This distinction should be built into both the documentation and the reporting l
 
 Performance matters, but correctness comes first.
 
-The revised performance strategy is:
+The performance strategy is:
 
 ```text
-use existing trusted tools first
-  -> build validation harness
-  -> implement clear CPU reference where useful
-  -> compare against trusted tools
-  -> optimize exact algebra
-  -> optionally add CUDA acceleration
+raw, faithful pure-Python reference (correct first)
+  -> validation harness + known-answer + d^2 = 0
+  -> exact, answer-preserving reductions
+  -> packed-bit / JIT / multi-core optimization
+  -> optional GPU acceleration
+  -> cross-check against trusted tools throughout
 ```
 
 Likely performance bottlenecks for native components:
@@ -1244,7 +1055,7 @@ Rules:
 - GPL tools are optional external validators only: invoked as separate programs, or installed by the user as optional dependencies. Tetradrome calls them; it does not vendor or statically combine them into its distribution.
 - No backend data is vendored either; KnotInfo and similar are queried/validated against and cited, not copied into the repo.
 - Record backend license and installation requirements in `docs/existing_tools.md`.
-- Keep raw-output parsers modular; make every backend optional; degrade gracefully when one is unavailable.
+- Keep raw-output parsers modular; make every validator optional; degrade gracefully when one is unavailable — a missing validator skips a cross-check, it never blocks a result.
 
 Because no GPL source or data is distributed inside Tetradrome, no copyleft obligation attaches and the permissive Apache 2.0 license fits. Existing tools also serve as a parity reference — a maintenance signal for new maths or features worth matching, not a dependency.
 
@@ -1256,7 +1067,7 @@ If shared externally with a mathematician such as Lisa Piccirillo, the project s
 
 Suggested framing:
 
-> I am building a Python-first project called Tetradrome for reproducible computational experiments around knot invariants relevant to smooth 4-dimensional topology. The first target is a Conway-adjacent workflow that orchestrates existing tools where appropriate, validates outputs against known data, records conventions and versions, and produces transparent reports. The longer-term goal is to add native components and exact algebra acceleration only where they provide a clear benefit. It is not a claim of a new theorem and not an attempt to replace established tools.
+> I am building a Python-first project called Tetradrome for reproducible computation of the invariants of smooth 4-dimensional topology. It computes them natively — Khovanov, Lee, the Rasmussen \(s\)-invariant, knot Floer, and the classical and concordance invariants — and validates each result against KnotInfo and, where installed, against existing tools, with full provenance and an explicit validation status. The first target is a Conway-adjacent workflow. It is not a claim of a new theorem, and the existing tools are treated as the validation reference, not replaced or disparaged.
 
 Avoid framing it as:
 
@@ -1287,11 +1098,11 @@ Draft:
 ```text
 Professor Piccirillo,
 
-I am working on a Python project called Tetradrome, intended as a readable and reproducible computational workbench for knot-invariant experiments related to smooth 4-dimensional topology.
+I am working on a Python project called Tetradrome, intended as a readable, reproducible workbench that computes the invariants of smooth 4-dimensional topology natively and validates them against known data.
 
-The initial target is intentionally narrow: a Conway-adjacent workflow that normalizes knot inputs, orchestrates existing tools where appropriate, validates outputs against known data, records conventions and backend versions, and produces transparent reports. The goal is not to claim a new theorem or replace established tools, but to build a disciplined computational apparatus that can reproduce and explore small examples in a way that is easier to audit.
+The initial target is intentionally narrow: a Conway-adjacent workflow that normalizes inputs, computes the invariants natively, validates the results against KnotInfo (and cross-checks against existing tools where installed), records conventions and versions, and produces transparent reports. The goal is not to claim a new theorem or to replace established tools — those remain my validation reference — but to build a disciplined, auditable apparatus for reproducing and exploring small examples.
 
-Longer-term, I am interested in adding native Python/CUDA components for exact algebra workloads only where that adds clear value.
+Longer-term, I am building out the native Khovanov / Lee / Floer engines and accelerating the exact-algebra core (multi-core and optional GPU) behind the same validation discipline.
 
 I have attached the project specification in case it is of interest. I would be grateful for any high-level warning signs, references, or suggestions about where such a project would be most likely to go wrong.
 
@@ -1305,18 +1116,18 @@ Randy
 
 Tetradrome v1 succeeds if it can honestly say:
 
-1. The project has a clean architecture that separates diagrams, backends, invariants, validation, reports, and experiments.
-2. Existing tooling is acknowledged and integrated where useful.
-3. Spherogram/PD inputs can be normalized into a common representation.
-4. KnotInfo or equivalent known-answer data can be used for validation.
-5. At least one Floer backend and one Khovanov/Rasmussen backend can be called or compared.
-6. Every result records backend, version, input, convention notes, raw output, normalized output, and validation status.
+1. The project has a clean architecture that separates diagrams, native engines, the algebra back end, invariants, validation, reports, and experiments.
+2. Existing tooling is acknowledged and used as the validation reference, never as a compute dependency.
+3. Knot, link, and braid inputs (name, PD, DT, Gauss, braid) are normalized natively into a common representation.
+4. KnotInfo or equivalent known-answer data is used for validation.
+5. At least one homological invariant is computed natively and agrees with KnotInfo (and with an external tool where installed).
+6. Every result records the native method, version, input, convention notes, raw output, normalized output, and validation status.
 7. Conway-adjacent reports are reproducible.
 8. The documentation clearly distinguishes computation, obstruction, theorem reference, and proof.
-9. The code can grow toward native implementations without rewriting the workbench.
-10. Existing brittle or research-shaped tools can be run through stable adapters with version capture, raw-output archiving, normalized schemas, and golden-master regression tests.
+9. The code can grow toward more native engines without rewriting the workbench.
+10. Optional validators run behind one stable adapter contract with version capture, raw-output archiving, and golden-master regression tests.
 
-Tetradrome v1 fails if it produces impressive-looking results without validation, if it pretends existing computational topology tools do not exist, or if it rewrites trusted mathematical software without first capturing known behavior.
+Tetradrome v1 fails if it produces impressive-looking results without validation, if it pretends existing computational topology tools do not exist, or if it ships a native computation that was never checked against known behavior.
 
 ---
 
@@ -1325,20 +1136,19 @@ Tetradrome v1 fails if it produces impressive-looking results without validation
 Tetradrome should begin as a narrow but honest workbench:
 
 ```text
-Conway-focused mission
-  + existing tooling integration
-  + generic diagram model
-  + backend abstraction
+Conway-adjacent mission
+  + native invariant engines
+  + generic diagram model (knots, links, braids)
+  + shared exact-algebra back end
   + normalized invariant schema
-  + rigorous validation
+  + rigorous validation against existing tools
   + reproducible reports
-  + legacy-tool modernization layer
-  + optional native engines later
-  + optional CUDA acceleration later
+  + opt-in validators (never compute)
+  + acceleration tiers (multi-core, optional GPU)
   + clear limitations
 ```
 
-The goal is not to build the whole mathematical universe immediately. The goal is to build the calibrated bench on which such instruments can be run, compared, audited, and eventually extended.
+The goal is not to build the whole mathematical universe immediately. The goal is to build the calibrated bench on which these instruments are built, validated, audited, and extended.
 
 ---
 
