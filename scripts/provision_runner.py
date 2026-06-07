@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
-"""Provision a lightweight Proxmox LXC, install a Python repo into it, and smoke-test it.
+"""Provision a lightweight Proxmox LXC to run the Tetradrome grid scaling sweep.
 
 Run this ON a Proxmox host as root. It creates an unprivileged Debian LXC (pure compute --
-no Docker, nesting, or GPU), clones a public git repo, installs it into a venv with whatever
-extras you name, optionally runs a smoke-test command, and prints how to reach it. Everything
-environment-specific -- the repo, the storage pool, the size, the bridge -- is a parameter,
-so nothing about a particular cluster is baked in.
+no Docker, nesting, or GPU), installs Tetradrome into a venv with the numpy acceleration
+extra, smoke-tests a tiny sweep, and prints how to run the full sweep at the container's core
+count with NUMA pinning.
 
-Required: --repo (git URL) and --rootfs-storage (a Proxmox storage pool that holds container
-rootfs). The rest have generic defaults; size it up for a real workload.
+The project is baked in (this script ships with it); only the *host* environment is
+parameterized -- storage pool, container size, bridge, CTID -- so nothing about a particular
+cluster is assumed. Point --rootfs-storage at a pool that holds container rootfs, and size
+--cores / --memory for the run.
 
-    python3 scripts/provision_runner.py \
-        --repo https://github.com/you/yourrepo.git --branch main \
-        --rootfs-storage your-pool --cores 16 --memory 16384 \
-        --extras accel --smoke "scripts/bench_grid_floer.py --knots 3_1 --sizes 5"
+    python3 scripts/provision_runner.py --rootfs-storage your-pool --cores 16 --memory 16384
 
 Re-running on an existing CTID refuses unless --recreate is given (no silent clobber).
 """
@@ -28,6 +26,8 @@ import subprocess
 import sys
 
 DEFAULT_TEMPLATE = "debian-12-standard_12.12-1_amd64.tar.zst"
+DEFAULT_REPO = "https://github.com/rbraunm/tetradrome.git"
+DEFAULT_SMOKE = "scripts/bench_grid_floer.py --knots 3_1 --sizes 5"
 
 
 def run(cmd: str) -> None:
@@ -109,7 +109,8 @@ def wait_for_network(ctid: int) -> None:
 
 def install_repo(ctid: int, args, name: str) -> None:
     extras = f"[{args.extras}]" if args.extras else ""
-    print(f"[4/6] Installing {args.repo} ({args.branch}{', extras: ' + args.extras if args.extras else ''})...")
+    print(f"[4/6] Installing {args.repo} ({args.branch}"
+          f"{', extras: ' + args.extras if args.extras else ''})...")
     packages = "git python3 python3-venv python3-pip numactl ca-certificates"
     if args.apt:
         packages += " " + args.apt
@@ -135,15 +136,18 @@ def smoke_test(ctid: int, args, name: str) -> None:
     exec_in(ctid, f"cd {base}/src && {base}/venv/bin/python {args.smoke}")
 
 
-def report(ctid: int, name: str) -> None:
+def report(ctid: int, args, name: str) -> None:
     ip = capture(f"pct exec {ctid} -- hostname -I").stdout.strip().split()[:1]
     base = f"/opt/{name}"
+    python = f"{base}/venv/bin/python"
+    bench = f"{base}/src/scripts/bench_grid_floer.py"
     print("\n[6/6] Done.")
     print(f"  Container {ctid} is up{(' at ' + ip[0]) if ip else ''}.")
-    print(f"  Repo at {base}/src, venv python at {base}/venv/bin/python.")
-    print("\n  Run a command inside:")
-    print(f"    pct exec {ctid} -- {base}/venv/bin/python {base}/src/<script> <args>")
-    print(f"  Update the code later:")
+    print(f"  Repo at {base}/src, venv python at {python}.")
+    print("\n  Run the scaling sweep (synthetic sizes isolate generation; --pin needs Linux):")
+    print(f"    pct exec {ctid} -- {python} {bench} \\")
+    print(f"        --sizes 8 9 10 11 --gen-workers {args.cores} --workers {args.cores} --pin")
+    print(f"\n  Update the code later:")
     print(f"    pct exec {ctid} -- git -C {base}/src pull")
 
 
@@ -151,28 +155,31 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--repo", required=True, help="git URL to clone (public)")
-    parser.add_argument("--rootfs-storage", required=True,
-                        help="Proxmox storage pool for the container rootfs")
-    parser.add_argument("--branch", default="main", help="repo branch (default main)")
-    parser.add_argument("--extras", default="",
-                        help="pip extras to install, comma-separated (e.g. accel)")
-    parser.add_argument("--smoke", default="",
-                        help="command (run by the venv python in the repo dir) to smoke-test")
-    parser.add_argument("--apt", default="",
-                        help="extra apt packages beyond the base (e.g. build-essential)")
+    # Host environment -- parameterized, no cluster assumptions:
+    parser.add_argument("--rootfs-storage", default="local-lvm",
+                        help="Proxmox storage pool for the container rootfs (default local-lvm)")
     parser.add_argument("--ctid", type=int, default=250, help="container ID (default 250)")
-    parser.add_argument("--hostname", default="lxc-runner")
-    parser.add_argument("--cores", type=int, default=4, help="vCPUs (default 4)")
+    parser.add_argument("--hostname", default="tetradrome")
+    parser.add_argument("--cores", type=int, default=4, help="vCPUs (default 4; size up)")
     parser.add_argument("--memory", type=int, default=4096, help="RAM in MiB (default 4096)")
     parser.add_argument("--swap", type=int, default=512, help="swap in MiB (default 512)")
     parser.add_argument("--rootfs-size", type=int, default=16, help="rootfs size in GiB")
     parser.add_argument("--template-storage", default="local", help="template storage")
     parser.add_argument("--template", default=DEFAULT_TEMPLATE)
     parser.add_argument("--bridge", default="vmbr0")
-    parser.add_argument("--tags", default="compute", help="Proxmox tags (semicolon-separated)")
+    parser.add_argument("--tags", default="tetradrome;compute",
+                        help="Proxmox tags (semicolon-separated)")
     parser.add_argument("--recreate", action="store_true",
                         help="destroy and rebuild if the CTID already exists")
+    # Project -- baked in, overridable:
+    parser.add_argument("--repo", default=DEFAULT_REPO, help="git URL to clone")
+    parser.add_argument("--branch", default="claude", help="repo branch (default claude)")
+    parser.add_argument("--extras", default="accel",
+                        help="pip extras, comma-separated (default accel; numpy reducer)")
+    parser.add_argument("--smoke", default=DEFAULT_SMOKE,
+                        help="command (venv python, in the repo dir) to smoke-test; '' to skip")
+    parser.add_argument("--apt", default="",
+                        help="extra apt packages beyond the base (e.g. build-essential for numba)")
     args = parser.parse_args()
 
     name = project_name(args.repo)
@@ -182,7 +189,7 @@ def main() -> None:
     wait_for_network(args.ctid)
     install_repo(args.ctid, args, name)
     smoke_test(args.ctid, args, name)
-    report(args.ctid, name)
+    report(args.ctid, args, name)
 
 
 if __name__ == "__main__":
