@@ -309,6 +309,14 @@ tools (KhoHo, KnotKit, regina, Szabó's calculator) are decades of accreted C/C+
 handful of people, and porting irregular sparse C++ to CUDA is a large effort with no
 paper at the end. That is an incentive problem, not a verdict that GPU cannot help.
 
+The full menu of candidate accelerations — per engine, per phase, with provenance
+(including cross-domain ones: block Lanczos/Wiedemann from number-field-sieve linear
+algebra, the Ripser clearing/implicit-reduction stack from TDA, algebraic discrete
+Morse) and each tagged by the [0011](../decisions/0011-harden-the-brute-reference.md)
+(B)/(A)/(C) class — is catalogued in
+[`../research/engine-acceleration-catalog.md`](../research/engine-acceleration-catalog.md),
+so the research is not lost between sessions.
+
 ---
 
 ## 7. Implementation path (general → reduced/accelerated)
@@ -494,3 +502,7 @@ the soft-lock semantics — ADRs stay reviewable even when "locked"):
 3. [0008](../decisions/0008-memory-prediction-gate.md) — **Memory-prediction gate with
    VRAM-aware routing; fail loud and early; exact reduction is an opt-in size tool,
    never a silent shrink-to-fit.**
+4. [0011](../decisions/0011-harden-the-brute-reference.md) — **Hardening the brute
+   reference's speed (by exact means) is in scope; the combinatorial floor is
+   irreducible; accelerations are classified (B) same-complex / (A) route-changing /
+   (C) input-reducing; the 4D reach frontier is the binding engine.** (Locked.)

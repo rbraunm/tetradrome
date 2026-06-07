@@ -87,6 +87,8 @@ report generator (M5), the Conway reproducer (M6), and native Floer (engine Phas
   *(done & validated; also extended to a signed ℚ lane -- see engine Phase 2/3a)*
 
 ## Milestone 8 -- Native exact algebra / performance backend
+*Candidate accelerations (per engine, per phase, with provenance) are catalogued in
+`roadmap/research/engine-acceleration-catalog.md`, governed by ADR 0011.*
 - [ ] packed-bit F2 matrix representation
 - [ ] CPU optimized rank computation
 - [ ] optional Numba / CUDA backend
