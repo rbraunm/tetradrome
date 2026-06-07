@@ -1,7 +1,8 @@
 """Tests for GPU detection, auto-configuration, and enablement guidance.
 
-The probes themselves need real hardware, so they are smoke-tested for not-raising on this
-(GPU-less) machine. The decision logic -- which config a card produces, and what guidance
+The probes run against whatever hardware the host actually has: they must never raise,
+and their verdict must match the host's ground truth (a CUDA device established directly,
+not via the probe). The decision logic -- which config a card produces, and what guidance
 each detection state yields -- is exercised against constructed GpuInfo objects so every
 branch is covered without a device.
 """
@@ -16,11 +17,25 @@ def _info(**kw):
     return GpuInfo(**base)
 
 
-def test_probes_do_not_raise_without_gpu():
-    info = gpu.detect_gpu()                 # nvidia-smi absent here -> clean negative
-    assert info.device_usable is False
+def _cuda_device_present():
+    """Host ground truth, established directly rather than via the probe under test."""
+    try:
+        import cupy
+        return cupy.cuda.runtime.getDeviceCount() > 0
+    except Exception:
+        return False
+
+
+def test_detection_matches_host_hardware():
+    info = gpu.detect_gpu()                 # never raises, with or without a GPU
+    has_cuda = _cuda_device_present()
+    assert info.device_usable is has_cuda
     assert isinstance(gpu.format_report(info), str)
-    assert gpu.usable_cupy() is None
+    if has_cuda:
+        import cupy
+        assert gpu.usable_cupy() is cupy
+    else:
+        assert gpu.usable_cupy() is None
 
 
 def test_wheel_mapping():
