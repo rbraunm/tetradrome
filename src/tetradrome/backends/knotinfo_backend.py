@@ -29,6 +29,59 @@ _ORACLE_COLUMN = {
 _ALPHA_FORM = re.compile(r"^(\d+[a-zA-Z])(\d+)$")
 
 
+def _blank(raw) -> bool:
+    return raw is None or str(raw).strip() in ("", "does not exist")
+
+
+def _khovanov_integral_vector(name: str):
+    """KnotInfo's unreduced integral Khovanov as a list of [torsion, mult, i, j], or
+    None if the knot has no stored vector."""
+    raw = lookup(name).get("khovanov_unreduced_integral_vector")
+    if _blank(raw):
+        return None
+    return ast.literal_eval(str(raw))
+
+
+def _khovanov_free_ranks(name: str):
+    """Rational (torsion-free) unreduced Khovanov: dim_Q Kh^{i,j} = the free summands."""
+    vec = _khovanov_integral_vector(name)
+    if vec is None:
+        return None
+    out: dict[tuple[int, int], int] = {}
+    for torsion, mult, i, j in vec:
+        if torsion == 0:
+            out[(i, j)] = out.get((i, j), 0) + mult
+    return out
+
+
+def _khovanov_mod2(name: str):
+    """Mod-2 unreduced Khovanov by universal coefficients (cohomological): dim_F2 Kh^{i,j}
+    = free rank + 2-torsion at (i,j) + 2-torsion at (i+1,j)."""
+    vec = _khovanov_integral_vector(name)
+    if vec is None:
+        return None
+    free: dict[tuple[int, int], int] = {}
+    tor2: dict[tuple[int, int], int] = {}
+    for torsion, mult, i, j in vec:
+        if torsion == 0:
+            free[(i, j)] = free.get((i, j), 0) + mult
+        elif torsion % 2 == 0:
+            tor2[(i, j)] = tor2.get((i, j), 0) + mult
+    out: dict[tuple[int, int], int] = {}
+    for (i, j) in set(free) | set(tor2) | {(i - 1, j) for (i, j) in tor2}:
+        d = free.get((i, j), 0) + tor2.get((i, j), 0) + tor2.get((i + 1, j), 0)
+        if d:
+            out[(i, j)] = d
+    return out
+
+
+def _mirror_bigraded(table):
+    """KnotInfo tabulates Khovanov (and s) in the opposite chirality from its stored PD
+    (verified across the small-knot table). Our value is the correct invariant of the
+    given diagram, so the oracle is mirrored to match: (i, j) -> (-i, -j)."""
+    return {(-i, -j): d for (i, j), d in table.items()}
+
+
 def _load():
     global _TABLE, _BY_NAME
     if _BY_NAME is not None:
@@ -119,6 +172,22 @@ def known_answer(name: str, invariant: str):
             return None
         vec = ast.literal_eval(str(raw))  # [low_exp, high_exp, c_low, ...]
         return (int(vec[0]), tuple(int(c) for c in vec[2:]))
+
+    # Homological invariants. KnotInfo's Khovanov/s columns use the mirror chirality of
+    # its PD, so the oracle is mirrored / sign-flipped to match our value (Phase 2c/3c).
+    if invariant == "khovanov_homology":
+        table = _khovanov_mod2(name)
+        return None if table is None else _mirror_bigraded(table)
+
+    if invariant == "rational_khovanov_homology":
+        table = _khovanov_free_ranks(name)
+        return None if table is None else _mirror_bigraded(table)
+
+    if invariant == "rasmussen_s":
+        raw = lookup(name).get("rasmussen_invariant")
+        if _blank(raw):
+            return None
+        return -int(str(raw).strip())  # s(mirror) = -s
 
     column = _ORACLE_COLUMN.get(invariant)
     if column is None:

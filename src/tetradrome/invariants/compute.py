@@ -4,19 +4,23 @@ Validate-by-default (decisions/0004): with validate=True a result that has no
 validation path, or that disagrees with the oracle, raises UnvalidatedResult rather
 than being returned.
 
-Currently supports the Seifert-form invariants `determinant`, `signature`, and
-`alexander_polynomial` (computed from the Collins braid Seifert matrix), and
-`jones_polynomial` (computed from the Kauffman bracket over the resolution cube). All
-are checked against KnotInfo when the knot is tabulated. The Seifert-form invariants
-accept a braid word (from_braid, off-table included) or a tabulated knot's KnotInfo
-braid; the Jones polynomial needs a PD diagram (from_name or from_pd). Off-table
-results have no oracle, so under validate=True they raise.
+Supported invariants: the Seifert-form invariants `determinant`, `signature`, and
+`alexander_polynomial` (from the Collins braid Seifert matrix); `jones_polynomial` (from
+the Kauffman bracket over the resolution cube); and the native homological invariants
+`khovanov_homology` (over F2), `rational_khovanov_homology` (over Q), and `rasmussen_s`
+(from the Lee quantum filtration). All are checked against KnotInfo when the knot is
+tabulated -- the homological oracles are mirrored/sign-flipped to KnotInfo's chirality
+convention (Phase 2c/3c). Seifert-form invariants accept a braid word (from_braid,
+off-table included) or a tabulated knot's KnotInfo braid; the diagrammatic invariants
+need a PD diagram (from_name or from_pd). Off-table results have no oracle, so under
+validate=True they raise.
 """
 from __future__ import annotations
 
 from .._version import __version__
 from ..backends import knotinfo_backend
 from ..diagrams import NormalizedDiagram
+from ..engines import khovanov
 from ..errors import UnknownKnot, UnvalidatedResult
 from . import jones, seifert
 from .schema import InvariantResult, Provenance, ValidationStatus
@@ -27,13 +31,19 @@ _SEIFERT_INVARIANTS = {
     "signature": seifert.signature,
     "alexander_polynomial": seifert.alexander_polynomial,
 }
-# Invariants read from the PD diagram via the resolution cube.
+# Invariants read from the PD diagram via the resolution cube: (function, method label).
 _PD_INVARIANTS = {
-    "jones_polynomial": jones.jones_polynomial,
+    "jones_polynomial": (jones.jones_polynomial, "kauffman_bracket"),
+    "khovanov_homology": (khovanov.khovanov_homology, "khovanov_cube_f2"),
+    "rational_khovanov_homology": (khovanov.khovanov_homology_q, "khovanov_cube_q"),
+    "rasmussen_s": (khovanov.rasmussen_s, "lee_quantum_filtration"),
 }
+# PD invariants whose computation verifies d^2 = 0 over its coefficient ring.
+_RUNS_D_SQUARED = {"khovanov_homology", "rational_khovanov_homology", "rasmussen_s"}
 
 
-def _finalize(knot, invariant, value, method, inputs, fallback_label, validate):
+def _finalize(knot, invariant, value, method, inputs, fallback_label, validate,
+              d_squared="not_applicable"):
     """Attach the oracle check, provenance, and validation outcome to a value."""
     oracle = (
         knotinfo_backend.known_answer(knot.identity, invariant)
@@ -58,7 +68,7 @@ def _finalize(knot, invariant, value, method, inputs, fallback_label, validate):
             method=method,
             inputs=inputs,
         ),
-        validation=ValidationStatus(known_answer_match=known),
+        validation=ValidationStatus(known_answer_match=known, d_squared_check=d_squared),
     )
 
     if validate and known == "fail":
@@ -97,8 +107,12 @@ def compute(knot: NormalizedDiagram, invariant: str, validate: bool = True) -> I
                 f"{invariant} needs a PD diagram (from_name or from_pd); "
                 "this knot is braid-presented."
             )
-        value = _PD_INVARIANTS[invariant](knot.pd_code)
-        return _finalize(knot, invariant, value, "kauffman_bracket", "pd_code", "(pd)", validate)
+        func, method = _PD_INVARIANTS[invariant]
+        value = func(knot.pd_code)
+        d_squared = "pass" if invariant in _RUNS_D_SQUARED else "not_applicable"
+        return _finalize(
+            knot, invariant, value, method, "pd_code", "(pd)", validate, d_squared=d_squared
+        )
 
     supported = sorted(_SEIFERT_INVARIANTS) + sorted(_PD_INVARIANTS)
     raise ValueError(f"compute does not support {invariant!r}; supported: {supported}")

@@ -10,8 +10,6 @@ Three independent checks on the cube edge signs and the rational lane:
 3. Reducing the signed complex mod 2 reproduces the Phase 2 F2 homology exactly (signs
    vanish mod 2). This ties the two lanes together: same construction, two coefficients.
 """
-import ast
-
 import pytest
 
 from tetradrome import knots
@@ -20,21 +18,6 @@ from tetradrome.backends import knotinfo_backend as ki
 from tetradrome.engines import khovanov
 
 KNOTS = ["3_1", "4_1", "5_1", "5_2", "6_1", "6_2", "6_3", "7_4"]
-
-
-def _knotinfo_free_ranks(name: str) -> dict[tuple[int, int], int]:
-    """KnotInfo's rational (torsion-free) unreduced Khovanov, from the integral vector
-    [torsion, multiplicity, i, j]."""
-    vec = ast.literal_eval(ki.lookup(name)["khovanov_unreduced_integral_vector"])
-    out: dict[tuple[int, int], int] = {}
-    for torsion, mult, i, j in vec:
-        if torsion == 0:
-            out[(i, j)] = out.get((i, j), 0) + mult
-    return out
-
-
-def _mirror(table: dict[tuple[int, int], int]) -> dict[tuple[int, int], int]:
-    return {(-i, -j): d for (i, j), d in table.items()}
 
 
 def _signed_reduced_mod2(pd) -> dict[tuple[int, int], int]:
@@ -55,7 +38,7 @@ def _signed_reduced_mod2(pd) -> dict[tuple[int, int], int]:
 def test_rational_khovanov_matches_knotinfo_free_ranks(name):
     pd = knots.from_name(name).pd_code
     # khovanov_homology_q runs verify_d_squared over Q internally -> certifies signs.
-    assert khovanov.khovanov_homology_q(pd) == _mirror(_knotinfo_free_ranks(name))
+    assert khovanov.khovanov_homology_q(pd) == ki.known_answer(name, "rational_khovanov_homology")
 
 
 @pytest.mark.parametrize("name", KNOTS)
