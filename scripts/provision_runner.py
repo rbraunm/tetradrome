@@ -12,7 +12,7 @@ parameterized -- which node, storage pool, container size, network -- so nothing
 particular cluster is assumed. Point --rootfs-storage at a pool that holds container rootfs,
 and size --cores / --memory for the run.
 
-    python3 scripts/provision_runner.py --host root@node --rootfs-storage your-pool \
+    python scripts/provision_runner.py --host root@node --rootfs-storage your-pool \
         --cores 16 --memory 16384
 
 Re-running on an existing CTID refuses unless --recreate is given (no silent clobber).

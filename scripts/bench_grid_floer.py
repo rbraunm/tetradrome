@@ -9,14 +9,14 @@ curve.
 
 Examples:
     # tabulated knots, increasing grid size, default bitint reducer, serial
-    python3 scripts/bench_grid_floer.py --knots 3_1 4_1 5_1 5_2 8_19
+    python scripts/bench_grid_floer.py --knots 3_1 4_1 5_1 5_2 8_19
 
     # synthetic grids to push the generator count, with parallel generation + reduction
-    python3 scripts/bench_grid_floer.py --sizes 5 6 7 8 9 --gen-workers 16 --workers 16
+    python scripts/bench_grid_floer.py --sizes 5 6 7 8 9 --gen-workers 16 --workers 16
 
     # compare reducer backends on one knot
-    python3 scripts/bench_grid_floer.py --knots 8_19 --backend reference
-    python3 scripts/bench_grid_floer.py --knots 8_19 --backend packed-gpu
+    python scripts/bench_grid_floer.py --knots 8_19 --backend reference
+    python scripts/bench_grid_floer.py --knots 8_19 --backend packed-gpu
 """
 from __future__ import annotations
 
