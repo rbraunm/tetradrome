@@ -89,13 +89,24 @@ def create_container(args) -> None:
             run(f"pct stop {args.ctid}")
         run(f"pct destroy {args.ctid}")
 
+    if args.ip != "dhcp" and not args.gateway:
+        sys.exit("A static --ip needs --gateway (the container would have no default route).")
     rootfs = f"{args.rootfs_storage}:{args.rootfs_size}"
-    net = f"name=eth0,bridge={args.bridge},ip=dhcp"
+    net = f"name=eth0,bridge={args.bridge},ip={args.ip}"
+    if args.ip != "dhcp":
+        net += f",gw={args.gateway}"
+    if args.vlan:
+        net += f",tag={args.vlan}"
+    dns = ""
+    if args.nameserver:
+        dns += f" --nameserver {shlex.quote(args.nameserver)}"
+    if args.searchdomain:
+        dns += f" --searchdomain {shlex.quote(args.searchdomain)}"
     run(
         f"pct create {args.ctid} {args.template_storage}:vztmpl/{args.template} "
         f"--hostname {shlex.quote(args.hostname)} "
         f"--cores {args.cores} --memory {args.memory} --swap {args.swap} "
-        f"--rootfs {rootfs} --net0 {net} "
+        f"--rootfs {rootfs} --net0 {shlex.quote(net)}{dns} "
         f"--unprivileged 1 --onboot 0 --tags {shlex.quote(args.tags)} --start 1"
     )
 
@@ -159,14 +170,20 @@ def main() -> None:
     parser.add_argument("--rootfs-storage", default="local-lvm",
                         help="Proxmox storage pool for the container rootfs (default local-lvm)")
     parser.add_argument("--ctid", type=int, default=250, help="container ID (default 250)")
-    parser.add_argument("--hostname", default="tetradrome")
+    parser.add_argument("--hostname", default="tetradrome", help="container hostname")
     parser.add_argument("--cores", type=int, default=4, help="vCPUs (default 4; size up)")
     parser.add_argument("--memory", type=int, default=4096, help="RAM in MiB (default 4096)")
     parser.add_argument("--swap", type=int, default=512, help="swap in MiB (default 512)")
     parser.add_argument("--rootfs-size", type=int, default=16, help="rootfs size in GiB")
     parser.add_argument("--template-storage", default="local", help="template storage")
     parser.add_argument("--template", default=DEFAULT_TEMPLATE)
-    parser.add_argument("--bridge", default="vmbr0")
+    parser.add_argument("--bridge", default="vmbr0", help="network bridge (default vmbr0)")
+    parser.add_argument("--ip", default="dhcp",
+                        help="container IPv4: 'dhcp' or CIDR like 10.0.0.5/24 (default dhcp)")
+    parser.add_argument("--gateway", default="", help="default gateway (required with a static --ip)")
+    parser.add_argument("--vlan", type=int, default=0, help="VLAN tag for the NIC (0 = untagged)")
+    parser.add_argument("--nameserver", default="", help="DNS server(s) (default: from DHCP)")
+    parser.add_argument("--searchdomain", default="", help="DNS search domain (default: from DHCP)")
     parser.add_argument("--tags", default="tetradrome;compute",
                         help="Proxmox tags (semicolon-separated)")
     parser.add_argument("--recreate", action="store_true",
