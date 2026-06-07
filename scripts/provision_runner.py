@@ -2,10 +2,14 @@
 """Provision a lightweight Proxmox LXC to run the Tetradrome grid scaling sweep.
 
 Run this from anywhere; it drives a Proxmox node over SSH (--host root@<node>, required) and
-never runs against a local node. It creates an unprivileged Debian LXC (pure compute -- no
-Docker, nesting, or GPU), installs Tetradrome into a venv with the numpy acceleration extra,
-smoke-tests a tiny sweep, and prints how to run the full sweep at the container's core count
-with NUMA pinning.
+never runs against a local node. SSH is spoken directly by a pure-Python client (paramiko),
+not by shelling out to ssh(1): the node password is prompted once via getpass and held only
+in memory for the auth handshake -- it never reaches a command line, file, or log. One
+authenticated connection is opened and reused for every command.
+
+It creates an unprivileged Debian LXC (pure compute -- no Docker, nesting, or GPU), installs
+Tetradrome into a venv with the numpy acceleration extra, smoke-tests a tiny sweep, and
+prints how to run the full sweep at the container's core count with NUMA pinning.
 
 The project is baked in (this script ships with it); only the *host* environment is
 parameterized -- which node, storage pool, container size, network -- so nothing about a
@@ -20,33 +24,83 @@ Re-running on an existing CTID refuses unless --recreate is given (no silent clo
 from __future__ import annotations
 
 import argparse
+import getpass
 import os
 import re
 import shlex
-import subprocess
 import sys
+from collections import namedtuple
+
+try:
+    import paramiko
+except ImportError:
+    sys.exit(
+        "provision_runner needs paramiko (the pure-Python SSH client).\n"
+        "Install it from an admin prompt: pip install 'tetradrome[provision]'  (or: pip install paramiko)"
+    )
 
 DEFAULT_TEMPLATE = "debian-12-standard_12.12-1_amd64.tar.zst"
 DEFAULT_REPO = "https://github.com/rbraunm/tetradrome.git"
 DEFAULT_SMOKE = "scripts/bench_grid_floer.py --knots 3_1 --sizes 5"
 
-SSH_TARGET = ""   # set from the required --host in main; every host command runs over SSH
+SSH_TARGET = ""    # the user@host spec, kept for display in messages
+_CLIENT = None     # the single authenticated paramiko connection, opened in connect()
+
+# capture() mirrors the (returncode, stdout, stderr) shape callers relied on before.
+Result = namedtuple("Result", "returncode stdout stderr")
 
 
-def _wrap(cmd: str) -> str:
-    """Drive the Proxmox node over SSH (this script never touches a local node)."""
-    return f"ssh {SSH_TARGET} {shlex.quote(cmd)}"
+def connect(host_spec: str) -> "paramiko.SSHClient":
+    """Open the one SSH connection every command reuses. Password is prompted here and
+    held only in memory for the handshake -- never echoed, written, or logged."""
+    user, sep, hostpart = host_spec.partition("@")
+    if not sep or not hostpart:
+        sys.exit(f"--host must be user@host (e.g. root@labradorite), got {host_spec!r}.")
+    host, _, port_s = hostpart.partition(":")
+    try:
+        port = int(port_s) if port_s else 22
+    except ValueError:
+        sys.exit(f"bad port in --host {host_spec!r}.")
+    password = getpass.getpass(f"Password for {host_spec}: ")
+    client = paramiko.SSHClient()
+    client.load_system_host_keys()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        client.connect(host, port=port, username=user, password=password,
+                       look_for_keys=False, allow_agent=False)
+    except paramiko.AuthenticationException:
+        sys.exit(f"authentication failed for {host_spec} (wrong password?).")
+    except (paramiko.SSHException, OSError) as e:
+        sys.exit(f"cannot reach {host_spec} over SSH: {e}")
+    finally:
+        del password
+    return client
 
 
 def run(cmd: str) -> None:
-    """Run a Proxmox-host command, echoing it; raise on failure (no silent fallbacks)."""
-    full = _wrap(cmd)
-    print(f"$ {full}")
-    subprocess.run(full, shell=True, check=True)
+    """Run a Proxmox-host command over the shared connection, streaming output live;
+    exit on nonzero status (no silent fallbacks)."""
+    print(f"$ {cmd}")
+    chan = _CLIENT.get_transport().open_session()
+    chan.set_combine_stderr(True)
+    chan.exec_command(cmd)
+    stdout = chan.makefile("r")
+    for line in iter(stdout.readline, ""):
+        sys.stdout.write(line)
+        sys.stdout.flush()
+    rc = chan.recv_exit_status()
+    if rc != 0:
+        sys.exit(f"command failed (exit {rc}) on {SSH_TARGET}: {cmd}")
 
 
-def capture(cmd: str) -> subprocess.CompletedProcess:
-    return subprocess.run(_wrap(cmd), shell=True, capture_output=True, text=True)
+def capture(cmd: str) -> Result:
+    """Run a command over the shared connection and return its full output, no echo."""
+    chan = _CLIENT.get_transport().open_session()
+    chan.exec_command(cmd)
+    out = chan.makefile("rb").read().decode(errors="replace")
+    err = chan.makefile_stderr("rb").read().decode(errors="replace")
+    rc = chan.recv_exit_status()
+    return Result(rc, out, err)
 
 
 def container_exists(ctid: int) -> bool:
@@ -69,10 +123,8 @@ def project_name(repo_url: str) -> str:
 
 
 def preflight() -> None:
-    reach = capture("id -u")
-    if reach.returncode != 0:
-        sys.exit(f"cannot reach {SSH_TARGET} over ssh: {reach.stderr.strip()}")
-    if reach.stdout.strip() != "0":
+    # connect() already proved we can authenticate; confirm we landed as root on a Proxmox node.
+    if capture("id -u").stdout.strip() != "0":
         sys.exit(f"remote user on {SSH_TARGET} is not root (pct/pveam need root).")
     if capture("command -v pct pveam").returncode != 0:
         sys.exit(f"{SSH_TARGET} is missing pct/pveam -- is it a Proxmox node?")
@@ -213,17 +265,20 @@ def main() -> None:
                         help="extra apt packages beyond the base (e.g. build-essential for numba)")
     args = parser.parse_args()
 
-    global SSH_TARGET
+    global SSH_TARGET, _CLIENT
     SSH_TARGET = args.host
-
-    name = project_name(args.repo)
-    preflight()
-    ensure_template(args.template, args.template_storage)
-    create_container(args)
-    wait_for_network(args.ctid)
-    install_repo(args.ctid, args, name)
-    smoke_test(args.ctid, args, name)
-    report(args.ctid, args, name)
+    _CLIENT = connect(args.host)
+    try:
+        name = project_name(args.repo)
+        preflight()
+        ensure_template(args.template, args.template_storage)
+        create_container(args)
+        wait_for_network(args.ctid)
+        install_repo(args.ctid, args, name)
+        smoke_test(args.ctid, args, name)
+        report(args.ctid, args, name)
+    finally:
+        _CLIENT.close()
 
 
 if __name__ == "__main__":

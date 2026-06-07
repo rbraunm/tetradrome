@@ -31,6 +31,11 @@ floer = ["knot_floer_homology"]
 # here; `python scripts/bench_reducers.py --gpu-info` prints the exact line for your box.
 accel = ["numpy"]
 jit = ["numba", "numpy"]
+# provision -> scripts/provision_runner.py drives a Proxmox node over SSH via a
+# pure-Python SSH client (paramiko), so a prompted password stays in memory and
+# never reaches a command line, file, or log. Controller-side tooling only --
+# never imported by any compute path.
+provision = ["paramiko"]
 # Spherogram is kept only as an optional dev cross-check (e.g. an independent
 # Seifert matrix for off-table knots); it is not needed at runtime.
 dev = ["spherogram", "pytest"]

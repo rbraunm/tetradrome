@@ -90,7 +90,8 @@ def _load():
         import database_knotinfo
     except ImportError as exc:
         raise BackendUnavailable(
-            "KnotInfo backend needs 'database_knotinfo' (pip install tetradrome[knotinfo])."
+            "KnotInfo backend needs 'database_knotinfo' (a core dependency; "
+            "reinstall with 'pip install -e .' or 'pip install database_knotinfo')."
         ) from exc
     rows = [
         r
