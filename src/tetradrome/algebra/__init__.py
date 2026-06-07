@@ -8,15 +8,23 @@ roadmap/design/homology-engine.md.
 from .complex import GradedComplex
 from .rational_complex import RationalComplex
 from .rational_reduce import rational_homology, rational_rank
+from .reduce_f2_packed import f2_rank_bitint, f2_rank_words
 from .reduce_gaussian import gaussian_homology
 from .reduce_reference import f2_rank, homology
+from .tiers import available_f2_backends, best_available_backend, f2_homology, rank_backend
 
 __all__ = [
     "GradedComplex",
     "RationalComplex",
+    "available_f2_backends",
+    "best_available_backend",
+    "f2_homology",
     "f2_rank",
+    "f2_rank_bitint",
+    "f2_rank_words",
     "gaussian_homology",
     "homology",
+    "rank_backend",
     "rational_homology",
     "rational_rank",
 ]
