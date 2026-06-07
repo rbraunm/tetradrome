@@ -54,13 +54,9 @@ def _generate_slice(args):
     ]
 
 
-def _assemble(records: list) -> dict:
-    """Merge per-state (state, Maslov, Alexander, targets) records into {A: GradedComplex},
-    assigning positions in record order (= global lexicographic order)."""
-    by_alexander: dict = defaultdict(list)
-    for state, m, a, targets in records:
-        by_alexander[a].append((state, -m, targets))      # degree = -Maslov
-
+def _build_complexes(by_alexander: dict) -> dict:
+    """Build {A: GradedComplex} from states already grouped by Alexander grading, assigning
+    positions in group order (which the callers keep equal to global lexicographic order)."""
     complexes: dict = {}
     for a_grading, group in by_alexander.items():
         degree = {state: d for state, d, _ in group}
@@ -80,7 +76,14 @@ def _assemble(records: list) -> dict:
 
 def parallel_grid_complexes(grid, workers: int) -> dict:
     """Generate ``{A: GradedComplex}`` across ``workers`` processes; identical to the serial
-    ``grid_complexes``. Falls back to serial generation for one worker or a tiny grid."""
+    ``grid_complexes``. Falls back to serial generation for one worker or a tiny grid.
+
+    Results are consumed in submission order (ordered ``imap``) and folded into per-grading
+    groups as each slice arrives, so no full list of raw records is ever held alongside the
+    finished complexes -- the parent's peak is the complexes plus one in-flight slice, not
+    twice the generator data. Positions stay in global lexicographic order, so the assembled
+    complexes match ``grid_complexes`` exactly.
+    """
     from .homology import grid_complexes
 
     total = math.factorial(grid.n)
@@ -90,6 +93,9 @@ def parallel_grid_complexes(grid, workers: int) -> dict:
         (grid.O, grid.X, total * w // workers, total * (w + 1) // workers)
         for w in range(workers)
     ]
+    by_alexander: dict = defaultdict(list)
     with Pool(processes=workers) as pool:
-        chunks = pool.map(_generate_slice, slices, chunksize=1)
-    return _assemble([record for chunk in chunks for record in chunk])
+        for chunk in pool.imap(_generate_slice, slices, chunksize=1):
+            for state, m, a, targets in chunk:
+                by_alexander[a].append((state, -m, targets))   # degree = -Maslov
+    return _build_complexes(by_alexander)
