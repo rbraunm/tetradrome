@@ -11,7 +11,8 @@ import pytest
 
 from tetradrome import knots
 from tetradrome.algebra import tiers
-from tetradrome.algebra.reduce_f2_packed import f2_rank_bitint, f2_rank_words
+from tetradrome.algebra.reduce_f2_jit import f2_rank_jit
+from tetradrome.algebra.reduce_f2_packed import f2_rank_bitint, f2_rank_dense, f2_rank_words
 from tetradrome.algebra.reduce_reference import f2_rank, homology
 from tetradrome.engines import khovanov
 
@@ -41,6 +42,20 @@ def test_packed_ranks_match_reference(name):
             ref = f2_rank(cols)
             assert f2_rank_bitint(cols) == ref
             assert f2_rank_words(cols, nrows, np) == ref
+
+
+@pytest.mark.parametrize("name", KNOTS)
+def test_dense_and_jit_ranks_match_reference(name):
+    # f2_rank_dense (the GPU kernel, here on numpy) and the jit reducer (here un-compiled)
+    # must match the reference -- so the GPU and numba paths are validated by their shared
+    # code even though neither device/compiler is present in this environment.
+    pd = knots.from_name(name).pd_code
+    for cx in khovanov.khovanov_complexes(pd).values():
+        for n in cx.degrees():
+            cols, nrows = cx.differential(n), cx.dim(n + 1)
+            ref = f2_rank(cols)
+            assert f2_rank_dense(cols, nrows, np) == ref
+            assert f2_rank_jit(cols, nrows) == ref
 
 
 @pytest.mark.parametrize("name", KNOTS)

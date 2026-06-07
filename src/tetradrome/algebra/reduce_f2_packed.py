@@ -83,3 +83,41 @@ def f2_rank_words(columns: Sequence[Iterable[int]], nrows: int, xp) -> int:
                 break
             v = xp.bitwise_xor(v, piv)
     return rank
+
+
+def f2_rank_dense(columns: Sequence[Iterable[int]], nrows: int, xp) -> int:
+    """GF(2) rank by vectorized dense row reduction over array module `xp`.
+
+    Unlike `f2_rank_words`, which syncs once per elimination step to find a leading bit,
+    this eliminates a whole pivot column in one vectorized XOR across all affected rows and
+    syncs only once per column (the pivot search). That trades memory (a dense uint8
+    matrix) for far fewer host round-trips, which is what the GPU wants -- the batched
+    kernel for `packed-gpu`. The numpy run validates the exact code cupy executes.
+    """
+    cols = list(columns)
+    ncols = len(cols)
+    if ncols == 0 or nrows == 0:
+        return 0
+    mat = xp.zeros((nrows, ncols), dtype=xp.uint8)
+    for j, col in enumerate(cols):
+        for r in col:
+            mat[r, j] = 1
+    rank = 0
+    prow = 0
+    for c in range(ncols):
+        nz = xp.nonzero(mat[prow:, c])[0]
+        if nz.size == 0:
+            continue
+        r = int(prow + nz[0])
+        if r != prow:
+            mat[[r, prow]] = mat[[prow, r]]
+        col_bits = mat[:, c].copy()
+        col_bits[prow] = 0
+        rows = xp.nonzero(col_bits)[0]
+        if rows.size:
+            mat[rows] ^= mat[prow]
+        rank += 1
+        prow += 1
+        if prow >= nrows:
+            break
+    return rank

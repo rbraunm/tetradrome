@@ -12,7 +12,8 @@ from .multimodular import rational_homology_multimodular, rational_rank_multimod
 from .parallel import parallel_f2_homology
 from .rational_complex import RationalComplex
 from .rational_reduce import rational_homology, rational_rank
-from .reduce_f2_packed import f2_rank_bitint, f2_rank_words
+from .reduce_f2_jit import f2_rank_jit
+from .reduce_f2_packed import f2_rank_bitint, f2_rank_dense, f2_rank_words
 from .reduce_gaussian import gaussian_homology
 from .reduce_reference import f2_rank, homology
 from .tiers import available_f2_backends, best_available_backend, f2_homology, rank_backend
@@ -29,6 +30,8 @@ __all__ = [
     "f2_homology",
     "f2_rank",
     "f2_rank_bitint",
+    "f2_rank_dense",
+    "f2_rank_jit",
     "f2_rank_words",
     "gaussian_homology",
     "gpu_config",

@@ -17,10 +17,11 @@ array module, so the CPU run validates the exact path the GPU takes.
 from __future__ import annotations
 
 from .gpu import usable_cupy
-from .reduce_f2_packed import f2_rank_bitint, f2_rank_words
+from .reduce_f2_jit import HAVE_NUMBA, f2_rank_jit
+from .reduce_f2_packed import f2_rank_bitint, f2_rank_dense, f2_rank_words
 from .reduce_reference import f2_rank
 
-BACKENDS = ("reference", "bitint", "packed-cpu", "packed-gpu")
+BACKENDS = ("reference", "bitint", "jit", "packed-cpu", "packed-gpu")
 
 
 def _numpy():
@@ -44,10 +45,14 @@ def available_f2_backends() -> list[tuple[str, bool, str]]:
     return [
         ("reference", True, "pure-Python set reducer (the floor)"),
         ("bitint", True, "pure-Python int bit-vectors"),
+        ("jit", np is not None,
+         ("numba-compiled packed reducer" if HAVE_NUMBA else
+          "numpy packed reducer (uncompiled; pip install numba to accelerate)")
+         if np is not None else "needs numpy (+ numba to accelerate)"),
         ("packed-cpu", np is not None,
          "numpy uint64 word arrays" if np is not None else "needs numpy"),
         ("packed-gpu", cp is not None,
-         "cupy uint64 word arrays on GPU" if cp is not None else "needs cupy + CUDA GPU"),
+         "cupy dense vectorized kernel on GPU" if cp is not None else "needs cupy + CUDA GPU"),
     ]
 
 
@@ -58,6 +63,10 @@ def rank_backend(name: str):
         return lambda columns, nrows=0: f2_rank(columns)
     if name == "bitint":
         return lambda columns, nrows=0: f2_rank_bitint(columns)
+    if name == "jit":
+        if _numpy() is None:
+            raise RuntimeError("jit backend needs numpy (pip install numpy; numba to accelerate).")
+        return lambda columns, nrows=0: f2_rank_jit(columns, nrows)
     if name == "packed-cpu":
         np = _numpy()
         if np is None:
@@ -67,17 +76,17 @@ def rank_backend(name: str):
         cp = _cupy_if_gpu()
         if cp is None:
             raise RuntimeError("packed-gpu backend needs cupy and a CUDA GPU.")
-        return lambda columns, nrows=0: f2_rank_words(columns, nrows, cp)
+        return lambda columns, nrows=0: f2_rank_dense(columns, nrows, cp)
     raise ValueError(f"unknown F2 backend {name!r}; choose from {BACKENDS}.")
 
 
 def best_available_backend() -> str:
-    """Fastest-capable backend present: packed-gpu > packed-cpu > bitint."""
+    """Fastest-capable backend present: packed-gpu > jit > bitint."""
     avail = {name: ok for name, ok, _ in available_f2_backends()}
-    for name in ("packed-gpu", "packed-cpu", "bitint"):
-        if avail.get(name):
+    for name in ("packed-gpu", "jit", "bitint"):
+        if avail.get(name) and (name != "jit" or HAVE_NUMBA):
             return name
-    return "reference"
+    return "bitint"
 
 
 def f2_homology(cx, backend: str = "bitint") -> dict[int, int]:

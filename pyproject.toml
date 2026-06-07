@@ -23,6 +23,14 @@ dependencies = ["database_knotinfo"]
 
 [project.optional-dependencies]
 floer = ["knot_floer_homology"]
+# Optional acceleration tiers (the pure-Python reference is always the floor):
+#   accel -> numpy word-array reducer (packed-cpu) and the dense GPU kernel path
+#   jit   -> numba-compiled bit-packed reducer
+# The GPU tier additionally needs cupy matching your CUDA, which is a version-specific
+# wheel (cupy-cuda12x / cupy-cuda11x), so it is installed separately rather than pinned
+# here; `python scripts/bench_reducers.py --gpu-info` prints the exact line for your box.
+accel = ["numpy"]
+jit = ["numba", "numpy"]
 # Spherogram is kept only as an optional dev cross-check (e.g. an independent
 # Seifert matrix for off-table knots); it is not needed at runtime.
 dev = ["spherogram", "pytest"]
