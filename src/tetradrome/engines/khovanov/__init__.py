@@ -11,6 +11,7 @@ from .gradings import (
     grading,
     unreduced_size,
 )
+from .homology import khovanov_homology
 
 __all__ = [
     "chain_dimensions",
@@ -18,5 +19,6 @@ __all__ = [
     "enhanced_generators",
     "grading",
     "khovanov_complexes",
+    "khovanov_homology",
     "unreduced_size",
 ]
