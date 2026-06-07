@@ -2,10 +2,12 @@
 
 This is the invariant-agnostic core (SPEC.md 13.6; homology-engine design section 2):
 a front end (Khovanov, later Floer) emits one of these per independent grading, and
-the back end reduces it to homology. F2 first (decision 0003); the coefficient ring
-generalizes to F_p / Q (via multimodular) when Lee / Rasmussen need it, not before --
-the constructor shape stays fixed across that change, so only the column value type
-and the arithmetic move.
+the back end reduces it to homology. F2 first (decision 0003): a boundary map is a 0/1
+matrix, and this is the bit-set fast lane for it. The rational coefficients Lee /
+Rasmussen need live beside this as RationalComplex (a coefficient-column representation
+reduced over Q), not as a generalization of this class -- the field-tested pattern keeps
+an F2 fast path next to a general-field one (Ripser, PHAT) rather than forcing one
+representation to serve both.
 
 Conventions
 -----------
