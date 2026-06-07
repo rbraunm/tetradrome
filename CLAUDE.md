@@ -20,6 +20,10 @@ its answers.
 - Every acceleration tier MUST reproduce the reference result exactly -- bit-for-bit, validated independently per tier. A faster tier that disagrees is broken, not "approximate". `d^2 = 0` checks on native complexes hold regardless of tier.
 - The GPU dispatch threshold is a calibratable knob, never a hidden default. VRAM-aware routing reads available VRAM rather than hardcoding a cutoff; the right threshold differs by card.
 
+Per-tier agreement traps to guard against:
+- JIT (Numba) reducer: Numba compiles to fixed-width ints and wraps silently on overflow, where the pure-Python reference uses arbitrary precision. F2 is unaffected (mod 2); on the multimodular Q path, ensure intermediate products (a*b before reduction) cannot overflow int64 under the chosen moduli, and that agreement tests include inputs large enough to expose overflow -- not just small cases.
+- GPU dense kernel: arithmetic is exact (GF(2)/integer, no float), so any disagreement is from reduction order, races, or threshold routing -- not rounding. Agreement tests must exercise inputs on both sides of the VRAM dispatch threshold, so the GPU path and the CPU fallback are both covered and shown to agree.
+
 ## No silent fallbacks
 If a requested GPU/JIT/NUMA path is unavailable, fail loudly with a clear message. Never
 silently fall back to the reference path and report success -- that hides a broken
