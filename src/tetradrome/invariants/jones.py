@@ -46,6 +46,13 @@ def _mul(p: _ALaurent, q: _ALaurent) -> _ALaurent:
 
 
 def _pow(p: _ALaurent, k: int) -> _ALaurent:
+    if k < 0:
+        raise ValueError(
+            f"_pow: negative exponent {k}; this helper only computes k >= 0 powers by "
+            "repeated multiplication, and a negative power of a non-monomial Laurent "
+            "polynomial is not a Laurent polynomial. The crossingless unknot "
+            "(circle_count 0) is handled in jones_polynomial, not here."
+        )
     r: _ALaurent = {0: 1}
     for _ in range(k):
         r = _mul(r, p)
@@ -54,6 +61,12 @@ def _pow(p: _ALaurent, k: int) -> _ALaurent:
 
 def kauffman_bracket(pd: PDCode) -> _ALaurent:
     """The (unnormalized-by-writhe) Kauffman bracket as a Laurent polynomial in A."""
+    if not pd:
+        raise ValueError(
+            "kauffman_bracket: empty diagram. The crossingless unknot has no arcs, so "
+            "its one state has 0 circles and delta^(circles-1) = delta^-1 is undefined "
+            "in this representation. The unknot is handled in jones_polynomial."
+        )
     n = len(pd)
     total: _ALaurent = {}
     for state in cube.states(n):
@@ -80,8 +93,11 @@ def canonical_laurent(low: int, coeffs) -> tuple[int, tuple[int, ...]]:
 
 def jones_polynomial(pd: PDCode) -> tuple[int, tuple[int, ...]]:
     """Jones polynomial of the knot given by `pd`, as (low_exponent, coeffs) in t."""
+    # The crossingless unknot: V = 1. The one sanctioned special case -- its PD is
+    # empty, so the cube/bracket path (which needs circles >= 1) can't express it;
+    # like every link library, we short-circuit it here, not in the kernel.
     if not pd:
-        return (0, (1,))  # unknot: V = 1
+        return (0, (1,))
 
     bracket = kauffman_bracket(pd)
     w = seifert_structure(pd).writhe
@@ -106,7 +122,10 @@ def jones_polynomial(pd: PDCode) -> tuple[int, tuple[int, ...]]:
 
     by_t = {e: c for e, c in by_t.items() if c}
     if not by_t:
-        return (0, ())
+        raise RuntimeError(
+            "Jones polynomial came out identically zero, which is impossible for a "
+            "knot -- this indicates a bug in the Kauffman bracket or the substitution."
+        )
     low = min(by_t)
     high = max(by_t)
     return canonical_laurent(low, [by_t.get(e, 0) for e in range(low, high + 1)])
