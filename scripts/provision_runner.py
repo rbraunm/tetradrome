@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """Provision a lightweight Proxmox LXC to run the Tetradrome grid scaling sweep.
 
-Run this ON a Proxmox host as root. It creates an unprivileged Debian LXC (pure compute --
-no Docker, nesting, or GPU), installs Tetradrome into a venv with the numpy acceleration
-extra, smoke-tests a tiny sweep, and prints how to run the full sweep at the container's core
-count with NUMA pinning.
+Run this on a Proxmox node as root, or from anywhere with --host root@<node> to target a node
+over SSH. It creates an unprivileged Debian LXC (pure compute -- no Docker, nesting, or GPU),
+installs Tetradrome into a venv with the numpy acceleration extra, smoke-tests a tiny sweep,
+and prints how to run the full sweep at the container's core count with NUMA pinning.
 
 The project is baked in (this script ships with it); only the *host* environment is
-parameterized -- storage pool, container size, bridge, CTID -- so nothing about a particular
-cluster is assumed. Point --rootfs-storage at a pool that holds container rootfs, and size
---cores / --memory for the run.
+parameterized -- which node, storage pool, container size, network -- so nothing about a
+particular cluster is assumed. Point --rootfs-storage at a pool that holds container rootfs,
+and size --cores / --memory for the run.
 
+    # on the node:
     python3 scripts/provision_runner.py --rootfs-storage your-pool --cores 16 --memory 16384
+    # or target a node from elsewhere:
+    python3 scripts/provision_runner.py --host root@node --rootfs-storage your-pool
 
 Re-running on an existing CTID refuses unless --recreate is given (no silent clobber).
 """
@@ -29,15 +32,23 @@ DEFAULT_TEMPLATE = "debian-12-standard_12.12-1_amd64.tar.zst"
 DEFAULT_REPO = "https://github.com/rbraunm/tetradrome.git"
 DEFAULT_SMOKE = "scripts/bench_grid_floer.py --knots 3_1 --sizes 5"
 
+SSH_TARGET = ""   # set from --host in main; empty = run pct/pveam on the local node
+
+
+def _wrap(cmd: str) -> str:
+    """Run on the local node, or over SSH when a --host node was given."""
+    return f"ssh {SSH_TARGET} {shlex.quote(cmd)}" if SSH_TARGET else cmd
+
 
 def run(cmd: str) -> None:
-    """Run a host command, echoing it; raise on failure (no silent fallbacks)."""
-    print(f"$ {cmd}")
-    subprocess.run(cmd, shell=True, check=True)
+    """Run a Proxmox-host command, echoing it; raise on failure (no silent fallbacks)."""
+    full = _wrap(cmd)
+    print(f"$ {full}")
+    subprocess.run(full, shell=True, check=True)
 
 
 def capture(cmd: str) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    return subprocess.run(_wrap(cmd), shell=True, capture_output=True, text=True)
 
 
 def container_exists(ctid: int) -> bool:
@@ -60,11 +71,20 @@ def project_name(repo_url: str) -> str:
 
 
 def preflight() -> None:
+    if SSH_TARGET:
+        reach = capture("id -u")
+        if reach.returncode != 0:
+            sys.exit(f"cannot reach {SSH_TARGET} over ssh: {reach.stderr.strip()}")
+        if reach.stdout.strip() != "0":
+            sys.exit(f"remote user on {SSH_TARGET} is not root (pct/pveam need root).")
+        if capture("command -v pct pveam").returncode != 0:
+            sys.exit(f"{SSH_TARGET} is missing pct/pveam -- is it a Proxmox node?")
+        return
     if os.geteuid() != 0:
-        sys.exit("Run as root on the Proxmox host (pct/pveam need root).")
+        sys.exit("Run as root on the Proxmox node (pct/pveam need root), or pass --host.")
     missing = [tool for tool in ("pct", "pveam") if shutil.which(tool) is None]
     if missing:
-        sys.exit(f"{', '.join(missing)} not found -- run this on a Proxmox host.")
+        sys.exit(f"{', '.join(missing)} not found -- run on a Proxmox node or pass --host.")
 
 
 def ensure_template(template: str, template_storage: str) -> None:
@@ -155,6 +175,9 @@ def report(ctid: int, args, name: str) -> None:
     print("\n[6/6] Done.")
     print(f"  Container {ctid} is up{(' at ' + ip[0]) if ip else ''}.")
     print(f"  Repo at {base}/src, venv python at {python}.")
+    if SSH_TARGET:
+        print(f"  (the commands below run on {SSH_TARGET}; ssh in, or prefix them with "
+              f"ssh {SSH_TARGET})")
     print("\n  Run the scaling sweep (synthetic sizes isolate generation; --pin needs Linux):")
     print(f"    pct exec {ctid} -- {python} {bench} \\")
     print(f"        --sizes 8 9 10 11 --gen-workers {args.cores} --workers {args.cores} --pin")
@@ -167,6 +190,9 @@ def main() -> None:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     # Host environment -- parameterized, no cluster assumptions:
+    parser.add_argument("--host", default="",
+                        help="Proxmox node to target over SSH (e.g. root@labradorite); "
+                             "empty = run on the local node")
     parser.add_argument("--rootfs-storage", default="local-lvm",
                         help="Proxmox storage pool for the container rootfs (default local-lvm)")
     parser.add_argument("--ctid", type=int, default=250, help="container ID (default 250)")
@@ -198,6 +224,9 @@ def main() -> None:
     parser.add_argument("--apt", default="",
                         help="extra apt packages beyond the base (e.g. build-essential for numba)")
     args = parser.parse_args()
+
+    global SSH_TARGET
+    SSH_TARGET = args.host
 
     name = project_name(args.repo)
     preflight()
