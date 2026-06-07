@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from tetradrome import knots
-from tetradrome.algebra import tiers
+from tetradrome.algebra import gpu, reduce_f2_jit, tiers
 from tetradrome.algebra.reduce_f2_jit import f2_rank_jit
 from tetradrome.algebra.reduce_f2_packed import f2_rank_bitint, f2_rank_dense, f2_rank_words
 from tetradrome.algebra.reduce_reference import f2_rank, homology
@@ -58,6 +58,28 @@ def test_dense_and_jit_ranks_match_reference(name):
             assert f2_rank_jit(cols, nrows) == ref
 
 
+def test_jit_tier_actually_compiles_when_numba_present():
+    # The jit reducer silently runs the plain-Python impl when numba is absent, which keeps
+    # the agreement tests above green even if the *compiled* tier is dead. That silent
+    # fallback is only legitimate when numba is genuinely not installed. So: if numba IS
+    # importable, the bound reducer MUST be a numba Dispatcher -- otherwise the acceleration
+    # tier broke and degraded to interpreted Python while every other test still passed.
+    # This is the guard that turns that invisible failure into a loud one.
+    numba = pytest.importorskip("numba")
+    from numba.core.dispatcher import Dispatcher
+
+    f2_rank_jit([{0, 1}, {1, 2}, {0, 2}], 3)  # force first-call binding/compilation
+    assert reduce_f2_jit.HAVE_NUMBA, (
+        "numba imports but reduce_f2_jit.HAVE_NUMBA is False -- presence check is broken; "
+        "the jit tier will never compile."
+    )
+    assert isinstance(reduce_f2_jit._reducer, Dispatcher), (
+        f"numba {numba.__version__} is installed but the jit reducer bound to "
+        f"{type(reduce_f2_jit._reducer).__name__}, not a compiled Dispatcher -- the JIT "
+        f"acceleration tier silently fell back to plain Python."
+    )
+
+
 @pytest.mark.parametrize("name", KNOTS)
 @pytest.mark.parametrize("backend", RUNNABLE)
 def test_tier_homology_matches_reference(name, backend):
@@ -86,3 +108,78 @@ def test_unavailable_gpu_backend_raises_cleanly():
 
 def test_auto_selects_an_available_backend():
     assert tiers.best_available_backend() in RUNNABLE
+
+
+# --- GPU dense-kernel agreement (only on a host with a usable CUDA device) -----------------
+#
+# The catalog knots above are far too small to be a meaningful GPU workload, and the packed
+# reducers run the *same* code under numpy or cupy -- so small green tests don't prove the
+# device actually did the work. These tests use large, deterministically-seeded F2 complexes
+# big enough to be a real device job, assert the GPU kernel allocated device memory and ran
+# on the configured card, and check it agrees with the pure-Python reference -- including a
+# rank-DEFICIENT input, so the kernel is shown to find linear dependencies, not just report
+# min(rows, cols).
+
+_GPU = gpu.usable_cupy()
+requires_gpu = pytest.mark.skipif(_GPU is None, reason="no usable CUDA device in this env")
+
+
+def _cols_from_matrix(mat) -> list[set[int]]:
+    """Column index-sets from a dense uint8 (nrows, ncols) F2 matrix."""
+    return [set(np.nonzero(mat[:, j])[0].tolist()) for j in range(mat.shape[1])]
+
+
+@requires_gpu
+def test_gpu_dense_agrees_with_reference_on_large_full_rank_input():
+    cp = _GPU
+    n = 512
+    rng = np.random.default_rng(0)                          # deterministic, reproducible
+    mat = rng.integers(0, 2, size=(n, n), dtype=np.uint8)
+    cols = _cols_from_matrix(mat)
+    ref = f2_rank(cols)                                     # pure-Python truth
+
+    # Positive proof the work landed on the device. f2_rank_dense stores the matrix DENSE
+    # as uint8 (nrows, ncols) -- not bit-packed (see reduce_f2_packed.f2_rank_dense:
+    # host = np.zeros((nrows, ncols), uint8); mat = xp.asarray(host)). So the device array
+    # is exactly nrows*ncols*itemsize bytes. We derive that floor from the real on-device
+    # size of an identically-shaped array (and assert it IS a cupy device array), making the
+    # byte bound a provable lower bound rather than a magic number that happens to pass --
+    # the cupy pool only ever rounds UP, so >= floor_bytes cannot be met without a real
+    # device allocation of the matrix.
+    probe = cp.asarray(np.zeros((n, n), dtype=np.uint8))
+    assert isinstance(probe, cp.ndarray)
+    floor_bytes = probe.nbytes
+    assert floor_bytes == n * n                             # dense uint8: 1 byte/element
+    del probe
+
+    mempool = cp.get_default_memory_pool()
+    mempool.free_all_blocks()
+    assert mempool.total_bytes() == 0
+    rank = f2_rank_dense(cols, n, cp)
+    cp.cuda.Stream.null.synchronize()
+    assert mempool.total_bytes() >= floor_bytes, "GPU kernel did not allocate the device matrix"
+
+    assert rank == ref
+
+
+@requires_gpu
+def test_gpu_dense_finds_dependencies_on_rank_deficient_input():
+    cp = _GPU
+    rng = np.random.default_rng(0)                          # deterministic, reproducible
+    nrows, n_indep, n_dep = 256, 128, 64
+    base = rng.integers(0, 2, size=(nrows, n_indep), dtype=np.uint8)
+    # Each extra column is the XOR of two base columns, so it is linearly dependent on them:
+    # the true rank cannot exceed n_indep, well below the n_indep + n_dep total columns.
+    a = rng.integers(0, n_indep, size=n_dep)
+    b = rng.integers(0, n_indep, size=n_dep)
+    extra = base[:, a] ^ base[:, b]
+    mat = np.concatenate([base, extra], axis=1)
+    cols = _cols_from_matrix(mat)
+
+    ref = f2_rank(cols)
+    rank = f2_rank_dense(cols, nrows, cp)
+    cp.cuda.Stream.null.synchronize()
+
+    assert rank == ref
+    assert rank <= n_indep < mat.shape[1]                   # deficiency really is present
+
