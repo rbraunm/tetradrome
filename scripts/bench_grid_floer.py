@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import time
 import tracemalloc
 
@@ -68,6 +69,13 @@ def main():
     parser.add_argument("--gen-workers", type=int, default=1, help="generation worker processes")
     parser.add_argument("--pin", action="store_true", help="NUMA-pin reduction workers (Linux)")
     args = parser.parse_args()
+
+    if args.pin and not hasattr(os, "sched_setaffinity"):
+        parser.error(
+            "--pin is Linux-only (NUMA affinity via os.sched_setaffinity); this OS lacks it. "
+            "Drop --pin here, or run the parallel/pinned sweep on the Linux cluster (where "
+            "fork also avoids Windows' spawn overhead). The GPU-backend comparison is fine here."
+        )
 
     targets = ([(name, GridDiagram.from_knotinfo(name)) for name in args.knots] +
                [(f"staircase-{n}", staircase_grid(n)) for n in args.sizes])
