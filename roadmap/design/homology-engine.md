@@ -4,11 +4,12 @@
 back end, native Khovanov over F2 and ℚ, the Lee deformation, the Rasmussen
 *s*-invariant (all wired into `compute()` and checked against KnotInfo), and exact
 Gaussian-cancellation reduction (cross-checked `raw == reduced`). Acceleration
-(Phase 5) is code-complete — every tier (bit-packed CPU, numba JIT, dense GPU kernel,
-multi-core + NUMA pinning, size/VRAM routing, multimodular ℚ) is written and validated
-`== reference` here through shared code, with a CPU/GPU benchmark harness; what remains
-is validating the GPU/numba/multi-socket *speed* on real hardware and calibrating the
-routing threshold. Floer (Phase 6) follows. The §7 phase plan carries per-phase
+(Phase 5) is essentially complete — every tier is built and validated `== reference`
+(GPU and numba now confirmed on real hardware); the measured outcome is that the
+pure-Python `bitint` reducer is the workhorse and the router keeps work on the CPU. A
+true on-device GPU kernel is deferred to a late-project goal (decision 0010); only the
+NUMA-pinning speed check on a multi-socket box remains. Floer (Phase 6) follows. The §7
+phase plan carries per-phase
 status inline.
 
 **Scope:** The computational substrate for the homological invariants — Khovanov
@@ -373,11 +374,16 @@ Each phase is validated before the next begins. Reductions and acceleration are 
   kernel (`f2_rank_dense` — vectorized row reduction, one host sync per column instead of
   per step), and NUMA-aware core pinning for the parallel pool (`parallel.py`, Linux).
   Every tier is validated `== reference` here via shared code (the GPU and numba paths
-  through their un-accelerated equivalents). *Remaining is hardware validation, not new
-  code:* on a CUDA box, a multi-socket box, and with numba installed, run the suite
-  (agreement) and `scripts/bench_reducers.py` (`--sizes`, `--workers`, `--pin`) to confirm
-  each accelerator is correct and faster on real silicon, then calibrate the GPU routing
-  threshold (`memory.py`) from the measured crossover.
+  through their un-accelerated equivalents), and on a CUDA + numba box the GPU and JIT
+  tiers' agreement now confirmed on real hardware. **Measured outcome (decision 0010):**
+  the pure-Python `bitint` reducer is the workhorse — it beats numpy, roughly matches
+  numba, and beats the first-cut dense GPU kernel everywhere tested (the GPU kernel is
+  correct but sync-bound: one host round-trip per column, ~14x slower than `bitint` at
+  2048², widening with size). The router correctly keeps everything on the CPU.
+  *Remaining:* only the NUMA-pinning *speed* check on a multi-socket Linux box
+  (`bench_reducers.py --pin`); a genuinely on-device GPU kernel (bit-packed, no per-column
+  sync) is **deferred to a late-project goal (decision 0010)** — speed/scale tuning to
+  revisit when a CPU-infeasible workload makes it worth the engineering, not before.
 - **Phase 6 — Floer front end (peer engine).** Grid homology (MOS rectangles)
   and/or the Szabó HFK cube, feeding the *same* back end; τ, ε, ν, HFK ranks;
   validate against KnotInfo. Note the n! generation bottleneck → generation-side
