@@ -174,7 +174,9 @@ def gpu_config(info: GpuInfo | None = None) -> GpuConfig:
 def _cupy_wheel(cuda_version: str | None) -> str | None:
     if not cuda_version:
         return None
-    return {"12": "cupy-cuda12x", "11": "cupy-cuda11x"}.get(cuda_version.split(".")[0])
+    return {"11": "cupy-cuda11x", "12": "cupy-cuda12x", "13": "cupy-cuda13x"}.get(
+        cuda_version.split(".")[0]
+    )
 
 
 def enablement_instructions(info: GpuInfo | None = None) -> str | None:
@@ -201,8 +203,8 @@ def enablement_instructions(info: GpuInfo | None = None) -> str | None:
                          f"(matches your driver's CUDA {info.driver_cuda_version})")
         else:
             lines.append("Enable it:  check your CUDA version with nvidia-smi (top-right, "
-                         "'CUDA Version'), then install the matching wheel -- cupy-cuda12x "
-                         "for CUDA 12.x or cupy-cuda11x for 11.x.")
+                         "'CUDA Version'), then install the matching wheel -- cupy-cuda13x "
+                         "for CUDA 13.x, cupy-cuda12x for 12.x, or cupy-cuda11x for 11.x.")
         lines.append("Re-run afterwards; the GPU tier is detected automatically.")
     else:
         lines.append("An NVIDIA GPU appears present but no driver was detected.")

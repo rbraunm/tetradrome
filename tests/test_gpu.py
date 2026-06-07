@@ -24,9 +24,10 @@ def test_probes_do_not_raise_without_gpu():
 
 
 def test_wheel_mapping():
+    assert gpu._cupy_wheel("13.1") == "cupy-cuda13x"
     assert gpu._cupy_wheel("12.4") == "cupy-cuda12x"
     assert gpu._cupy_wheel("11.8") == "cupy-cuda11x"
-    assert gpu._cupy_wheel("13.0") is None      # unknown line -> no guess
+    assert gpu._cupy_wheel("99.0") is None      # unknown line -> no guess
     assert gpu._cupy_wheel(None) is None
 
 
