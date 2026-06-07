@@ -16,19 +16,25 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from ...algebra import GradedComplex, homology
+from ...algebra import GradedComplex, f2_homology, parallel_f2_homology
 from ...errors import UnvalidatedResult
 from .differential import differential
 from .gradings import alexander, maslov
 
 
-def grid_poincare(grid) -> dict:
-    """Grid (hat) homology as ``{(Maslov, Alexander): dimension}`` over F2."""
+def grid_complexes(grid) -> dict:
+    """The generation step: build the per-Alexander-grading F2 complexes ``{A: GradedComplex}``.
+
+    Within an Alexander grading the complex is graded by degree = -Maslov (so the back end's
+    degree-raising differential matches), and the bigraded differential preserves Alexander, so
+    every target lands in the same grading. This is the n! step -- it dominates for large grids
+    and is what a scaling study measures separately from the reduction.
+    """
     by_alexander: dict = defaultdict(list)
     for state in grid.generators():
         by_alexander[alexander(grid, state)].append(state)
 
-    poincare: dict = defaultdict(int)
+    complexes: dict = {}
     for a_grading, group in by_alexander.items():
         degree = {state: -maslov(grid, state) for state in group}
         position: dict = {}
@@ -42,9 +48,35 @@ def grid_poincare(grid) -> dict:
             columns[d][position[state]] = frozenset(
                 position[y] for y in differential(grid, state) if degree.get(y) == d + 1
             )
-        for d, dim in homology(GradedComplex(dict(dims), columns)).items():
-            poincare[(-d, a_grading)] += dim
+        complexes[a_grading] = GradedComplex(dict(dims), columns)
+    return complexes
+
+
+def reduce_complexes(complexes: dict, *, backend: str = "bitint",
+                     workers: int = 1, pin: bool = False) -> dict:
+    """Reduce ``{A: GradedComplex}`` to ``{(Maslov, Alexander): dimension}``.
+
+    The per-grading complexes are independent, so with ``workers > 1`` they reduce across
+    processes (``parallel_f2_homology``, CPU backends only, optional NUMA ``pin``). Every
+    backend returns the identical answer as the reference (Phase 5 agreement discipline).
+    """
+    if workers > 1:
+        homologies = parallel_f2_homology(complexes, backend=backend, workers=workers, pin=pin)
+    else:
+        homologies = {a: f2_homology(cx, backend=backend) for a, cx in complexes.items()}
+
+    poincare: dict = defaultdict(int)
+    for a_grading, homology in homologies.items():
+        for degree, dim in homology.items():
+            poincare[(-degree, a_grading)] += dim
     return {key: value for key, value in poincare.items() if value}
+
+
+def grid_poincare(grid, *, backend: str = "bitint", workers: int = 1, pin: bool = False) -> dict:
+    """Grid (hat) homology as ``{(Maslov, Alexander): dimension}`` over F2."""
+    return reduce_complexes(
+        grid_complexes(grid), backend=backend, workers=workers, pin=pin
+    )
 
 
 def _divide_by_V_once(p: dict) -> dict:
@@ -73,13 +105,14 @@ def _tensor_V(h: dict, power: int) -> dict:
     return p
 
 
-def hfk_hat(grid) -> dict:
-    """HFK-hat as ``{(Maslov, Alexander): rank}`` (up to mirror).
+def hfk_hat(grid, *, backend: str = "bitint", workers: int = 1, pin: bool = False) -> dict:
+    """HFK-hat as ``{(Maslov, Alexander): rank}``.
 
     Divides the grid Poincare polynomial by (1 + q^{-1} t^{-1})^{n-1} and verifies the
-    quotient by reconstruction.
+    quotient by reconstruction. With the grid in the standard chirality this matches
+    KnotInfo directly.
     """
-    grid_homology = grid_poincare(grid)
+    grid_homology = grid_poincare(grid, backend=backend, workers=workers, pin=pin)
     quotient = grid_homology
     for _ in range(grid.n - 1):
         quotient = _divide_by_V_once(quotient)
@@ -91,6 +124,6 @@ def hfk_hat(grid) -> dict:
     return quotient
 
 
-def seifert_genus(grid) -> int:
+def seifert_genus(grid, *, backend: str = "bitint", workers: int = 1, pin: bool = False) -> int:
     """Seifert genus: the top Alexander grading carrying nonzero HFK-hat (genus detection)."""
-    return max(a for _, a in hfk_hat(grid))
+    return max(a for _, a in hfk_hat(grid, backend=backend, workers=workers, pin=pin))

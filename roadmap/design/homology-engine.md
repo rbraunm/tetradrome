@@ -398,7 +398,14 @@ Each phase is validated before the next begins. Reductions and acceleration are 
   Alexander-*filtered* complex (rectangles avoiding only O) via the minimal filtration level
   of the surviving Maslov-0 class — needing an F2 kernel added to the back end. Next: ε
   (KnotInfo tabulates it; needs the CFK-infinity vertical/horizontal structure), then ν
-  (determined by τ and ε). The Szabó HFK cube is an alternative front end, not yet pursued. The n! generation bottleneck →
+  (determined by τ and ε). The Szabó HFK cube is an alternative front end, not yet pursued.
+  The n! generation bottleneck is now instrumented rather than assumed: the engine reduces
+  through the Phase 5 tiers (bitint default, parallel across the independent Alexander
+  gradings, GPU where present), generation can run across processes (unranked permutation
+  slices, identical result), and `scripts/bench_grid_floer.py` reports generation vs
+  reduction time and peak memory per grid size for a scaling sweep on real hardware. Early
+  single-core measurement: generation dominates reduction by ~100x, so generation is the
+  lever; the actual walls (time vs memory) are for the hardware sweep to locate. The n! generation bottleneck →
   generation-side parallelism is its own concern, separate from the shared reducer.
 
 Ordering rationale: general and faithful first (Phases 0–3 produce correct answers
