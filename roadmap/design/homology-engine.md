@@ -356,9 +356,13 @@ Each phase is validated before the next begins. Reductions and acceleration are 
   *Done:* the bit-packed F2 tier (`reduce_f2_packed.py` — pure-Python int bit-vectors,
   plus uint64 word arrays parameterized by the array module so one body of code runs on
   numpy/CPU and cupy/GPU), the runtime registry with detection and loud fallback
-  (`tiers.py`), the per-backend agreement tests, and the CPU-vs-GPU accuracy+speed harness
-  (`scripts/bench_reducers.py`). *Remaining:* Numba JIT, multi-core/NUMA, the multimodular
-  ℚ path, and the memory predictor / VRAM routing.
+  (`tiers.py`), the per-backend agreement tests, the CPU-vs-GPU accuracy+speed harness
+  (`scripts/bench_reducers.py`), and runtime GPU detection / auto-configuration /
+  enablement guidance (`gpu.py` — driver + cupy + card specs probed at runtime, VRAM
+  budget derived from the card, install steps when the hardware is present but the stack
+  is not; no card model assumed). *Remaining:* Numba JIT, multi-core/NUMA, a batched
+  (non-sync-bound) GPU kernel, the multimodular ℚ path, and the memory predictor / VRAM
+  routing that consumes the budget.
 - **Phase 6 — Floer front end (peer engine).** Grid homology (MOS rectangles)
   and/or the Szabó HFK cube, feeding the *same* back end; τ, ε, ν, HFK ranks;
   validate against KnotInfo. Note the n! generation bottleneck → generation-side
