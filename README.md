@@ -72,6 +72,30 @@ Full public surface: `SPEC.md` §13.10.
 
 Packaging is in progress; until then, treat the list above as the environment Tetradrome expects.
 
+## Provisioning a compute environment
+
+The full grid scaling sweeps want more cores than a workstation. `scripts/provision_runner.py` is a small provisioning runner that stands up a clean compute environment, installs Tetradrome into it, smoke-tests it, and prints the command to run the sweep at the box's full core count — so getting from "I have a node" to "the sweep is running" is one command, not an afternoon of setup.
+
+It is written as a general runner with a single path today: an unprivileged Debian LXC on a Proxmox node, driven over SSH. The project is baked into the script; only the *host* side is parameterized — node, storage, size, network — so it assumes nothing about a particular cluster. Other target environments (a cloud VM, bare metal, another hypervisor) are meant to be added as further paths behind the same runner.
+
+```bash
+python scripts/provision_runner.py --host root@<node> --rootfs-storage <pool> \
+    --cores 16 --memory 16384
+```
+
+It creates the container, installs Tetradrome with the `accel` extra, runs a tiny smoke sweep, then prints the command to run the full sweep at the container's core count with NUMA pinning. Re-running on an existing container is refused unless `--recreate` is given — no silent clobber.
+
+Common flags (`--help` for the full set):
+- `--host root@<node>` — Proxmox node to drive over SSH (required).
+- `--rootfs-storage` — storage pool for the rootfs (default `local-lvm`).
+- `--cores` / `--memory` — vCPUs and RAM in MiB (default `4` / `4096`; size up for real sweeps).
+- `--ctid` — container ID (default `250`).
+- `--ip` / `--gateway` / `--vlan` — static networking; defaults to DHCP, untagged.
+- `--branch` — repo branch to install (default `claude`).
+- `--recreate` — destroy and rebuild an existing CTID.
+
+Standing up the environment is deliberately engineer-side scaffolding — one command, kept out of the way — so the work that needs a mathematician stays the focus (see *Contributing*).
+
 ## Contributing
 
 **Tetradrome actively wants contributors — and especially wants mathematicians.**
