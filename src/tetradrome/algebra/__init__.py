@@ -8,12 +8,14 @@ roadmap/design/homology-engine.md.
 from .complex import GradedComplex
 from .rational_complex import RationalComplex
 from .rational_reduce import rational_homology, rational_rank
+from .reduce_gaussian import gaussian_homology
 from .reduce_reference import f2_rank, homology
 
 __all__ = [
     "GradedComplex",
     "RationalComplex",
     "f2_rank",
+    "gaussian_homology",
     "homology",
     "rational_homology",
     "rational_rank",
