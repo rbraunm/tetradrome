@@ -262,7 +262,7 @@ def main() -> None:
     parser.add_argument("--smoke", default=DEFAULT_SMOKE,
                         help="command (venv python, in the repo dir) to smoke-test; '' to skip")
     parser.add_argument("--apt", default="",
-                        help="extra apt packages beyond the base (e.g. build-essential for numba)")
+                        help="extra apt packages beyond the base")
     args = parser.parse_args()
 
     global SSH_TARGET, _CLIENT
