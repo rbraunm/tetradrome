@@ -16,8 +16,8 @@ records design decisions. Nothing in `roadmap/` is load-bearing at runtime.
   including the soft "locked" gate (locked means an extra are-you-sure step, never
   immutability -- every ADR stays reviewable). Topics so far: canonical invariant
   names (SPEC 12.4), Python target, native coefficient field, validate-by-default,
-  no external compute backends, the faithful-raw-path rule, and the memory-prediction
-  gate.
+  no external compute backends, the faithful-raw-path rule, the memory-prediction
+  gate, and the project scope (the smooth-4D-topology toolset, not a knot calculator).
 - `design/` -- design specs that deepen a SPEC section into an implementable plan.
   `homology-engine.md` covers the Khovanov/Lee/Floer computation substrate: the
   engine-vs-acceleration layering, the faithful-raw-path rule, the memory-prediction

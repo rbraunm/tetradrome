@@ -1,6 +1,6 @@
 # Tetradrome
 
-*A reproducible, audit-friendly Python workbench for knot invariants that constrain smooth 4-dimensional topology.*
+*A reproducible, audit-friendly Python workbench for the invariants that constrain smooth 4-dimensional topology — for knots, links, and braids alike, on one validated surface.*
 
 Tetradrome builds, validates, reproduces, and reports knot-invariant computations — Khovanov homology, the Rasmussen *s*-invariant, knot Floer homology, and the classical and concordance invariants — by orchestrating the serious tools that already exist (Spherogram/SnapPy, `knot_floer_homology`, KnotJob, KnotInfo, SageMath) behind one normalized schema with full provenance and an explicit validation status on every result.
 
