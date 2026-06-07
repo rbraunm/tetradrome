@@ -1,41 +1,41 @@
 # Tetradrome
 
-*A reproducible, audit-friendly Python workbench for knot invariants that constrain smooth 4-dimensional topology.*
+*A reproducible, audit-friendly Python workbench for the invariants that constrain smooth 4-dimensional topology — for knots, links, and braids alike, on one validated surface.*
 
-Tetradrome builds, validates, reproduces, and reports knot-invariant computations — Khovanov homology, the Rasmussen *s*-invariant, knot Floer homology, and the classical and concordance invariants — by orchestrating the serious tools that already exist (Spherogram/SnapPy, `knot_floer_homology`, KnotJob, KnotInfo, SageMath) behind one normalized schema with full provenance and an explicit validation status on every result.
+Tetradrome computes the invariants of smooth 4-dimensional topology natively — the Khovanov, Lee, and knot Floer homologies, the Rasmussen *s*-invariant, and the classical and concordance invariants — for knots, links, and braids, and validates every result against KnotInfo and (where installed) the established tools, with full provenance and an explicit validation status on each one. The serious tools that already exist (Spherogram/SnapPy, `knot_floer_homology`, KnotJob, KnotInfo, SageMath) are used as the gold-master check, never as the thing that produces the answer.
 
 The project is built around a single idea:
 
-> Build the bench before building every instrument. Use existing instruments honestly, validate them against one another, and only machine new parts where Tetradrome adds real value.
+> Own the mathematics you compute, and check it against the instruments that already exist. Faithful and portable beats fast-but-won't-install; a validated number is the only kind worth reporting.
 
-The motivating example is the Conway knot — historically the smallest knot whose smooth sliceness resisted classification until Lisa Piccirillo settled it in 2020 — and the trace-based machinery around it. Tetradrome is not an attempt to redo that mathematics; it is a disciplined engineering layer for running, cross-checking, and reproducing computations of this kind.
+The motivating example is the Conway knot — historically the smallest knot whose smooth sliceness resisted classification until Lisa Piccirillo settled it in 2020 — and the trace-based machinery around it. Tetradrome is not a claim to redo that mathematics; it is a disciplined, native, auditable engine for computing, cross-checking, and reproducing invariants of this kind.
 
 ## What it is — and isn't
 
 **It is:**
-- a Python-first, reproducible workbench around existing knot-homology tooling;
-- a normalizer that turns each backend's output into one schema, with backend, version, conventions, raw output, and validation status attached to every result;
-- a validation harness — known-answer checks against KnotInfo, cross-backend agreement, and `d² = 0` checks for native complexes;
+- a Python-first, reproducible workbench that computes the invariants of smooth 4-dimensional topology natively, for knots, links, and braids;
+- a normalizer that attaches the method, version, conventions, raw output, and validation status to every result, in one schema;
+- a validation harness — known-answer checks against KnotInfo, cross-checks against independent tools, and `d² = 0` checks for native complexes;
 - a reporter that distinguishes *computation*, *obstruction*, and *theorem reference*, and never presents an unvalidated number as a fact;
-- extensible toward native Python (and, later, CUDA) implementations of exact-algebra workloads, added only behind the validation harness.
+- a permissively-licensed, pure-Python core built to be accelerated (multi-core, optional GPU) without changing its answers.
 
 **It isn't:**
-- a claim that no tooling exists — it leans on, and credits, the tools listed below;
-- a from-scratch reimplementation of Khovanov or Heegaard-Floer theory;
+- a claim that no tooling exists — it leans on, credits, and validates against the tools listed below;
+- an orchestration layer that calls those tools to produce its answers — the compute path is native (see `roadmap/decisions/0006`);
 - a generator of new theorems, or a proof assistant;
 - a thing that calls a knot "slice" just because an obstruction happens to vanish.
 
 ## Status
 
-Early. The specification (`SPEC.md`) is complete — architecture, result schema, public API surface, backend strategy, and validation philosophy are all laid out — and the implementation is being built behind it, simplest cases first. Interfaces may still change.
+Early. The specification (`SPEC.md`) is complete — architecture, result schema, public API surface, compute and validation strategy, and the project's philosophy are all laid out — and the implementation is being built behind it, simplest cases first. Interfaces may still change.
 
 ## Design at a glance
 
 ```
-knot input (name / PD / DT / Gauss / braid)
-  → normalized diagram (Spherogram-backed)
-  → one or more backends
-  → normalized, validated invariant result (with provenance)
+input: knot / link / braid (name / PD / DT / Gauss / braid)
+  → normalized diagram (native)
+  → native invariant engine
+  → normalized, validated result (with provenance)
   → reproducible report / claim ledger
 ```
 
@@ -53,6 +53,10 @@ s = td.invariants.compute(k, "rasmussen_invariant")   # typed result, with prove
 verdict = td.concordance.slice_status(k)
 print(verdict.smoothly_slice, verdict.certificate.via)
 
+# off-table: present a knot by braid word (here T(2,15), beyond the 13-crossing tables)
+t = td.knots.from_braid([1] * 15)
+det = td.invariants.compute(t, "determinant", validate=False)   # -> 15 (no oracle off-table)
+
 # build a validated, content-hashed roster others can depend on
 roster = td.export.build(["K11n34", "4_1", "3_1"], validate=True)
 td.export.save(roster, "roster-v1.json")
@@ -62,9 +66,9 @@ Full public surface: `SPEC.md` §13.10.
 
 ## Requirements
 
-- Python 3.11+ (3.13 targeted).
-- Pip-installable backends: `spherogram` / `snappy` (diagrams), `knot_floer_homology` (Floer invariants).
-- Optional / authoring-time backends: KnotJob (Java) for Khovanov homology and the Rasmussen *s*-invariant, SageMath, KnotInfo data, HFKcalc, Khoca.
+- Python 3.11+ (3.13 targeted). The compute path is pure Python.
+- Runtime data: `database_knotinfo` (the KnotInfo tables, used as the offline validation oracle and for name resolution).
+- Optional validators (authoring-time, never required to compute): KnotJob (Java) for Khovanov homology and the Rasmussen *s*-invariant, `knot_floer_homology` / HFKcalc for Floer, SageMath, Khoca. Spherogram/SnapPy is an optional interop target, not the diagram parser.
 
 Packaging is in progress; until then, treat the list above as the environment Tetradrome expects.
 
@@ -78,7 +82,7 @@ Ways to help:
 - **Math review** — conventions, invariant definitions, the wording of obstruction / claim / strength in reports, and the trace and concordance machinery.
 - **Backend adapters** — wrapping or hardening KnotJob, SageMath, HFKcalc, Khoca, or others behind the common contract.
 - **Validation data** — expanding known-answer coverage against KnotInfo and cross-backend checks.
-- **Native engines** — the mod-2 Khovanov / Lee–Rasmussen work and exact-algebra backends, behind the validation harness.
+- **Native engines** — the Khovanov / Lee–Rasmussen and knot Floer work and the exact-algebra back end, behind the validation harness.
 - **Docs and examples** — making the conventions and workflows legible to newcomers.
 
 To get started, open an issue or a discussion describing what you'd like to work on, or send a pull request. The best first contributions are small, well-scoped, and come with the known-answer or cross-backend check that demonstrates them.
@@ -93,10 +97,10 @@ Tetradrome's whole value is that its results are checkable. Every computation re
 
 ## Built on
 
-Tetradrome stands on the work of others and aims to credit it clearly:
+Tetradrome computes its own invariants, but it stands on the work of others as its validation references and historical sources, and aims to credit them clearly:
 
 - **Spherogram / SnapPy** — Marc Culler, Nathan Dunfield, and collaborators (planar diagrams, PD/DT codes).
-- **knot_floer_homology / HFKcalc** — Zoltán Szabó's HFK calculator, with the Python wrapper by Marc Culler, Nathan Dunfield, and Matthias Goerner (knot Floer invariants).
+- **knot_floer_homology / HFKcalc** — Zoltán Szabó's HFK calculator, with the Python wrapper by Marc Culler, Nathan Dunfield, and Matthias Goerner (knot Floer cross-checks).
 - **KnotJob** — Dirk Schütz (Khovanov homology, Rasmussen *s*-invariant).
 - **KnotInfo** — the knot invariant database, used here as a validation oracle.
 - **SageMath**, **Khoca** (Lukas Lewark), and the wider low-dimensional-topology software community.

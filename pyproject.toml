@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tetradrome"
+version = "0.0.0"
+description = "A reproducible, audit-friendly workbench for knot invariants that constrain smooth 4-dimensional topology."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+# KnotInfo (database_knotinfo) is the structural-data source for tabulated knots
+# and the validation oracle -- core. Compute engines for off-table work are
+# optional, per "make every backend optional" (SPEC) and the call-not-vendor
+# licensing posture (decisions/0004, docs/existing_tools.md).
+dependencies = ["database_knotinfo"]
+
+[project.optional-dependencies]
+floer = ["knot_floer_homology"]
+# Optional acceleration tiers (the pure-Python reference is always the floor):
+#   accel -> numpy word-array reducer (packed-cpu) and the dense GPU kernel path
+#   jit   -> numba-compiled bit-packed reducer
+# The GPU tier additionally needs cupy matching your CUDA, which is a version-specific
+# wheel (cupy-cuda12x / cupy-cuda11x), so it is installed separately rather than pinned
+# here; `python scripts/bench_reducers.py --gpu-info` prints the exact line for your box.
+accel = ["numpy"]
+jit = ["numba", "numpy"]
+# Spherogram is kept only as an optional dev cross-check (e.g. an independent
+# Seifert matrix for off-table knots); it is not needed at runtime.
+dev = ["spherogram", "pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
