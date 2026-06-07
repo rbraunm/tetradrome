@@ -360,10 +360,12 @@ Each phase is validated before the next begins. Reductions and acceleration are 
   (`scripts/bench_reducers.py`), and runtime GPU detection / auto-configuration /
   enablement guidance (`gpu.py` — driver + cupy + card specs probed at runtime, VRAM
   budget derived from the card, install steps when the hardware is present but the stack
-  is not; no card model assumed), and multi-core parallel reduction across the independent
-  complexes (`parallel.py` — process pool, parallel == serial). *Remaining:* Numba JIT,
-  NUMA pinning, a batched (non-sync-bound) GPU kernel, the multimodular ℚ path, and the
-  memory predictor / VRAM routing that consumes the budget.
+  is not; no card model assumed), multi-core parallel reduction across the independent
+  complexes (`parallel.py` — process pool, parallel == serial), and size prediction with
+  size/VRAM-aware routing (`memory.py` — packed reduction peak per complex, GPU only when
+  it fits the measured budget and clears a calibratable threshold, loud failure over a RAM
+  budget). *Remaining:* the multimodular ℚ path, Numba JIT, a batched (non-sync-bound) GPU
+  kernel, and NUMA pinning.
 - **Phase 6 — Floer front end (peer engine).** Grid homology (MOS rectangles)
   and/or the Szabó HFK cube, feeding the *same* back end; τ, ε, ν, HFK ranks;
   validate against KnotInfo. Note the n! generation bottleneck → generation-side
