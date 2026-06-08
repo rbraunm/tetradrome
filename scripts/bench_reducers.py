@@ -8,10 +8,10 @@ GPU advantage, if present, shows up). Backends that are not installed (e.g. pack
 with no CUDA device) are skipped with a note rather than failing the run.
 
 Usage (with the package installed, e.g. `pip install -e .`):
-    python3 scripts/bench_reducers.py
-    python3 scripts/bench_reducers.py --sizes 512,1024,2048 --knots 3_1,8_19
-    python3 scripts/bench_reducers.py --backends bitint,packed-cpu,packed-gpu
-    python3 scripts/bench_reducers.py --skip-synthetic
+    python scripts/bench_reducers.py
+    python scripts/bench_reducers.py --sizes 512,1024,2048 --knots 3_1,8_19
+    python scripts/bench_reducers.py --backends bitint,packed-cpu,packed-gpu
+    python scripts/bench_reducers.py --skip-synthetic
 
 On a machine with a CUDA GPU and cupy installed, `packed-gpu` joins automatically. Note:
 GPU wins are expected only in the large dense regime; the per-column reducer is

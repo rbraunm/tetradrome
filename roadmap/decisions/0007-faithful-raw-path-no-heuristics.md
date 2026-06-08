@@ -42,3 +42,5 @@ heuristic.
   avoid.
 - This constrains every future homology engine and the shared algebra back end
   (`roadmap/design/homology-engine.md`).
+- Whether the reference path's *speed* is itself worth investing in — and the rule for
+  classifying any proposed acceleration — is decided in 0011, which builds on this ADR.

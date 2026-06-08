@@ -17,3 +17,6 @@ deliberately reversible where the SPEC says so; reversibility is noted per recor
 - `0009-scope-smooth-4d-toolset.md` -- scope is the smooth-4D toolset, not a knot calculator.
 - `0010-defer-gpu-kernel.md` -- the on-device GPU rank kernel is a deferred late-project
   goal; `bitint` is the measured workhorse, so it waits for a CPU-infeasible workload.
+- `0011-harden-the-brute-reference.md` -- hardening the brute reference's speed (by
+  exact means) is in scope; the floor is irreducible; (B)/(A)/(C) classification; the
+  4D reach frontier is the binding engine.
