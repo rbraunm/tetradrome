@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+title: Tetradrome
+abstract: >-
+  A reproducible, audit-first Python workbench for the computational toolset of
+  smooth 4-dimensional topology: native Khovanov, Lee, Rasmussen s, and knot
+  Floer homology for knots, links, and braids, behind one validated schema, with
+  established tools used only as oracles.
+type: software
+authors:
+  - family-names: Braunm
+    given-names: Randy A.
+    alias: rbraunm
+repository-code: "https://github.com/rbraunm/tetradrome"
+url: "https://github.com/rbraunm/tetradrome"
+license: Apache-2.0
+keywords:
+  - low-dimensional topology
+  - smooth 4-manifolds
+  - knot Floer homology
+  - Khovanov homology
+  - Rasmussen invariant
+  - slice genus
+  - concordance
+  - computational topology

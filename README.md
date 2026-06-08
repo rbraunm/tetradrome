@@ -17,7 +17,7 @@ The motivating example is the Conway knot — historically the smallest knot who
 - a normalizer that attaches the method, version, conventions, raw output, and validation status to every result, in one schema;
 - a validation harness — known-answer checks against KnotInfo, cross-checks against independent tools, and `d² = 0` checks for native complexes;
 - a reporter that distinguishes *computation*, *obstruction*, and *theorem reference*, and never presents an unvalidated number as a fact;
-- a permissively-licensed, pure-Python core built to be accelerated (multi-core, optional GPU) without changing its answers.
+- a permissively-licensed, pure-Python core with a validated multi-core / optional-GPU acceleration layer that never changes its answers.
 
 **It isn't:**
 - a claim that no tooling exists — it leans on, credits, and validates against the tools listed below;
@@ -27,7 +27,7 @@ The motivating example is the Conway knot — historically the smallest knot who
 
 ## Status
 
-Early. The specification (`SPEC.md`) is complete — architecture, result schema, public API surface, compute and validation strategy, and the project's philosophy are all laid out — and the implementation is being built behind it, simplest cases first. Interfaces may still change.
+Active, with several engines built and validated. The specification (`SPEC.md`) is complete, and the native compute path is well underway: the Jones polynomial, the shared exact-algebra back end, Khovanov homology (mod-2 and rational), Lee homology, and the Rasmussen *s*-invariant are implemented and validated against KnotInfo, behind a multi-core / optional-GPU acceleration backend whose every tier is checked to reproduce the reference exactly. The native knot Floer (grid homology) engine is in progress; the reporter, the Conway-knot reproducer, and broader link / 3–4-manifold input paths are the work ahead. Interfaces may still change.
 
 ## Design at a glance
 
