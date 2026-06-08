@@ -8,7 +8,9 @@ abstract: >-
   established tools used only as oracles.
 type: software
 authors:
-  - name: rbraunm
+  - family-names: Braunm
+    given-names: Randy A.
+    alias: rbraunm
 repository-code: "https://github.com/rbraunm/tetradrome"
 url: "https://github.com/rbraunm/tetradrome"
 license: Apache-2.0
