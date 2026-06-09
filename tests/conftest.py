@@ -17,8 +17,6 @@ own. See roadmap/design/floer-phase-6-plan.md and decisions/0011.
 """
 from __future__ import annotations
 
-import ast
-
 import pytest
 
 # --- the single heavy-tier gate -------------------------------------------------------
@@ -55,40 +53,9 @@ def pytest_collection_modifyitems(config, items):
 
 
 # --- shared validation rosters (derived from KnotInfo, never hardcoded) ---------------
-
-
-def _blank(value) -> bool:
-    return value is None or str(value).strip() in ("", "does not exist")
-
-
-def floer_roster(max_n: int) -> list[tuple[str, int]]:
-    """KnotInfo knots with HFK, tau, and three-genus all tabulated and grid number
-    ``<= max_n``, as sorted ``(name, n)``. Derived live so it tracks the table; the
-    n <= 10 ceiling is the brute floor (n=11 OOMs the grid complex at 200 GiB)."""
-    from tetradrome.backends import knotinfo_backend as ki
-
-    ki._load()
-    out: list[tuple[str, int]] = []
-    for row in ki._TABLE:  # the backend exposes no public enumerator; this is test support
-        if any(
-            _blank(row.get(col))
-            for col in (
-                "grid_notation",
-                "hfk_polynomial_vector",
-                "ozsvath_szabo_tau_invariant",
-                "three_genus",
-            )
-        ):
-            continue
-        try:
-            n = len(ast.literal_eval(row["grid_notation"])) // 2
-        except (ValueError, SyntaxError):
-            continue
-        if n <= max_n:
-            out.append((row["name"], n))
-    out.sort(key=lambda item: (item[1], item[0]))
-    return out
-
+# floer_roster lives in the package (tetradrome.engines.floer) so the sweep script shares it;
+# imported lazily in pytest_generate_tests to keep collection independent of the optional
+# KnotInfo backend.
 
 # Floer tiers: sandbox-safe default vs the full acceptance sweep.
 _FLOER_MAX_N = {"default": 8, "heavy": 10}
@@ -100,6 +67,7 @@ def pytest_generate_tests(metafunc):
     backend, like the GPU/pinning skips) rather than breaking collection for the suite."""
     if "floer_knot" not in metafunc.fixturenames:
         return
+    from tetradrome.engines.floer import floer_roster
     from tetradrome.errors import BackendUnavailable
 
     max_n = _FLOER_MAX_N["heavy" if _heavy(metafunc.config) else "default"]

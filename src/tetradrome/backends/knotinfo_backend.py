@@ -115,6 +115,14 @@ def normalize_name(name: str) -> str:
     return n
 
 
+def rows() -> list[dict]:
+    """All KnotInfo rows (read-only); loads the table on first use. This is the public
+    enumerator the validation rosters build on -- callers must not mutate the result."""
+    _load()
+    assert _TABLE is not None
+    return _TABLE
+
+
 def lookup(name: str) -> dict:
     """Return the KnotInfo row for a knot, or raise UnknownKnot."""
     _load()
