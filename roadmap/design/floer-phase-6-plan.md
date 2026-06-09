@@ -44,13 +44,20 @@ the engine.
 
 ### A — Validation breadth (the capability bar)
 
-- **A1. Build the roster.** Enumerate KnotInfo knots that have HFK, τ, and three-genus
-  tabulated and a tractable grid number (≤ ~10 — the n! wall hit at 11 on 200 GiB sets the
-  ceiling). Record name, grid number, and which data each has. This is the target every
-  later task validates against.
-- **A2. Run roster agreement.** HFK-hat (up to mirror), genus, and τ (signed) vs KnotInfo
-  across the roster; fix whatever disagrees (most likely chirality/normalization edges —
-  see D1).
+- **A1. Build the roster. [done 2026-06-08]** Of KnotInfo's 12,966 knots, 2,977 have HFK,
+  τ, and three-genus all tabulated. Filtered by grid size (the tractability gate — n=11
+  OOM'd at 200 GiB): 13 knots at n ≤ 8, 41 at n ≤ 9, **185 at n ≤ 10**; the remaining 2,792
+  at n ≥ 11 are past the brute floor. The roster is derived (filter for data-present and
+  n ≤ threshold), not hardcoded, so it tracks the table.
+  - **Acceptance ceiling: n ≤ 10 (185 knots).** Two tiers: **n ≤ 8 (13)** is the routine
+    tier — fast in the sandbox, run every iteration; **n ≤ 10 (185)** is the full
+    acceptance sweep, run occasionally overnight on labradorite (the n=10 tier alone is
+    144 knots at ~3.6M generators each). n ≥ 11 is gated out (0011/0008).
+- **A2. Run roster agreement.** HFK-hat, genus, and τ (signed) vs KnotInfo across the
+  roster. **Tier-0 (n ≤ 8) done [2026-06-08]: 13/13 exact** — direct equality on all three,
+  no mirror resolution needed even for the off-table knots (6_1/2/3, 8_20/21, 9_42/46,
+  10_124). Chirality (D1) did not bite at this tier. Remaining: the full n ≤ 10 sweep on
+  labradorite (watch the n=9–10 knots for any chirality edge).
 - **A3. Freeze** the passing roster as the Phase-6 acceptance set; record which knots are
   gated out by grid size and why (the irreducible-floor doctrine, 0011).
 
@@ -73,8 +80,10 @@ the engine.
 
 ### D — Hardening
 
-- **D1.** Systematize chirality/normalization (HFK up-to-mirror; τ sign from standard
-  chirality) so it holds across the roster, not per-knot.
+- **D1.** Chirality/normalization. Direct equality (no mirror, correct τ sign) held across
+  all 13 knots at n ≤ 8, so the KnotInfo `grid_notation` chirality appears to match the
+  tabulated convention. D1 may reduce to confirming this persists through n = 10; if any
+  knot disagrees by a mirror there, systematize the resolution rather than special-case it.
 - **D2.** Verify the V-factor extraction (grid homology = HFK-hat ⊗ V^(n−1)) divides out
   correctly across all roster grid sizes, not just n ≤ 7.
 - **D3.** Intractable grids must fail loud via the 0008 gate, with a test. (No silent OOM.)
