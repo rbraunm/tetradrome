@@ -57,7 +57,8 @@ the engine.
   roster. **Tier-0 (n ≤ 8) done [2026-06-08]: 13/13 exact** — direct equality on all three,
   no mirror resolution needed even for the off-table knots (6_1/2/3, 8_20/21, 9_42/46,
   10_124). Chirality (D1) did not bite at this tier. Remaining: the full n ≤ 10 sweep on
-  labradorite (watch the n=9–10 knots for any chirality edge).
+  labradorite via `pytest --heavy` (HFK runs across all cores; the flag refuses environments
+  too small to run it), watching the n=9–10 knots for any chirality edge.
 - **A3. Freeze** the passing roster as the Phase-6 acceptance set; record which knots are
   gated out by grid size and why (the irreducible-floor doctrine, 0011).
 

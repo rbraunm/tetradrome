@@ -17,6 +17,8 @@ own. See roadmap/design/floer-phase-6-plan.md and decisions/0011.
 """
 from __future__ import annotations
 
+import os
+
 import pytest
 
 # --- the single heavy-tier gate -------------------------------------------------------
@@ -32,11 +34,29 @@ def pytest_addoption(parser):
     )
 
 
+# Minimum cores for the heavy tier to be worth running -- below this it would crawl serially,
+# so refuse rather than pretend. NUMA pinning and CUDA are optional accelerators the engine
+# uses automatically when present; the hard requirement here is real CPU parallelism.
+_MIN_HEAVY_CORES = 4
+
+
+def _core_count() -> int:
+    try:
+        return len(os.sched_getaffinity(0))   # respects container cpusets
+    except AttributeError:                     # not Linux
+        return os.cpu_count() or 1
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "heavy: needs real compute (labradorite/local); skipped unless --heavy is passed.",
     )
+    if _heavy(config) and _core_count() < _MIN_HEAVY_CORES:
+        raise pytest.UsageError(
+            f"--heavy needs real parallel compute (>= {_MIN_HEAVY_CORES} cores); this "
+            f"environment has {_core_count()}. Run it on labradorite or a capable local box."
+        )
 
 
 def _heavy(config) -> bool:
@@ -50,6 +70,13 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "heavy" in item.keywords:
             item.add_marker(skip)
+
+
+@pytest.fixture
+def floer_workers(request) -> int:
+    """Reduction workers for an HFK computation: all available cores under --heavy, serial
+    otherwise. tau has no parallel path and is cheap, so only HFK consumes this."""
+    return _core_count() if _heavy(request.config) else 1
 
 
 # --- shared validation rosters (derived from KnotInfo, never hardcoded) ---------------
