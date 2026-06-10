@@ -8,9 +8,11 @@ in memory for the auth handshake -- it never reaches a command line, file, or lo
 authenticated connection is opened and reused for every command.
 
 It creates an unprivileged Debian LXC (pure compute -- no Docker, nesting, or GPU), installs
-Tetradrome into a venv with the numpy acceleration extra, enables sshd with a dedicated
-password login so the prepared box can be used directly over SSH, smoke-tests a tiny sweep,
-and prints how to run the full sweep at the container's core count with NUMA pinning.
+Tetradrome into a venv with the full runnable suite by default (every CPU acceleration tier,
+the KnotInfo backend, and pytest -- so the box runs the suite, pytest --heavy and all, with no
+opt-in beyond the test flags), enables sshd with a dedicated password login so the prepared
+box can be used directly over SSH, smoke-tests a tiny sweep, and prints how to run the full
+sweep at the container's core count with NUMA pinning.
 
 The login is --ssh-user (default 'tetradrome') and owns the install; its password is generated
 fresh each provision and written to a chmod-600 file beside this script (gitignored). That is
@@ -295,6 +297,8 @@ def report(ctid: int, args, name: str, ip: str, creds_path: str) -> None:
     print("  Then, e.g. the scaling sweep (synthetic sizes isolate generation; --pin needs Linux):")
     print(f"    {python} {bench} \\")
     print(f"        --sizes 8 9 10 11 --gen-workers {args.cores} --workers {args.cores} --pin")
+    print("  Or the full validation sweep (--heavy is the only opt-in):")
+    print(f"        cd {base}/src && {python} -m pytest --heavy -v")
     print(f"\n  Update the code later:  git -C {base}/src pull")
 
 
@@ -331,8 +335,10 @@ def main() -> None:
     # Project -- baked in, overridable:
     parser.add_argument("--repo", default=DEFAULT_REPO, help="git URL to clone")
     parser.add_argument("--branch", default="main", help="repo branch (default main)")
-    parser.add_argument("--extras", default="accel",
-                        help="pip extras, comma-separated (default accel; numpy reducer)")
+    parser.add_argument("--extras", default="all",
+                        help="pip extras to install (default 'all': every CPU tier + KnotInfo + "
+                        "pytest, so the box runs the full suite with no opt-in; GPU cupy stays "
+                        "box-specific)")
     parser.add_argument("--smoke", default=DEFAULT_SMOKE,
                         help="command (venv python, in the repo dir) to smoke-test; '' to skip")
     parser.add_argument("--apt", default="",
