@@ -17,3 +17,6 @@ venv/
 
 # Claude Code local session memory (never committed)
 CLAUDE.local.md
+
+# Generated container login written by provision_runner.py (never committed)
+scripts/*ssh-credentials*.txt

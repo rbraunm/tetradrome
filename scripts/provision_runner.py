@@ -8,8 +8,14 @@ in memory for the auth handshake -- it never reaches a command line, file, or lo
 authenticated connection is opened and reused for every command.
 
 It creates an unprivileged Debian LXC (pure compute -- no Docker, nesting, or GPU), installs
-Tetradrome into a venv with the numpy acceleration extra, smoke-tests a tiny sweep, and
-prints how to run the full sweep at the container's core count with NUMA pinning.
+Tetradrome into a venv with the numpy acceleration extra, enables sshd with a dedicated
+password login so the prepared box can be used directly over SSH, smoke-tests a tiny sweep,
+and prints how to run the full sweep at the container's core count with NUMA pinning.
+
+The login is --ssh-user (default 'tetradrome') and owns the install; its password is generated
+fresh each provision and written to a chmod-600 file beside this script (gitignored). That is
+the one credential this tool persists, and deliberately so -- the prompted *node* password is
+still held only in memory and never reaches a command line, file, or log.
 
 The project is baked in (this script ships with it); only the *host* environment is
 parameterized -- which node, storage pool, container size, network -- so nothing about a
@@ -27,6 +33,7 @@ import argparse
 import getpass
 import os
 import re
+import secrets
 import shlex
 import sys
 from collections import namedtuple
@@ -113,6 +120,26 @@ def exec_in(ctid: int, script: str) -> None:
     run(f"pct exec {ctid} -- bash -lc {shlex.quote(body)}")
 
 
+def exec_in_stdin(ctid: int, cmd: str, stdin_data: str) -> None:
+    """Run an in-container command, feeding stdin_data to it over the channel's stdin so a
+    secret never lands on a command line or in the printed log (same care as the node
+    password). Fail loud on nonzero exit."""
+    full = f"pct exec {ctid} -- {cmd}"
+    print(f"$ {full}  (stdin withheld)")
+    chan = _CLIENT.get_transport().open_session()
+    chan.set_combine_stderr(True)
+    chan.exec_command(full)
+    chan.sendall(stdin_data.encode())
+    chan.shutdown_write()
+    out = chan.makefile("r")
+    for line in iter(out.readline, ""):
+        sys.stdout.write(line)
+        sys.stdout.flush()
+    rc = chan.recv_exit_status()
+    if rc != 0:
+        sys.exit(f"command failed (exit {rc}) on {SSH_TARGET}: {full}")
+
+
 def project_name(repo_url: str) -> str:
     """A safe install-directory name derived from the repo URL's basename."""
     base = os.path.basename(repo_url.rstrip("/")).removesuffix(".git")
@@ -131,7 +158,7 @@ def preflight() -> None:
 
 
 def ensure_template(template: str, template_storage: str) -> None:
-    print(f"[1/6] Ensuring template {template} is cached on {template_storage}...")
+    print(f"[1/7] Ensuring template {template} is cached on {template_storage}...")
     if template in capture(f"pveam list {template_storage}").stdout:
         print("  already cached.")
         return
@@ -140,7 +167,7 @@ def ensure_template(template: str, template_storage: str) -> None:
 
 
 def create_container(args) -> None:
-    print(f"[2/6] Creating LXC {args.ctid} ({args.hostname})...")
+    print(f"[2/7] Creating LXC {args.ctid} ({args.hostname})...")
     if container_exists(args.ctid):
         if not args.recreate:
             sys.exit(
@@ -175,7 +202,7 @@ def create_container(args) -> None:
 
 
 def wait_for_network(ctid: int) -> None:
-    print("[3/6] Waiting for container network...")
+    print("[3/7] Waiting for container network...")
     exec_in(ctid, 'for i in $(seq 1 30); do '
                   'getent hosts github.com >/dev/null 2>&1 && exit 0; sleep 2; done; '
                   'echo "no network in container after 60s" >&2; exit 1')
@@ -183,7 +210,7 @@ def wait_for_network(ctid: int) -> None:
 
 def install_repo(ctid: int, args, name: str) -> None:
     extras = f"[{args.extras}]" if args.extras else ""
-    print(f"[4/6] Installing {args.repo} ({args.branch}"
+    print(f"[4/7] Installing {args.repo} ({args.branch}"
           f"{', extras: ' + args.extras if args.extras else ''})...")
     packages = "git python3 python3-venv python3-pip numactl ca-certificates"
     if args.apt:
@@ -201,29 +228,74 @@ def install_repo(ctid: int, args, name: str) -> None:
             f"{base}/venv/bin/pip install -q -e {shlex.quote(base + '/src' + extras)}")
 
 
+def setup_ssh(ctid: int, args, name: str, password: str) -> None:
+    print(f"[5/7] Enabling sshd and the {args.ssh_user!r} login on the container...")
+    base = f"/opt/{name}"
+    user = shlex.quote(args.ssh_user)
+    exec_in(ctid,
+            "export DEBIAN_FRONTEND=noninteractive\n"
+            "apt-get install -y -qq openssh-server\n"
+            f"id -u {user} >/dev/null 2>&1 || useradd --create-home --shell /bin/bash {user}\n"
+            f"chown -R {user}:{user} {base}\n"   # the login owns its tools: run, pull, write caches
+            "install -d -m 0755 /etc/ssh/sshd_config.d\n"
+            "printf 'PasswordAuthentication yes\\nPubkeyAuthentication yes\\n'"
+            " > /etc/ssh/sshd_config.d/10-tetradrome.conf\n"
+            "systemctl enable --now ssh\n"
+            "systemctl restart ssh\n")
+    # set the password over stdin so it never appears on a command line or in the log
+    exec_in_stdin(ctid, "chpasswd", f"{args.ssh_user}:{password}\n")
+
+
 def smoke_test(ctid: int, args, name: str) -> None:
     if not args.smoke:
-        print("[5/6] No --smoke command given; skipping smoke test.")
+        print("[6/7] No --smoke command given; skipping smoke test.")
         return
-    print(f"[5/6] Smoke test: {args.smoke}")
+    print(f"[6/7] Smoke test: {args.smoke}")
     base = f"/opt/{name}"
     exec_in(ctid, f"cd {base}/src && {base}/venv/bin/python {args.smoke}")
 
 
-def report(ctid: int, args, name: str) -> None:
-    ip = capture(f"pct exec {ctid} -- hostname -I").stdout.strip().split()[:1]
+def container_ip(ctid: int) -> str:
+    parts = capture(f"pct exec {ctid} -- hostname -I").stdout.strip().split()
+    return parts[0] if parts else ""
+
+
+def write_credentials(args, name: str, password: str, ip: str) -> str:
+    """Write the generated login to a chmod-600 file beside this script (gitignored). This is
+    the only credential the tool persists; the prompted node password is never written."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(script_dir, f"ct{args.ctid}-ssh-credentials.txt")
+    base = f"/opt/{name}"
+    lines = [
+        "# provision_runner.py generated container login -- DO NOT COMMIT (gitignored).",
+        f"host:     {args.hostname} (CT {args.ctid}) on {SSH_TARGET}",
+        f"address:  {ip or '(unknown -- run: pct exec %d -- hostname -I)' % args.ctid}",
+        f"user:     {args.ssh_user}",
+        f"password: {password}",
+        f"repo:     {base}/src",
+        f"venv:     {base}/venv/bin/python",
+        "",
+    ]
+    with open(path, "w") as f:
+        f.write("\n".join(lines))
+    os.chmod(path, 0o600)
+    return path
+
+
+def report(ctid: int, args, name: str, ip: str, creds_path: str) -> None:
     base = f"/opt/{name}"
     python = f"{base}/venv/bin/python"
     bench = f"{base}/src/scripts/bench_grid_floer.py"
-    print("\n[6/6] Done.")
-    print(f"  Container {ctid} is up{(' at ' + ip[0]) if ip else ''} on {SSH_TARGET}.")
+    print("\n[7/7] Done.")
+    print(f"  Container {ctid} is up{(' at ' + ip) if ip else ''} on {SSH_TARGET}.")
     print(f"  Repo at {base}/src, venv python at {python}.")
-    print(f"  (run the commands below on {SSH_TARGET}, or prefix each with: ssh {SSH_TARGET})")
-    print("\n  Run the scaling sweep (synthetic sizes isolate generation; --pin needs Linux):")
-    print(f"    pct exec {ctid} -- {python} {bench} \\")
+    print(f"  SSH login '{args.ssh_user}' enabled (password auth); credentials in:")
+    print(f"    {creds_path}   (chmod 600, gitignored)")
+    print(f"\n  Connect:  ssh {args.ssh_user}@{ip or '<container-ip>'}")
+    print("  Then, e.g. the scaling sweep (synthetic sizes isolate generation; --pin needs Linux):")
+    print(f"    {python} {bench} \\")
     print(f"        --sizes 8 9 10 11 --gen-workers {args.cores} --workers {args.cores} --pin")
-    print(f"\n  Update the code later:")
-    print(f"    pct exec {ctid} -- git -C {base}/src pull")
+    print(f"\n  Update the code later:  git -C {base}/src pull")
 
 
 def main() -> None:
@@ -252,6 +324,8 @@ def main() -> None:
     parser.add_argument("--searchdomain", default="", help="DNS search domain (default: from DHCP)")
     parser.add_argument("--tags", default="tetradrome;compute",
                         help="Proxmox tags (semicolon-separated)")
+    parser.add_argument("--ssh-user", default="tetradrome",
+                        help="container login created with sshd + password auth (default tetradrome)")
     parser.add_argument("--recreate", action="store_true",
                         help="destroy and rebuild if the CTID already exists")
     # Project -- baked in, overridable:
@@ -275,8 +349,12 @@ def main() -> None:
         create_container(args)
         wait_for_network(args.ctid)
         install_repo(args.ctid, args, name)
+        password = secrets.token_urlsafe(18)
+        setup_ssh(args.ctid, args, name, password)
+        ip = container_ip(args.ctid)
+        creds_path = write_credentials(args, name, password, ip)
         smoke_test(args.ctid, args, name)
-        report(args.ctid, args, name)
+        report(args.ctid, args, name, ip, creds_path)
     finally:
         _CLIENT.close()
 
