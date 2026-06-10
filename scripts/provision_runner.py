@@ -11,8 +11,9 @@ It creates an unprivileged Debian LXC (pure compute -- no Docker, nesting, or GP
 Tetradrome into a venv with the full runnable suite by default (every CPU acceleration tier,
 the KnotInfo backend, and pytest -- so the box runs the suite, pytest --heavy and all, with no
 opt-in beyond the test flags), enables sshd with a dedicated password login so the prepared
-box can be used directly over SSH, smoke-tests a tiny sweep, and prints how to run the full
-sweep at the container's core count with NUMA pinning.
+box can be used directly over SSH, advertises its hostname as <name>.local over mDNS (Avahi)
+so it is reachable without a DNS record, smoke-tests a tiny sweep, and prints how to run the
+full sweep at the container's core count with NUMA pinning.
 
 The login is --ssh-user (default 'tetradrome') and owns the install; its password is generated
 fresh each provision and written to a chmod-600 file beside this script (gitignored). That is
@@ -160,7 +161,7 @@ def preflight() -> None:
 
 
 def ensure_template(template: str, template_storage: str) -> None:
-    print(f"[1/7] Ensuring template {template} is cached on {template_storage}...")
+    print(f"[1/8] Ensuring template {template} is cached on {template_storage}...")
     if template in capture(f"pveam list {template_storage}").stdout:
         print("  already cached.")
         return
@@ -169,7 +170,7 @@ def ensure_template(template: str, template_storage: str) -> None:
 
 
 def create_container(args) -> None:
-    print(f"[2/7] Creating LXC {args.ctid} ({args.hostname})...")
+    print(f"[2/8] Creating LXC {args.ctid} ({args.hostname})...")
     if container_exists(args.ctid):
         if not args.recreate:
             sys.exit(
@@ -204,7 +205,7 @@ def create_container(args) -> None:
 
 
 def wait_for_network(ctid: int) -> None:
-    print("[3/7] Waiting for container network...")
+    print("[3/8] Waiting for container network...")
     exec_in(ctid, 'for i in $(seq 1 30); do '
                   'getent hosts github.com >/dev/null 2>&1 && exit 0; sleep 2; done; '
                   'echo "no network in container after 60s" >&2; exit 1')
@@ -212,7 +213,7 @@ def wait_for_network(ctid: int) -> None:
 
 def install_repo(ctid: int, args, name: str) -> None:
     extras = f"[{args.extras}]" if args.extras else ""
-    print(f"[4/7] Installing {args.repo} ({args.branch}"
+    print(f"[4/8] Installing {args.repo} ({args.branch}"
           f"{', extras: ' + args.extras if args.extras else ''})...")
     packages = "git python3 python3-venv python3-pip numactl ca-certificates"
     if args.apt:
@@ -231,7 +232,7 @@ def install_repo(ctid: int, args, name: str) -> None:
 
 
 def setup_ssh(ctid: int, args, name: str, password: str) -> None:
-    print(f"[5/7] Enabling sshd and the {args.ssh_user!r} login on the container...")
+    print(f"[5/8] Enabling sshd and the {args.ssh_user!r} login on the container...")
     base = f"/opt/{name}"
     user = shlex.quote(args.ssh_user)
     exec_in(ctid,
@@ -248,11 +249,22 @@ def setup_ssh(ctid: int, args, name: str, password: str) -> None:
     exec_in_stdin(ctid, "chpasswd", f"{args.ssh_user}:{password}\n")
 
 
+def setup_mdns(ctid: int, mdns_name: str) -> None:
+    print(f"[6/8] Advertising {mdns_name}.local over mDNS (Avahi)...")
+    exec_in(ctid,
+            "export DEBIAN_FRONTEND=noninteractive\n"
+            "apt-get install -y -qq avahi-daemon libnss-mdns\n"
+            # advertise a deterministic host-name (defaults to the container hostname)
+            f"sed -ri 's/^#?host-name=.*/host-name={mdns_name}/' /etc/avahi/avahi-daemon.conf\n"
+            "systemctl enable --now avahi-daemon\n"
+            "systemctl restart avahi-daemon\n")
+
+
 def smoke_test(ctid: int, args, name: str) -> None:
     if not args.smoke:
-        print("[6/7] No --smoke command given; skipping smoke test.")
+        print("[7/8] No --smoke command given; skipping smoke test.")
         return
-    print(f"[6/7] Smoke test: {args.smoke}")
+    print(f"[7/8] Smoke test: {args.smoke}")
     base = f"/opt/{name}"
     exec_in(ctid, f"cd {base}/src && {base}/venv/bin/python {args.smoke}")
 
@@ -262,7 +274,7 @@ def container_ip(ctid: int) -> str:
     return parts[0] if parts else ""
 
 
-def write_credentials(args, name: str, password: str, ip: str) -> str:
+def write_credentials(args, name: str, password: str, ip: str, mdns_name: str) -> str:
     """Write the generated login to a chmod-600 file beside this script (gitignored). This is
     the only credential the tool persists; the prompted node password is never written."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -272,6 +284,7 @@ def write_credentials(args, name: str, password: str, ip: str) -> str:
         "# provision_runner.py generated container login -- DO NOT COMMIT (gitignored).",
         f"host:     {args.hostname} (CT {args.ctid}) on {SSH_TARGET}",
         f"address:  {ip or '(unknown -- run: pct exec %d -- hostname -I)' % args.ctid}",
+        f"mdns:     {mdns_name}.local",
         f"user:     {args.ssh_user}",
         f"password: {password}",
         f"repo:     {base}/src",
@@ -284,16 +297,17 @@ def write_credentials(args, name: str, password: str, ip: str) -> str:
     return path
 
 
-def report(ctid: int, args, name: str, ip: str, creds_path: str) -> None:
+def report(ctid: int, args, name: str, ip: str, creds_path: str, mdns_name: str) -> None:
     base = f"/opt/{name}"
     python = f"{base}/venv/bin/python"
     bench = f"{base}/src/scripts/bench_grid_floer.py"
-    print("\n[7/7] Done.")
+    print("\n[8/8] Done.")
     print(f"  Container {ctid} is up{(' at ' + ip) if ip else ''} on {SSH_TARGET}.")
     print(f"  Repo at {base}/src, venv python at {python}.")
     print(f"  SSH login '{args.ssh_user}' enabled (password auth); credentials in:")
     print(f"    {creds_path}   (chmod 600, gitignored)")
-    print(f"\n  Connect:  ssh {args.ssh_user}@{ip or '<container-ip>'}")
+    print(f"  Advertised over mDNS as {mdns_name}.local (link-local; an mDNS reflector is needed to cross VLANs).")
+    print(f"\n  Connect:  ssh {args.ssh_user}@{ip or '<container-ip>'}   (or  ssh {args.ssh_user}@{mdns_name}.local)")
     print("  Then, e.g. the scaling sweep (synthetic sizes isolate generation; --pin needs Linux):")
     print(f"    {python} {bench} \\")
     print(f"        --sizes 8 9 10 11 --gen-workers {args.cores} --workers {args.cores} --pin")
@@ -330,6 +344,9 @@ def main() -> None:
                         help="Proxmox tags (semicolon-separated)")
     parser.add_argument("--ssh-user", default="tetradrome",
                         help="container login created with sshd + password auth (default tetradrome)")
+    parser.add_argument("--mdns-hostname", default="",
+                        help="hostname advertised over mDNS as <name>.local "
+                        "(default: the container --hostname)")
     parser.add_argument("--recreate", action="store_true",
                         help="destroy and rebuild if the CTID already exists")
     # Project -- baked in, overridable:
@@ -357,10 +374,12 @@ def main() -> None:
         install_repo(args.ctid, args, name)
         password = secrets.token_urlsafe(18)
         setup_ssh(args.ctid, args, name, password)
+        mdns_name = args.mdns_hostname or args.hostname
+        setup_mdns(args.ctid, mdns_name)
         ip = container_ip(args.ctid)
-        creds_path = write_credentials(args, name, password, ip)
+        creds_path = write_credentials(args, name, password, ip, mdns_name)
         smoke_test(args.ctid, args, name)
-        report(args.ctid, args, name, ip, creds_path)
+        report(args.ctid, args, name, ip, creds_path, mdns_name)
     finally:
         _CLIENT.close()
 
