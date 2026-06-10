@@ -229,6 +229,33 @@ def install_repo(ctid: int, args, name: str) -> None:
             f"git clone --depth 1 --branch {shlex.quote(args.branch)} "
             f"{shlex.quote(args.repo)} {base}/src\n"
             f"{base}/venv/bin/pip install -q -e {shlex.quote(base + '/src' + extras)}")
+    verify_install(ctid, args, name)
+
+
+def verify_install(ctid: int, args, name: str) -> None:
+    """Assert step 4's postcondition. pip exits 0 even when a requested extra does not
+    exist -- it prints a WARNING and installs the bare package -- which is a silent
+    fallback this script must not inherit (a missing extra once surfaced only via the
+    optional smoke test, three steps later). So prove the package imports and that the
+    installed metadata defines every requested extra; pip exiting 0 with the extra
+    present implies its dependencies resolved and installed."""
+    print("  verifying the install (package import + requested extras defined)...")
+    base = f"/opt/{name}"
+    requested = [e.strip() for e in args.extras.split(",") if e.strip()]
+    py = "\n".join([
+        "import importlib.metadata as md, sys",
+        f"import {name}" if name.isidentifier() else "",
+        f"requested = {requested!r}",
+        f"branch = {args.branch!r}",
+        f"provided = set(md.metadata({name!r}).get_all('Provides-Extra') or [])",
+        "missing = sorted(set(requested) - provided)",
+        "if missing:",
+        "    sys.exit('FAIL: extras not defined by the package on branch %s: %s. '",
+        "             'pip only warns on an unknown extra and installs the bare package, '",
+        "             'so this install is incomplete.' % (branch, ', '.join(missing)))",
+        "print('install verified: package imports; extras defined:', ', '.join(requested) or '(none requested)')",
+    ])
+    exec_in(ctid, f"{base}/venv/bin/python - <<'PY'\n{py}\nPY\n")
 
 
 def setup_ssh(ctid: int, args, name: str, password: str) -> None:
@@ -236,7 +263,7 @@ def setup_ssh(ctid: int, args, name: str, password: str) -> None:
     base = f"/opt/{name}"
     user = shlex.quote(args.ssh_user)
     exec_in(ctid,
-            "export DEBIAN_FRONTEND=noninteractive\n"
+            "export DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8\n"
             "apt-get install -y -qq openssh-server\n"
             f"id -u {user} >/dev/null 2>&1 || useradd --create-home --shell /bin/bash {user}\n"
             f"chown -R {user}:{user} {base}\n"   # the login owns its tools: run, pull, write caches
@@ -244,7 +271,14 @@ def setup_ssh(ctid: int, args, name: str, password: str) -> None:
             "printf 'PasswordAuthentication yes\\nPubkeyAuthentication yes\\n'"
             " > /etc/ssh/sshd_config.d/10-tetradrome.conf\n"
             "systemctl enable --now ssh\n"
-            "systemctl restart ssh\n")
+            "systemctl restart ssh\n"
+            # assert the postcondition: the unit is active and password auth is effective
+            # in the RUNNING config (apt postinst noise like deb-systemd-invoke errors is
+            # irrelevant once these pass). grep without -q reads all input -- no SIGPIPE
+            # under pipefail -- and echoes the matched line as proof in the log.
+            "systemctl is-active --quiet ssh\n"
+            "sshd -T 2>/dev/null | grep -i '^passwordauthentication yes'\n"
+            "echo 'verified: sshd is active with password auth effective'\n")
     # set the password over stdin so it never appears on a command line or in the log
     exec_in_stdin(ctid, "chpasswd", f"{args.ssh_user}:{password}\n")
 
@@ -252,12 +286,17 @@ def setup_ssh(ctid: int, args, name: str, password: str) -> None:
 def setup_mdns(ctid: int, mdns_name: str) -> None:
     print(f"[6/8] Advertising {mdns_name}.local over mDNS (Avahi)...")
     exec_in(ctid,
-            "export DEBIAN_FRONTEND=noninteractive\n"
+            "export DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8\n"
             "apt-get install -y -qq avahi-daemon libnss-mdns\n"
             # advertise a deterministic host-name (defaults to the container hostname)
             f"sed -ri 's/^#?host-name=.*/host-name={mdns_name}/' /etc/avahi/avahi-daemon.conf\n"
             "systemctl enable --now avahi-daemon\n"
-            "systemctl restart avahi-daemon\n")
+            "systemctl restart avahi-daemon\n"
+            # assert the postcondition rather than trusting the restart's exit alone
+            "systemctl is-active --quiet avahi-daemon\n"
+            "avahi-daemon --check\n"
+            f"grep -x 'host-name={mdns_name}' /etc/avahi/avahi-daemon.conf\n"
+            "echo 'verified: avahi-daemon is active and advertising the host-name above'\n")
 
 
 def smoke_test(ctid: int, args, name: str) -> None:
