@@ -43,12 +43,13 @@ provision = ["paramiko"]
 # Spherogram is kept only as an optional dev cross-check (e.g. an independent
 # Seifert matrix for off-table knots); it is not needed at runtime.
 dev = ["spherogram", "pytest"]
-# all -> everything the suite runs today, with every CPU acceleration tier and the KnotInfo
-# backend, so a provisioned box runs the full suite (pytest --heavy and all) with no opt-in
-# beyond the test flags. Excludes only the genuinely environment-specific pieces: the GPU
-# tier's cupy (CUDA-version- and box-specific; the suite mocks/skips it without hardware) and
-# the compiled Stream-C oracle (floer), which folds in here when that path wires up.
-all = ["tetradrome[accel,jit,knotinfo,test]"]
+# all -> everything the suite runs today plus the Stream-C oracle, with every CPU acceleration
+# tier and the KnotInfo backend, so a provisioned box runs the full suite (pytest --heavy and
+# all) with no opt-in beyond the test flags. floer (knot_floer_homology) ships as a wheel, so it
+# costs nothing to include and the box is ready for the oracle cross-check the moment that path
+# wires up. The sole exclusion is the GPU tier's cupy: CUDA-version- and box-specific, and the
+# suite mocks/skips it without hardware.
+all = ["tetradrome[accel,jit,floer,knotinfo,test]"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
