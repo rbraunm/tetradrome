@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Graded cochain complexes over Q -- the generic-field lane of the back end.
 
 GradedComplex (F2) is the fast lane for Khovanov mod 2 (decision 0003, the bit-set

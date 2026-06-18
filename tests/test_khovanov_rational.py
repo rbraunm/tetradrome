@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Validate the signed rational Khovanov complex (Phase 3, step 3a-2).
 
 Three independent checks on the cube edge signs and the rational lane:

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Validate native F2 Khovanov homology against KnotInfo (Phase 2c).
 
 The expected value comes from knotinfo_backend.known_answer, which derives the mod-2

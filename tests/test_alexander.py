@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Alexander polynomial: det(V - t*V^T) from the Collins matrix, canonicalized.
 
 Coefficients are ascending (constant term first), in the canonical form KnotInfo's

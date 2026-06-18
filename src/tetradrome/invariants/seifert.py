@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Seifert matrices and the invariants derived from them, in exact arithmetic
 (no Sage, no numpy).
 

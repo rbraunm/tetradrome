@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Tetradrome: a reproducible, audit-friendly workbench for knot invariants.
 
 See SPEC.md for the full design. Public surface grows as components land; today it

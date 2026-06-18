@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Scaling study for the grid (knot Floer) engine.
 
 Measures, per grid, the two costs that the n! generator count splits into -- *generation*

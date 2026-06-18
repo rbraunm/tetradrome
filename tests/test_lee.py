@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Tests for the Lee deformation (engines/khovanov/lee.py).
 
 The validation is Lee's theorem: the Lee homology of a knot is exactly 2-dimensional

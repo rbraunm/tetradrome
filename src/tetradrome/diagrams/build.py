@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Build a normalized diagram from a knot name or a raw PD code.
 
 Tabulated knots are sourced from KnotInfo (its `pd_notation`); raw PD input is

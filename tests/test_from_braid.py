@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """from_braid: braid-word input, including off-table knots.
 
 The off-table checks below use torus knots, whose invariants have documented closed

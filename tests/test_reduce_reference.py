@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Tests for the F2 reference reducer (algebra/reduce_reference.py).
 
 The reducer is the gold-master every faster reducer must later match, so these check

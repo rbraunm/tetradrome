@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Agreement tests for the grid engine's accelerated paths (engine Phase 6 / Phase 5 tiers).
 
 The whole acceleration argument rests on identical answers: switching reducer backend,

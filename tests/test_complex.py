@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Tests for the graded chain complex data structure (algebra/complex.py).
 
 These verify real behavior: a genuinely acyclic complex passes the d^2 = 0 check, a

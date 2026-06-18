@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """The Rasmussen s-invariant, read off the quantum filtration on Lee homology.
 
 For a knot, Lee homology is 2-dimensional over Q and concentrated in homological degree
