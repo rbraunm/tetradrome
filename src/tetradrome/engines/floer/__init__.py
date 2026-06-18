@@ -16,16 +16,23 @@ from .gradings import alexander, alexander_euler_characteristic, maslov
 from .grid import GridDiagram
 from .homology import grid_complexes, grid_poincare, hfk_hat, reduce_complexes, seifert_genus
 from .roster import floer_roster
-from .scaling import parallel_grid_complexes, staircase_grid
+from .scaling import (
+    dense_reduction_bytes,
+    grading_histogram,
+    parallel_grid_complexes,
+    staircase_grid,
+)
 from .tau import tau
 
 __all__ = [
     "GridDiagram",
     "alexander",
     "alexander_euler_characteristic",
+    "dense_reduction_bytes",
     "differential",
     "filtered_differential",
     "floer_roster",
+    "grading_histogram",
     "grid_complexes",
     "grid_poincare",
     "hfk_hat",

@@ -32,6 +32,8 @@ from collections import defaultdict
 
 from tetradrome.engines.floer import (
     GridDiagram,
+    dense_reduction_bytes,
+    grading_histogram,
     grid_complexes,
     parallel_grid_complexes,
     reduce_complexes,
@@ -205,11 +207,10 @@ def main():
     parser.add_argument("--gen-workers", type=int, default=1, help="generation worker processes")
     parser.add_argument("--pin", action="store_true", help="NUMA-pin reduction workers (Linux)")
     parser.add_argument("--mem-budget-gib", type=float, default=0.0,
-                        help="skip any size whose projected peak exceeds this many GiB "
-                             "(0 = no guard); fails early instead of OOMing mid-sweep")
-    parser.add_argument("--bytes-per-gen", type=float, default=3000.0,
-                        help="bytes-per-generator used for the projection (measured ~2.6 KiB "
-                             "at n=10, climbing with n; calibrate from a completed row)")
+                        help="skip any size whose projected peak dense reduction memory exceeds "
+                             "this many GiB (0 = no guard); refuses up front instead of OOMing "
+                             "mid-sweep. The projection is the exact dense-matrix bound from the "
+                             "grading dimensions (gradings-only histogram, memory-safe).")
     args = parser.parse_args()
 
     if args.pin and not hasattr(os, "sched_setaffinity"):
@@ -241,12 +242,14 @@ def main():
         return f"{value:>8.1f}" if value is not None else f"{'n/a':>8}"
 
     for name, grid in targets:
-        projected_gib = math.factorial(grid.n) * args.bytes_per_gen / 2**30
-        if args.mem_budget_gib and projected_gib > args.mem_budget_gib:
-            print(f"{name:<13}{grid.n:>3}{math.factorial(grid.n):>13,}"
-                  f"   skipped: ~{projected_gib:.1f} GiB projected > "
-                  f"{args.mem_budget_gib:.1f} GiB budget")
-            continue
+        if args.mem_budget_gib:
+            projected_gib = dense_reduction_bytes(
+                grading_histogram(grid, args.gen_workers)) / 2**30
+            if projected_gib > args.mem_budget_gib:
+                print(f"{name:<13}{grid.n:>3}{math.factorial(grid.n):>13,}"
+                      f"   skipped: ~{projected_gib:.1f} GiB projected dense reduction > "
+                      f"{args.mem_budget_gib:.1f} GiB budget")
+                continue
         r = measure(grid, backend=args.backend, workers=args.workers, pin=args.pin,
                     gen_workers=args.gen_workers)
         m = r["mem"]

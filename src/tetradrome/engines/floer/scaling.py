@@ -102,3 +102,63 @@ def parallel_grid_complexes(grid, workers: int) -> dict:
             for state, m, a, targets in chunk:
                 by_alexander[a].append((state, -m, targets))   # degree = -Maslov
     return _build_complexes(by_alexander)
+
+
+def _grading_slice(args):
+    """Count generators per (Alexander, degree=-Maslov) over a slice -- gradings only, no
+    differential, so this is O(slice) time and O(gradings) memory."""
+    o_markers, x_markers, start, stop = args
+    grid = GridDiagram(o_markers, x_markers)
+    hist: dict = defaultdict(int)
+    for k in range(start, stop):
+        state = _unrank(k, grid.n)
+        hist[(alexander(grid, state), -maslov(grid, state))] += 1
+    return dict(hist)
+
+
+def grading_histogram(grid, workers: int = 1) -> dict:
+    """Generator count per ``(Alexander, degree)`` grading over all n! states, gradings only.
+
+    Builds no differentials and no matrices, so it is memory-safe at any n (it stores only the
+    O(n^2) grading counts). The dimensions it returns are what set the reducer's dense-matrix
+    sizes, so this is the input to ``dense_reduction_bytes`` -- a memory projection that can be
+    computed for sizes far too large to actually generate or reduce.
+    """
+    total = math.factorial(grid.n)
+    if workers <= 1 or total < 2 * workers:
+        return _grading_slice((grid.O, grid.X, 0, total))
+    slices = [
+        (grid.O, grid.X, total * w // workers, total * (w + 1) // workers)
+        for w in range(workers)
+    ]
+    merged: dict = defaultdict(int)
+    with Pool(processes=workers) as pool:
+        for part in pool.imap_unordered(_grading_slice, slices, chunksize=1):
+            for key, count in part.items():
+                merged[key] += count
+    return dict(merged)
+
+
+def dense_reduction_bytes(histogram: dict) -> int:
+    """Worst-case co-resident dense F2 reduction memory (bytes) implied by a grading histogram.
+
+    The packed reducer stores the degree-d boundary matrix of Alexander grading a as
+    ``dims[a][d]`` bitmask columns of ``ceil(dims[a][d+1] / 64)`` uint64 words each, so its
+    size is set by the DIMENSIONS, not the (sparse) differential. A worker reduces one grading
+    at a time, degree by degree, so its peak is the largest such matrix in its grading; with
+    more workers than Alexander gradings every grading can be co-resident, so the worst case is
+    the sum over gradings of those per-grading peaks. This term scales as D^2 and is what runs
+    a large grid out of memory (validated: it is the bulk of the measured reduction footprint
+    at n=10, and explodes past a single machine by n=12).
+    """
+    by_alexander: dict = defaultdict(dict)
+    for (a_grading, degree), count in histogram.items():
+        by_alexander[a_grading][degree] = count
+    total = 0
+    for degrees in by_alexander.values():
+        peak = 0
+        for degree, ncols in degrees.items():
+            nwords = max(1, (degrees.get(degree + 1, 0) + 63) // 64)
+            peak = max(peak, ncols * nwords * 8)
+        total += peak
+    return total
