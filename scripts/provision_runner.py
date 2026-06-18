@@ -10,15 +10,19 @@ authenticated connection is opened and reused for every command.
 It creates an unprivileged Debian LXC (pure compute -- no Docker, nesting, or GPU), installs
 Tetradrome into a venv with the full runnable suite by default (every CPU acceleration tier,
 the KnotInfo backend, and pytest -- so the box runs the suite, pytest --heavy and all, with no
-opt-in beyond the test flags), enables sshd with a dedicated password login so the prepared
-box can be used directly over SSH, advertises its hostname as <name>.local over mDNS (Avahi)
-so it is reachable without a DNS record, smoke-tests a tiny sweep, and prints how to run the
-full sweep at the container's core count with NUMA pinning.
+opt-in beyond the test flags), enables sshd with a dedicated login (password + key auth) so the
+prepared box can be used directly over SSH, advertises its hostname as <name>.local over mDNS
+(Avahi) so it is reachable without a DNS record, smoke-tests a tiny sweep, and prints how to run
+the full sweep at the container's core count with NUMA pinning.
 
-The login is --ssh-user (default 'tetradrome') and owns the install; its password is generated
-fresh each provision and written to a chmod-600 file beside this script (gitignored). That is
-the one credential this tool persists, and deliberately so -- the prompted *node* password is
-still held only in memory and never reaches a command line, file, or log.
+The login is --ssh-user (default 'tetradrome') and owns the install. Each provision generates,
+fresh, both a password and an ed25519 keypair: the password and the private key are written to
+chmod-600 files beside this script (gitignored), and the public key is installed into the login's
+authorized_keys, so the box accepts both password and key auth. The private key is generated on
+this controller and never leaves it -- only the public line is pushed to the container -- and
+`ssh -i <ctNNN-ssh-key>` (or paramiko with that key) drives the box non-interactively. These two
+generated *container* credentials are what the tool persists, deliberately; the prompted *node*
+password is still held only in memory and never reaches a command line, file, or log.
 
 The project is baked in (this script ships with it); only the *host* environment is
 parameterized -- which node, storage pool, container size, network -- so nothing about a
@@ -43,6 +47,10 @@ from collections import namedtuple
 
 try:
     import paramiko
+    # cryptography ships as a hard paramiko dependency, so it is always present here.
+    # paramiko 5.x has no ed25519 generator, so the keypair is built with cryptography.
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 except ImportError:
     sys.exit(
         "provision_runner needs paramiko (the pure-Python SSH client).\n"
@@ -141,6 +149,42 @@ def exec_in_stdin(ctid: int, cmd: str, stdin_data: str) -> None:
     rc = chan.recv_exit_status()
     if rc != 0:
         sys.exit(f"command failed (exit {rc}) on {SSH_TARGET}: {full}")
+
+
+def generate_keypair(comment: str) -> tuple[str, str]:
+    """Generate a fresh ed25519 keypair on this controller. Returns (OpenSSH private-key
+    text, authorized_keys public line). The private key is created here and never leaves
+    this machine -- only the public line is pushed to the container."""
+    key = Ed25519PrivateKey.generate()
+    private_text = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.OpenSSH,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode()
+    public_ssh = key.public_key().public_bytes(
+        encoding=serialization.Encoding.OpenSSH,
+        format=serialization.PublicFormat.OpenSSH,
+    ).decode()
+    return private_text, f"{public_ssh} {comment}"
+
+
+def install_authorized_key(ctid: int, args, public_line: str) -> None:
+    """Install the provisioning public key into the login's authorized_keys (key auth, in
+    addition to the password). The public line is not secret; its postcondition is asserted."""
+    print(f"  installing the provisioning SSH key for {args.ssh_user!r} (key auth)...")
+    user = shlex.quote(args.ssh_user)
+    key_q = shlex.quote(public_line)
+    exec_in(ctid,
+            f"user={user}\n"
+            'home=$(getent passwd "$user" | cut -d: -f6)\n'
+            '[ -n "$home" ] || { echo "no home dir for $user" >&2; exit 1; }\n'
+            'install -d -m 700 -o "$user" -g "$user" "$home/.ssh"\n'
+            f'printf "%s\\n" {key_q} > "$home/.ssh/authorized_keys"\n'
+            'chmod 600 "$home/.ssh/authorized_keys"\n'
+            'chown "$user":"$user" "$home/.ssh/authorized_keys"\n'
+            # postcondition: the key really landed (grep -F exits nonzero -> set -e fails loud)
+            f'grep -qF {key_q} "$home/.ssh/authorized_keys"\n'
+            'echo "verified: authorized_keys installed for $user"\n')
 
 
 def project_name(repo_url: str) -> str:
@@ -258,7 +302,7 @@ def verify_install(ctid: int, args, name: str) -> None:
     exec_in(ctid, f"{base}/venv/bin/python - <<'PY'\n{py}\nPY\n")
 
 
-def setup_ssh(ctid: int, args, name: str, password: str) -> None:
+def setup_ssh(ctid: int, args, name: str, password: str, public_line: str) -> None:
     print(f"[5/8] Enabling sshd and the {args.ssh_user!r} login on the container...")
     base = f"/opt/{name}"
     user = shlex.quote(args.ssh_user)
@@ -281,6 +325,7 @@ def setup_ssh(ctid: int, args, name: str, password: str) -> None:
             "echo 'verified: sshd is active with password auth effective'\n")
     # set the password over stdin so it never appears on a command line or in the log
     exec_in_stdin(ctid, "chpasswd", f"{args.ssh_user}:{password}\n")
+    install_authorized_key(ctid, args, public_line)
 
 
 def setup_mdns(ctid: int, mdns_name: str) -> None:
@@ -313,9 +358,28 @@ def container_ip(ctid: int) -> str:
     return parts[0] if parts else ""
 
 
-def write_credentials(args, name: str, password: str, ip: str, mdns_name: str) -> str:
-    """Write the generated login to a chmod-600 file beside this script (gitignored). This is
-    the only credential the tool persists; the prompted node password is never written."""
+def write_private_key(ctid: int, private_text: str, public_line: str) -> str:
+    """Persist the generated keypair beside this script (gitignored): the private key at
+    ctNNN-ssh-key (chmod 600 from creation, no world-readable window) and its public line
+    at ctNNN-ssh-key.pub. Returns the private-key path -- what a client passes to ssh -i."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    priv_path = os.path.join(script_dir, f"ct{ctid}-ssh-key")
+    pub_path = priv_path + ".pub"
+    # create the private key already-restricted rather than chmod-ing an open file afterward
+    fd = os.open(priv_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(private_text)
+    os.chmod(priv_path, 0o600)
+    with open(pub_path, "w") as f:
+        f.write(public_line + "\n")
+    return priv_path
+
+
+def write_credentials(args, name: str, password: str, ip: str, mdns_name: str,
+                      key_path: str) -> str:
+    """Write the generated login to a chmod-600 file beside this script (gitignored). The
+    password and the private key are the credentials the tool persists; the prompted node
+    password is never written."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     path = os.path.join(script_dir, f"ct{args.ctid}-ssh-credentials.txt")
     base = f"/opt/{name}"
@@ -326,6 +390,7 @@ def write_credentials(args, name: str, password: str, ip: str, mdns_name: str) -
         f"mdns:     {mdns_name}.local",
         f"user:     {args.ssh_user}",
         f"password: {password}",
+        f"ssh-key:  {key_path}   (ssh -i this; key auth, in addition to the password)",
         f"repo:     {base}/src",
         f"venv:     {base}/venv/bin/python",
         "",
@@ -336,17 +401,22 @@ def write_credentials(args, name: str, password: str, ip: str, mdns_name: str) -
     return path
 
 
-def report(ctid: int, args, name: str, ip: str, creds_path: str, mdns_name: str) -> None:
+def report(ctid: int, args, name: str, ip: str, creds_path: str, key_path: str,
+           mdns_name: str) -> None:
     base = f"/opt/{name}"
     python = f"{base}/venv/bin/python"
     bench = f"{base}/src/scripts/bench_grid_floer.py"
+    host = ip or mdns_name + ".local"
     print("\n[8/8] Done.")
     print(f"  Container {ctid} is up{(' at ' + ip) if ip else ''} on {SSH_TARGET}.")
     print(f"  Repo at {base}/src, venv python at {python}.")
-    print(f"  SSH login '{args.ssh_user}' enabled (password auth); credentials in:")
+    print(f"  SSH login '{args.ssh_user}' enabled (password + key auth); credentials in:")
     print(f"    {creds_path}   (chmod 600, gitignored)")
+    print(f"  Provisioning key (private, chmod 600, gitignored):")
+    print(f"    {key_path}   (and {key_path}.pub)")
     print(f"  Advertised over mDNS as {mdns_name}.local (link-local; an mDNS reflector is needed to cross VLANs).")
-    print(f"\n  Connect:  ssh {args.ssh_user}@{ip or '<container-ip>'}   (or  ssh {args.ssh_user}@{mdns_name}.local)")
+    print(f"\n  Connect with the key:  ssh -i {key_path} {args.ssh_user}@{host}")
+    print(f"  Or with the password:  ssh {args.ssh_user}@{ip or '<container-ip>'}   (or  ssh {args.ssh_user}@{mdns_name}.local)")
     print("  Then, e.g. the scaling sweep (synthetic sizes isolate generation; --pin needs Linux):")
     print(f"    {python} {bench} \\")
     print(f"        --sizes 8 9 10 11 --gen-workers {args.cores} --workers {args.cores} --pin")
@@ -412,13 +482,15 @@ def main() -> None:
         wait_for_network(args.ctid)
         install_repo(args.ctid, args, name)
         password = secrets.token_urlsafe(18)
-        setup_ssh(args.ctid, args, name, password)
+        private_text, public_line = generate_keypair(f"tetradrome-provisioner-ct{args.ctid}")
+        setup_ssh(args.ctid, args, name, password, public_line)
         mdns_name = args.mdns_hostname or args.hostname
         setup_mdns(args.ctid, mdns_name)
         ip = container_ip(args.ctid)
-        creds_path = write_credentials(args, name, password, ip, mdns_name)
+        key_path = write_private_key(args.ctid, private_text, public_line)
+        creds_path = write_credentials(args, name, password, ip, mdns_name, key_path)
         smoke_test(args.ctid, args, name)
-        report(args.ctid, args, name, ip, creds_path, mdns_name)
+        report(args.ctid, args, name, ip, creds_path, key_path, mdns_name)
     finally:
         _CLIENT.close()
 
