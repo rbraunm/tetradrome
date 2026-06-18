@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """The Ozsvath-Szabo tau invariant from grid homology (engine Phase 6).
 
 tau comes from the Alexander *filtration*, not the bigraded associated graded. Take the grid

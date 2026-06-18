@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Tests for complex-size prediction and backend routing (engine Phase 5).
 
 predict_size reports exact structural facts, so it is checked against the actual complex.

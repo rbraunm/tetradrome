@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """PD-code normalization and validation.
 
 Fails loudly on malformed input -- we never repair or guess a PD code

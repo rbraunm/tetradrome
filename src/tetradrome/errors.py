@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Public error types.
 
 No silent fallbacks: Tetradrome raises loudly rather than returning a plausible

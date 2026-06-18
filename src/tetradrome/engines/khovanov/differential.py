@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """The Khovanov differential, assembled into one complex per quantum grading.
 
 Each edge of the cube flips a single crossing 0 -> 1, which (compared as partitions of

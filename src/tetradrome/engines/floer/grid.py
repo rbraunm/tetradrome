@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Grid diagrams for combinatorial knot Floer homology (engine Phase 6).
 
 A grid diagram is an n x n toroidal grid with one O and one X marker in every row and

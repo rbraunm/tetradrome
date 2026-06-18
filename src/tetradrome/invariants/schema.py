@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """The result schema (SPEC 11).
 
 Nothing is returned as a bare value: every invariant result carries how it was

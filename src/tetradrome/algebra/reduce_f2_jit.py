@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Numba-JIT bit-packed F2 reducer (engine Phase 5).
 
 The reduction logic lives in `_f2_rank_packed_impl`, written to be valid both as plain

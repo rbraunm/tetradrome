@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Grid homology, reduced to knot Floer homology HFK-hat (Phase 6).
 
 The differential preserves the Alexander grading and lowers Maslov by one, so each Alexander

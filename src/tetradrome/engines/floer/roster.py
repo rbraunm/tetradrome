@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """The KnotInfo validation roster for the grid-Floer engine.
 
 A knot is in the roster when KnotInfo tabulates everything the engine validates against --

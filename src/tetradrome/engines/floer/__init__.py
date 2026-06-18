@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Combinatorial knot Floer homology via grid diagrams (engine Phase 6).
 
 A peer front end to Khovanov: a grid diagram emits graded F2 complexes (one per Alexander

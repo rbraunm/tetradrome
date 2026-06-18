@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Khovanov front end: enhanced states, gradings, and (later) the differential.
 
 Emits graded chain complexes (one per quantum grading) for the shared algebra back end

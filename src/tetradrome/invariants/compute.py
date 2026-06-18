@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Compute a knot invariant and return a validated, provenanced result.
 
 Validate-by-default (decisions/0004): with validate=True a result that has no

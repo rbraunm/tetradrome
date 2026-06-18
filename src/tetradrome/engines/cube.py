@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """The resolution-cube skeleton: a PD diagram, a 0/1 choice at each crossing, and
 the circles that result.
 

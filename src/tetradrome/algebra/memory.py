@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Complex-size prediction and backend routing (engine Phase 5).
 
 `predict_size` reads a built complex and reports exact structural facts -- per-degree

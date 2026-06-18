@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Tests for the grid tau invariant (engine Phase 6).
 
 tau matches KnotInfo's Ozsvath-Szabo tau directly, including the sign, over the derived roster

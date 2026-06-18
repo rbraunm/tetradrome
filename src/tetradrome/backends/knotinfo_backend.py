@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """KnotInfo backend.
 
 Read access to the offline KnotInfo table (`database_knotinfo`). Serves two roles:

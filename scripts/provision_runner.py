@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Provision a lightweight Proxmox LXC to run the Tetradrome grid scaling sweep.
 
 Run this from anywhere; it drives a Proxmox node over SSH (--host root@<node>, required) and

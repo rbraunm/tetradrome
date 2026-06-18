@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Scaling helpers for the grid engine (engine Phase 6).
 
 Grid homology is bounded by the n! generators, in two separable costs: *generation*

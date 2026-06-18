@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Validate the Khovanov gradings (engines/khovanov/gradings.py).
 
 The decisive, coefficient-independent check on the enhanced states and the (i, j)

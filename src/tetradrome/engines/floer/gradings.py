@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Maslov and Alexander gradings of grid generators (engine Phase 6).
 
 For point sets in the plane, write ``_sw(A, B)`` for the number of pairs (a in A, b in B)

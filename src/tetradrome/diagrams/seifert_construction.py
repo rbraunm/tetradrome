@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Native Seifert's algorithm, stage 1: PD code -> oriented Seifert structure.
 
 Recovers orientation and crossing signs from the PD code, performs the

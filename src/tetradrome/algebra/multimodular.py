@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Multimodular rational rank and homology (engine Phase 5).
 
 The rational lane needs only homology *dimensions*, and for an integer matrix the rank over

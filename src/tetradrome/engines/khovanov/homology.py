@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Khovanov homology over F2: reduce each quantum-graded complex to its Betti numbers.
 
 This closes the first full faithful path -- diagram -> cube -> enhanced states ->

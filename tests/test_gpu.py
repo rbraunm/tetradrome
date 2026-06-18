@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Tests for GPU detection, auto-configuration, and enablement guidance.
 
 The probes run against whatever hardware the host actually has: they must never raise,

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Tests for the bit-packed F2 reducers and the tier registry (engine Phase 5).
 
 The whole point of an acceleration tier is that it is faster *and indistinguishable* from

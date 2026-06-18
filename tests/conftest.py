@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Shared pytest fixtures and the heavy-tier gate.
 
 Default runs must be safe in an ephemeral, memory- and time-limited sandbox. Some

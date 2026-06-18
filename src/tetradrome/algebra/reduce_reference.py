@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Pure-Python F2 reference reducer: homology of a GradedComplex by rank counting.
 
 This is the faithful reference (homology-engine design section 7, Phase 1) --

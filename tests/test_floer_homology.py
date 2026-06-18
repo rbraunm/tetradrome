@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Tests for the grid differential and its homology (engine Phase 6).
 
 Structural: the differential lowers Maslov by one, preserves Alexander, and squares to zero.

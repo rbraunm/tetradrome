@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Validate the Rasmussen s-invariant against KnotInfo (Phase 3, step 3c).
 
 s(mirror K) = -s(K), and our Khovanov/Lee gradings are the mirror of KnotInfo's table

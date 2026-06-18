@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Pure-Python Q reference reducer: homology of a RationalComplex by rank counting.
 
 The rational counterpart of reduce_reference.f2_rank / homology, and the same faithful

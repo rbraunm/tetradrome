@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Tests for the multimodular rational path (engine Phase 5).
 
 Correctness is equivalence to the exact rational reducer: multimodular ranks and homology

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Multi-core reduction across independent complexes (engine Phase 5).
 
 Homology splits into independent units -- each quantum grading of a knot, and each knot in
