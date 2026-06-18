@@ -154,6 +154,26 @@ def exec_in_stdin(ctid: int, cmd: str, stdin_data: str) -> None:
         sys.exit(f"command failed (exit {rc}) on {SSH_TARGET}: {full}")
 
 
+def set_install_service_policy(ctid: int) -> None:
+    """Install a policy-rc.d that returns 101 so apt maintainer scripts do not (re)start
+    services during package install. deb-systemd-invoke honors this (it execs the helper
+    before any systemctl call and skips on 101), which is what otherwise prints the
+    'disabled or static unit' note and the 'Could not execute systemctl' die on an openssh
+    upgrade. We start every service we need explicitly afterward, with verification, and a
+    direct systemctl call ignores policy-rc.d -- so this removes a half-managed path we do
+    not want, never a working one."""
+    print("[*] Suppressing apt service auto-start (policy-rc.d 101); services started explicitly below.")
+    exec_in(ctid,
+            "printf '#!/bin/sh\\nexit 101\\n' > /usr/sbin/policy-rc.d\n"
+            "chmod 0755 /usr/sbin/policy-rc.d\n"
+            "test -x /usr/sbin/policy-rc.d\n")
+
+
+def clear_install_service_policy(ctid: int) -> None:
+    """Remove the install-time policy-rc.d so normal service management resumes on the box."""
+    exec_in(ctid, "rm -f /usr/sbin/policy-rc.d\n")
+
+
 def generate_keypair(comment: str) -> tuple[str, str]:
     """Generate a fresh ed25519 keypair on this controller. Returns (OpenSSH private-key
     text, authorized_keys public line). The private key is created here and never leaves
@@ -483,12 +503,14 @@ def main() -> None:
         ensure_template(args.template, args.template_storage)
         create_container(args)
         wait_for_network(args.ctid)
+        set_install_service_policy(args.ctid)   # brackets every apt install below
         install_repo(args.ctid, args, name)
         password = secrets.token_urlsafe(18)
         private_text, public_line = generate_keypair(f"tetradrome-provisioner-ct{args.ctid}")
         setup_ssh(args.ctid, args, name, password, public_line)
         mdns_name = args.mdns_hostname or args.hostname
         setup_mdns(args.ctid, mdns_name)
+        clear_install_service_policy(args.ctid)  # apt installs done; restore normal service mgmt
         ip = container_ip(args.ctid)
         key_path = write_private_key(args.ctid, private_text, public_line)
         creds_path = write_credentials(args, name, password, ip, mdns_name, key_path)
