@@ -149,7 +149,7 @@ def dense_reduction_bytes(histogram: dict) -> int:
     more workers than Alexander gradings every grading can be co-resident, so the worst case is
     the sum over gradings of those per-grading peaks. This term scales as D^2 and is what runs
     a large grid out of memory (validated: it is the bulk of the measured reduction footprint
-    at n=10, and explodes past a single machine by n=12).
+    at n=10, and exceeds a 256 GiB box by n=11).
     """
     by_alexander: dict = defaultdict(dict)
     for (a_grading, degree), count in histogram.items():

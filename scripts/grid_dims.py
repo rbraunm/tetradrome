@@ -8,9 +8,9 @@ bytes the packed reducer would allocate. The model and its inputs live in the en
 (``grading_histogram`` / ``dense_reduction_bytes``); this is the reporting front end, and the
 same projection backs ``bench_grid_floer.py``'s ``--mem-budget-gib`` guard.
 
-The dense matrices scale as D^2, so they are negligible at small n, dominate by n=10, and run a
-single machine out of memory by n=11 -- this predicts that fit/OOM boundary at sizes too large
-to run.
+The dense matrices scale as D^2, so they are negligible at small n, dominate the footprint by
+n=10, and exceed a 256 GiB box by n=11 -- the projection predicts that fit/OOM boundary at
+sizes too large to run.
 """
 from __future__ import annotations
 
