@@ -12,7 +12,7 @@ from collections import defaultdict
 
 import pytest
 
-from tetradrome.algebra import dense_reduction_bytes, predict_size
+from tetradrome.algebra import dense_reduction_bytes, max_grading_bytes, predict_size
 from tetradrome.engines.floer import (
     GridDiagram,
     grid_complexes,
@@ -86,3 +86,6 @@ def test_histogram_cost_matches_built_complex_cost(name):
 
     built = sum(predict_size(cx).packed_peak_bytes for cx in complexes.values())
     assert dense_reduction_bytes(histogram) == built
+    assert max_grading_bytes(histogram) == max(
+        predict_size(cx).packed_peak_bytes for cx in complexes.values()
+    )

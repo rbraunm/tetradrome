@@ -4,38 +4,28 @@
 
 Histograms generators per (Alexander, degree) grading for a staircase grid WITHOUT building
 differentials or matrices (memory-safe at any n), then reports the exact dense reduction-matrix
-bytes the packed reducer would allocate. The model and its inputs live in the engine
-(``grading_histogram`` / ``dense_reduction_bytes``); this is the reporting front end, and the
-same projection backs ``bench_grid_floer.py``'s ``--mem-budget-gib`` guard.
+bytes the packed reducer would allocate. The histogram comes from the engine
+(``grading_histogram``); the cost functions live in the algebra layer (``max_grading_bytes``,
+``dense_reduction_bytes``), and the same model backs ``bench_grid_floer.py``'s
+``--mem-budget-gib`` guard.
 
-The dense matrices scale as D^2, so they are negligible at small n, dominate the footprint by
-n=10, and exceed a 256 GiB box by n=11 -- the projection predicts that fit/OOM boundary at
-sizes too large to run.
+Two figures: ``wavesFloor`` is the largest single grading's reduction peak -- the minimum
+budget at which the workload is reducible at all (the bounded scheduler runs gradings in
+deterministic waves, so a size fits when its largest grading fits). ``denseCoresident`` is the
+sum over gradings, the memory only an unbounded number of co-resident workers would need. The
+dense matrices scale as D^2, negligible at small n and dominant by n=10, so the projection
+predicts the fit/OOM boundary at sizes too large to run.
 """
 from __future__ import annotations
 
 import argparse
 import math
-from collections import defaultdict
 
-from tetradrome.algebra import dense_reduction_bytes
+from tetradrome.algebra import dense_reduction_bytes, max_grading_bytes
 from tetradrome.engines.floer import (
     grading_histogram,
     staircase_grid,
 )
-
-
-def _report_fields(histogram: dict) -> tuple[int, int]:
-    """(#Alexander gradings, largest single dense matrix in bytes) for the detailed table."""
-    by_alexander: dict = defaultdict(dict)
-    for (a_grading, degree), count in histogram.items():
-        by_alexander[a_grading][degree] = count
-    largest = 0
-    for degrees in by_alexander.values():
-        for degree, ncols in degrees.items():
-            nwords = max(1, (degrees.get(degree + 1, 0) + 63) // 64)
-            largest = max(largest, ncols * nwords * 8)
-    return len(by_alexander), largest
 
 
 def main() -> None:
@@ -44,21 +34,23 @@ def main() -> None:
     parser.add_argument("--sizes", nargs="+", type=int, required=True)
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--limit-gib", type=float, default=200.0,
-                        help="memory budget to compare the dense bound against")
+                        help="memory budget; a size fits when its largest single grading fits "
+                             "(the bounded scheduler runs the rest in waves), OOM otherwise")
     args = parser.parse_args()
 
     gib = 2 ** 30
-    header = (f"{'n':>3}{'n!':>15}{'alexGradings':>14}{'largestMat(GiB)':>17}"
+    header = (f"{'n':>3}{'n!':>15}{'alexGradings':>14}{'wavesFloor(GiB)':>17}"
               f"{'denseCoresident(GiB)':>22}{'verdict':>10}")
     print(header)
     print("-" * len(header))
     for n in args.sizes:
         histogram = grading_histogram(staircase_grid(n), args.workers)
-        gradings, largest = _report_fields(histogram)
+        gradings = len({a for a, _ in histogram})
+        floor_gib = max_grading_bytes(histogram) / gib
         coresident_gib = dense_reduction_bytes(histogram) / gib
-        verdict = "OOM" if coresident_gib > args.limit_gib else "fits"
+        verdict = "fits" if floor_gib <= args.limit_gib else "OOM"
         print(f"{n:>3}{math.factorial(n):>15,}{gradings:>14}"
-              f"{largest / gib:>17.2f}{coresident_gib:>22.2f}{verdict:>10}")
+              f"{floor_gib:>17.2f}{coresident_gib:>22.2f}{verdict:>10}")
 
 
 if __name__ == "__main__":

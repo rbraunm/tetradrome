@@ -30,7 +30,7 @@ import threading
 import time
 from collections import defaultdict
 
-from tetradrome.algebra import dense_reduction_bytes
+from tetradrome.algebra import max_grading_bytes
 from tetradrome.engines.floer import (
     GridDiagram,
     grading_histogram,
@@ -164,7 +164,7 @@ class _TreeSampler:
             self._stop.wait(self._interval)
 
 
-def measure(grid, *, backend, workers, pin, gen_workers, interval=0.1):
+def measure(grid, *, backend, workers, pin, gen_workers, ram_budget_bytes=None, interval=0.1):
     """Run generation then reduction; return timings, homology support size, and a per-phase
     memory breakdown (parent PSS vs worker-children PSS vs cgroup peak), in MiB."""
     sampler = _TreeSampler(os.getpid(), interval) if _proc_metrics_available() else None
@@ -182,7 +182,8 @@ def measure(grid, *, backend, workers, pin, gen_workers, interval=0.1):
         if sampler:
             sampler.reset()
         poincare, red_s = _time(
-            lambda: reduce_complexes(complexes, backend=backend, workers=workers, pin=pin)
+            lambda: reduce_complexes(complexes, backend=backend, workers=workers, pin=pin,
+                                     ram_budget_bytes=ram_budget_bytes)
         )
         red_mem = sampler.snapshot() if sampler else None
     finally:
@@ -207,10 +208,12 @@ def main():
     parser.add_argument("--gen-workers", type=int, default=1, help="generation worker processes")
     parser.add_argument("--pin", action="store_true", help="NUMA-pin reduction workers (Linux)")
     parser.add_argument("--mem-budget-gib", type=float, default=0.0,
-                        help="skip any size whose projected peak dense reduction memory exceeds "
-                             "this many GiB (0 = no guard); refuses up front instead of OOMing "
-                             "mid-sweep. The projection is the exact dense-matrix bound from the "
-                             "grading dimensions (gradings-only histogram, memory-safe).")
+                        help="reduce under this many GiB of co-resident memory, in deterministic "
+                             "waves (0 = unbounded). Skips a target only if its largest single "
+                             "grading exceeds the budget (not reducible even one grading at a "
+                             "time); the rest run wave-bounded so the sweep stays under budget "
+                             "instead of OOMing mid-run. The bound is the exact dense-matrix size "
+                             "from the grading dimensions (gradings-only histogram, memory-safe).")
     args = parser.parse_args()
 
     if args.pin and not hasattr(os, "sched_setaffinity"):
@@ -242,16 +245,17 @@ def main():
         return f"{value:>8.1f}" if value is not None else f"{'n/a':>8}"
 
     for name, grid in targets:
-        if args.mem_budget_gib:
-            projected_gib = dense_reduction_bytes(
+        budget_bytes = int(args.mem_budget_gib * 2**30) if args.mem_budget_gib else None
+        if budget_bytes is not None:
+            floor_gib = max_grading_bytes(
                 grading_histogram(grid, args.gen_workers)) / 2**30
-            if projected_gib > args.mem_budget_gib:
+            if floor_gib > args.mem_budget_gib:
                 print(f"{name:<13}{grid.n:>3}{math.factorial(grid.n):>13,}"
-                      f"   skipped: ~{projected_gib:.1f} GiB projected dense reduction > "
-                      f"{args.mem_budget_gib:.1f} GiB budget")
+                      f"   skipped: largest single grading ~{floor_gib:.1f} GiB > "
+                      f"{args.mem_budget_gib:.1f} GiB budget (not reducible even in waves)")
                 continue
         r = measure(grid, backend=args.backend, workers=args.workers, pin=args.pin,
-                    gen_workers=args.gen_workers)
+                    gen_workers=args.gen_workers, ram_budget_bytes=budget_bytes)
         m = r["mem"]
         if m is None:
             mem_cells = _c(None) * 4 + f"{'n/a':>9}"

@@ -128,15 +128,29 @@ def route_backend(
     return Routing(cpu, reason, pb, fits_gpu)
 
 
-def dense_reduction_bytes(histogram: Mapping) -> int:
-    """Worst-case co-resident reduction memory (bytes) for a batch whose chain dimensions are
-    given as a histogram keyed by ``(grading, degree) -> count``. Grouped by grading, the peak
-    with every grading reduced at once is the sum over gradings of each grading's largest
-    boundary block (``grading_peak_bytes``). This is the unbounded-concurrency figure; the
-    bounded-memory scheduler (``algebra.parallel``) holds the actual peak below a budget by
-    running gradings in waves.
-    """
+def _grading_peaks(histogram: Mapping) -> list:
+    """Per-grading reduction peaks (bytes) from a histogram keyed by ``(grading, degree) ->
+    count``: regroup by grading, then the largest boundary block within each grading."""
     by_grading: dict = defaultdict(dict)
     for (grading, degree), count in histogram.items():
         by_grading[grading][degree] = count
-    return sum(grading_peak_bytes(degrees) for degrees in by_grading.values())
+    return [grading_peak_bytes(degrees) for degrees in by_grading.values()]
+
+
+def dense_reduction_bytes(histogram: Mapping) -> int:
+    """Worst-case co-resident reduction memory (bytes) for a batch given as a histogram keyed
+    by ``(grading, degree) -> count``: the sum over gradings of each grading's peak block, i.e.
+    every grading reduced at once. This is the unbounded-concurrency figure; the bounded-memory
+    scheduler (``algebra.parallel``) holds the actual peak below a budget by running gradings in
+    waves, so it is an upper bound, not the feasibility criterion (see ``max_grading_bytes``).
+    """
+    return sum(_grading_peaks(histogram))
+
+
+def max_grading_bytes(histogram: Mapping) -> int:
+    """The largest single grading's reduction peak (bytes) over a ``(grading, degree)``
+    histogram -- the feasibility floor. Running gradings in deterministic waves, a workload is
+    reducible only at budgets at least this large: below it the largest grading cannot fit even
+    alone and the scheduler fails loud. At or above it the rest pack into waves under the budget.
+    """
+    return max(_grading_peaks(histogram), default=0)
