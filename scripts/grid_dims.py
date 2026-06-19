@@ -18,8 +18,8 @@ import argparse
 import math
 from collections import defaultdict
 
+from tetradrome.algebra import dense_reduction_bytes
 from tetradrome.engines.floer import (
-    dense_reduction_bytes,
     grading_histogram,
     staircase_grid,
 )

@@ -12,7 +12,7 @@ from collections import defaultdict
 
 import pytest
 
-from tetradrome.algebra import predict_size
+from tetradrome.algebra import dense_reduction_bytes, predict_size
 from tetradrome.engines.floer import (
     GridDiagram,
     grid_complexes,
@@ -23,7 +23,6 @@ from tetradrome.engines.floer import (
     staircase_grid,
 )
 from tetradrome.engines.floer.generation import grading_histogram
-from tetradrome.engines.floer.scaling import dense_reduction_bytes
 
 AGREEMENT_KNOTS = ["3_1", "4_1", "5_2"]
 

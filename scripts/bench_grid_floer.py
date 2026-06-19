@@ -30,9 +30,9 @@ import threading
 import time
 from collections import defaultdict
 
+from tetradrome.algebra import dense_reduction_bytes
 from tetradrome.engines.floer import (
     GridDiagram,
-    dense_reduction_bytes,
     grading_histogram,
     grid_complexes,
     parallel_grid_complexes,

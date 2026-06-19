@@ -20,6 +20,7 @@ never a hidden default that silently sends tiny work to the wrong place.
 from __future__ import annotations
 
 import dataclasses
+from collections import defaultdict
 from collections.abc import Mapping
 
 from . import gpu
@@ -125,3 +126,17 @@ def route_backend(
     else:
         reason = "no usable GPU tier" if cpu == "bitint" else "reference floor"
     return Routing(cpu, reason, pb, fits_gpu)
+
+
+def dense_reduction_bytes(histogram: Mapping) -> int:
+    """Worst-case co-resident reduction memory (bytes) for a batch whose chain dimensions are
+    given as a histogram keyed by ``(grading, degree) -> count``. Grouped by grading, the peak
+    with every grading reduced at once is the sum over gradings of each grading's largest
+    boundary block (``grading_peak_bytes``). This is the unbounded-concurrency figure; the
+    bounded-memory scheduler (``algebra.parallel``) holds the actual peak below a budget by
+    running gradings in waves.
+    """
+    by_grading: dict = defaultdict(dict)
+    for (grading, degree), count in histogram.items():
+        by_grading[grading][degree] = count
+    return sum(grading_peak_bytes(degrees) for degrees in by_grading.values())
