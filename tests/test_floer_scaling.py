@@ -39,13 +39,20 @@ def test_parallel_reduction_agrees(name):
 
 @pytest.mark.parametrize("name", AGREEMENT_KNOTS)
 def test_parallel_generation_matches_serial(name):
+    # Stronger than answer-equality: parallel generation must reproduce the serial reference
+    # complex bit-for-bit. Position assignments within each (Alexander, degree) block depend on
+    # enumeration order, so this pins that contiguous lexicographic slicing reproduces
+    # itertools.permutations exactly -- what makes parallel generation an answer-preserving
+    # acceleration (ADR 0011 type B, the reference run in parallel), not a separate path.
     grid = GridDiagram.from_knotinfo(name)
     serial = grid_complexes(grid)
     parallel = parallel_grid_complexes(grid, workers=3)
     assert parallel.keys() == serial.keys()
     for a_grading in serial:
-        assert reduce_complexes({a_grading: parallel[a_grading]}) == \
-               reduce_complexes({a_grading: serial[a_grading]})
+        assert parallel[a_grading].degrees() == serial[a_grading].degrees()
+        for degree in serial[a_grading].degrees():
+            assert parallel[a_grading].dim(degree) == serial[a_grading].dim(degree)
+            assert parallel[a_grading].differential(degree) == serial[a_grading].differential(degree)
 
 
 def test_staircase_grid_is_valid_and_trivial():
