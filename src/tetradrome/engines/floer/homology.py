@@ -56,15 +56,19 @@ def grid_complexes(grid) -> dict:
 
 
 def reduce_complexes(complexes: dict, *, backend: str = "bitint",
-                     workers: int = 1, pin: bool = False) -> dict:
+                     workers: int = 1, pin: bool = False,
+                     ram_budget_bytes: int | None = None) -> dict:
     """Reduce ``{A: GradedComplex}`` to ``{(Maslov, Alexander): dimension}``.
 
     The per-grading complexes are independent, so with ``workers > 1`` they reduce across
     processes (``parallel_f2_homology``, CPU backends only, optional NUMA ``pin``). Every
     backend returns the identical answer as the reference (Phase 5 agreement discipline).
+    ``ram_budget_bytes`` caps co-resident reduction memory (deterministic waves, fail loud on
+    a single grading that cannot fit); it applies on the serial path too.
     """
-    if workers > 1:
-        homologies = parallel_f2_homology(complexes, backend=backend, workers=workers, pin=pin)
+    if workers > 1 or ram_budget_bytes is not None:
+        homologies = parallel_f2_homology(complexes, backend=backend, workers=workers,
+                                          pin=pin, ram_budget_bytes=ram_budget_bytes)
     else:
         homologies = {a: f2_homology(cx, backend=backend) for a, cx in complexes.items()}
 

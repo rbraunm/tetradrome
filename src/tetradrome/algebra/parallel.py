@@ -20,6 +20,7 @@ import os
 from collections.abc import Mapping
 from multiprocessing import Lock, Pool, Value
 
+from .memory import predict_size
 from .tiers import f2_homology
 
 _CPU_BACKENDS = ("reference", "bitint", "jit", "packed-cpu")
@@ -80,8 +81,73 @@ def _worker(args):
     return key, f2_homology(cx, backend=backend)
 
 
+def _pack_waves(priced, workers, budget):
+    """First-fit-decreasing pack of priced ``(peak, key, cx)`` items into sequential waves,
+    each holding at most ``workers`` items whose summed peak stays within ``budget``. The pack
+    is deterministic given the inputs, so the schedule -- and therefore the co-resident peak --
+    is reproducible rather than a function of which items happen to run together.
+    """
+    items = sorted(priced, key=lambda item: item[0], reverse=True)
+    waves: list[list] = []
+    wave_bytes: list[int] = []
+    for item in items:
+        peak = item[0]
+        for index, used in enumerate(wave_bytes):
+            if len(waves[index]) < workers and used + peak <= budget:
+                waves[index].append(item)
+                wave_bytes[index] = used + peak
+                break
+        else:
+            waves.append([item])
+            wave_bytes.append(peak)
+    return waves
+
+
+def _budgeted_reduce(pairs, *, backend, workers, pin, ram_budget_bytes):
+    """Reduce a batch while holding co-resident reduction memory within ``ram_budget_bytes``.
+
+    Each complex is priced by its packed reduction peak (``memory.predict_size``); one that
+    cannot fit the budget even alone is infeasible at any concurrency, so we fail loud rather
+    than schedule a guaranteed OOM. The rest are packed first-fit-decreasing into waves that
+    run one after another, so co-resident memory is bounded by the budget by construction.
+    """
+    priced = []
+    for key, cx in pairs:
+        peak = predict_size(cx).packed_peak_bytes
+        if peak > ram_budget_bytes:
+            raise MemoryError(
+                f"complex {key!r} needs {peak} bytes for its packed reduction, over the "
+                f"{ram_budget_bytes}-byte budget -- infeasible at any concurrency; raise the "
+                f"budget or shrink the problem."
+            )
+        priced.append((peak, key, cx))
+
+    if workers <= 1 or len(priced) < 2:
+        return {key: f2_homology(cx, backend=backend) for _, key, cx in priced}
+
+    waves = _pack_waves(priced, workers, ram_budget_bytes)
+    results: dict = {}
+
+    def _drain(pool):
+        for wave in waves:
+            tasks = [(key, cx, backend) for _, key, cx in wave]
+            for key, homology in pool.map(_worker, tasks, chunksize=1):
+                results[key] = homology
+
+    if pin:
+        cores = _numa_core_order()
+        with Pool(workers, initializer=_pin_init,
+                  initargs=(Value("i", 0), Lock(), cores)) as pool:
+            _drain(pool)
+    else:
+        with Pool(processes=workers) as pool:
+            _drain(pool)
+    return results
+
+
 def parallel_f2_homology(
-    items, *, backend: str = "bitint", workers: int | None = None, pin: bool = False
+    items, *, backend: str = "bitint", workers: int | None = None, pin: bool = False,
+    ram_budget_bytes: int | None = None,
 ) -> dict:
     """F2 homology of many GradedComplexes across processes.
 
@@ -89,7 +155,9 @@ def parallel_f2_homology(
     the return is ``{key: homology}``, identical to reducing each item serially. `workers`
     defaults to the CPU count; with one worker or fewer than two items the batch is reduced
     in-process (the pool would only add overhead). `pin=True` (Linux only) pins workers to
-    CPUs interleaved across NUMA nodes to cut cross-socket memory traffic. CPU backends only.
+    CPUs interleaved across NUMA nodes to cut cross-socket memory traffic. ``ram_budget_bytes``,
+    when set, keeps co-resident reduction memory within that many bytes by running the batch in
+    deterministic waves, failing loud if any single complex cannot fit. CPU backends only.
     """
     if backend not in _CPU_BACKENDS:
         raise ValueError(
@@ -101,6 +169,9 @@ def parallel_f2_homology(
     pairs = list(items.items()) if isinstance(items, Mapping) else list(items)
     if workers is None:
         workers = os.cpu_count() or 1
+    if ram_budget_bytes is not None:
+        return _budgeted_reduce(pairs, backend=backend, workers=workers, pin=pin,
+                                ram_budget_bytes=ram_budget_bytes)
     if workers <= 1 or len(pairs) < 2:
         return {key: f2_homology(cx, backend=backend) for key, cx in pairs}
     tasks = [(key, cx, backend) for key, cx in pairs]
