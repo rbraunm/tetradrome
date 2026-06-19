@@ -14,14 +14,10 @@ against KnotInfo, with the grid in the standard chirality so invariants match it
 from .differential import differential, filtered_differential
 from .gradings import alexander, alexander_euler_characteristic, maslov
 from .grid import GridDiagram
-from .homology import grid_complexes, grid_poincare, hfk_hat, reduce_complexes, seifert_genus
+from .generation import grading_histogram, grid_complexes, parallel_grid_complexes
+from .homology import grid_poincare, hfk_hat, reduce_complexes, seifert_genus
 from .roster import floer_roster
-from .scaling import (
-    dense_reduction_bytes,
-    grading_histogram,
-    parallel_grid_complexes,
-    staircase_grid,
-)
+from .scaling import dense_reduction_bytes, staircase_grid
 from .tau import tau
 
 __all__ = [

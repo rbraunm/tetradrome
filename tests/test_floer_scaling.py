@@ -22,7 +22,8 @@ from tetradrome.engines.floer import (
     reduce_complexes,
     staircase_grid,
 )
-from tetradrome.engines.floer.scaling import dense_reduction_bytes, grading_histogram
+from tetradrome.engines.floer.generation import grading_histogram
+from tetradrome.engines.floer.scaling import dense_reduction_bytes
 
 AGREEMENT_KNOTS = ["3_1", "4_1", "5_2"]
 
