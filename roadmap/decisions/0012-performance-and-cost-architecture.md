@@ -1,6 +1,6 @@
 # 0012 - Performance and cost architecture: name the axes, one cost model, dissolve scaling.py
 
-**Status:** Proposed
+**Status:** Accepted
 
 ## Context
 
