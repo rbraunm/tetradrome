@@ -76,9 +76,16 @@ def reduce_complexes(complexes: dict, *, backend: str = "bitint",
 
 
 def grid_poincare(grid, *, backend: str = "bitint", workers: int = 1, pin: bool = False) -> dict:
-    """Grid (hat) homology as ``{(Maslov, Alexander): dimension}`` over F2."""
+    """Grid (hat) homology as ``{(Maslov, Alexander): dimension}`` over F2.
+
+    ``workers`` drives both phases: generation across the permutation space (the n! step) and
+    reduction across the independent gradings. Both reproduce the serial reference exactly --
+    generation bit-for-bit (locked by test_parallel_generation_matches_serial), reduction by the
+    backend-agreement tier. With ``workers == 1`` both fall back to the serial path unchanged.
+    """
+    from .scaling import parallel_grid_complexes   # lazy: scaling imports grid_complexes from here
     return reduce_complexes(
-        grid_complexes(grid), backend=backend, workers=workers, pin=pin
+        parallel_grid_complexes(grid, workers), backend=backend, workers=workers, pin=pin
     )
 
 
