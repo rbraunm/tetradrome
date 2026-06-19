@@ -8,8 +8,11 @@ reducing the independent gradings across processes, or generating the complexes 
 processes must all reproduce the serial reference result exactly. Also covers the synthetic
 staircase grid used to push generator counts in the scaling study.
 """
+from collections import defaultdict
+
 import pytest
 
+from tetradrome.algebra import predict_size
 from tetradrome.engines.floer import (
     GridDiagram,
     grid_complexes,
@@ -19,6 +22,7 @@ from tetradrome.engines.floer import (
     reduce_complexes,
     staircase_grid,
 )
+from tetradrome.engines.floer.scaling import dense_reduction_bytes, grading_histogram
 
 AGREEMENT_KNOTS = ["3_1", "4_1", "5_2"]
 
@@ -61,3 +65,24 @@ def test_staircase_grid_is_valid_and_trivial():
     assert sorted(grid.O) == list(range(5)) and sorted(grid.X) == list(range(5))
     # the unknot: a single generator in HFK-hat at the origin
     assert hfk_hat(grid) == {(0, 0): 1}
+
+
+@pytest.mark.parametrize("name", AGREEMENT_KNOTS)
+def test_histogram_cost_matches_built_complex_cost(name):
+    # The build-free predictor (grading_histogram -> dense_reduction_bytes) must agree with the
+    # built-complex predictor (predict_size): same per-block cost, same dims. That agreement is
+    # what lets the memory guard price a size it never builds. A degree-convention drift or a
+    # formula drift between the two would break this exactly.
+    grid = GridDiagram.from_knotinfo(name)
+    complexes = grid_complexes(grid)
+    histogram = grading_histogram(grid)
+
+    by_alexander = defaultdict(dict)
+    for (a_grading, degree), count in histogram.items():
+        by_alexander[a_grading][degree] = count
+    assert set(by_alexander) == set(complexes)
+    for a_grading, cx in complexes.items():
+        assert by_alexander[a_grading] == {n: cx.dim(n) for n in cx.degrees()}
+
+    built = sum(predict_size(cx).packed_peak_bytes for cx in complexes.values())
+    assert dense_reduction_bytes(histogram) == built

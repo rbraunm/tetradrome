@@ -20,6 +20,7 @@ never a hidden default that silently sends tiny work to the wrong place.
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Mapping
 
 from . import gpu
 
@@ -43,6 +44,32 @@ class Routing:
     fits_gpu: bool
 
 
+def dense_block_bytes(cols: int, rows: int) -> int:
+    """Bytes the packed F2 reducer holds for one boundary block of ``cols`` columns into
+    ``rows`` rows: the packed matrix plus the pivot columns it accumulates (at most
+    ``min(cols, rows)``), each column ``ceil(rows / 64)`` uint64 words. This matches what
+    ``reduce_f2_packed.f2_rank_words`` actually allocates. Zero when either side is empty --
+    a map into or out of a zero-dimensional space has no matrix to reduce.
+    """
+    if cols == 0 or rows == 0:
+        return 0
+    nwords = (rows + 63) // 64
+    return (cols + min(cols, rows)) * nwords * 8
+
+
+def grading_peak_bytes(degree_dims: Mapping[int, int]) -> int:
+    """Peak packed-reduction bytes for a single grading whose chain dimensions are
+    ``degree_dims`` (``{degree: dim}``). The reducer holds one boundary block
+    d^n: C^n -> C^(n+1) at a time, so the peak is the largest block across degrees.
+    """
+    peak = 0
+    for n, cols in degree_dims.items():
+        block = dense_block_bytes(cols, degree_dims.get(n + 1, 0))
+        if block > peak:
+            peak = block
+    return peak
+
+
 def predict_size(cx) -> ComplexSize:
     """Exact size facts for a GradedComplex, including the packed reduction peak."""
     degrees = tuple(cx.degrees())
@@ -51,16 +78,9 @@ def predict_size(cx) -> ComplexSize:
     peak = 0
     largest = (0, 0, 0)
     for n in degrees:
-        cols = dims[n]
-        rows = cx.dim(n + 1)
-        if cols == 0 or rows == 0:
-            continue
-        nwords = (rows + 63) // 64
-        # during reduction the packed reducer holds the whole matrix plus the pivots
-        # (at most min(cols, rows) columns), each column nwords uint64 words.
-        b = (cols + min(cols, rows)) * nwords * 8
-        if b > peak:
-            peak, largest = b, (n, cols, rows)
+        block = dense_block_bytes(dims[n], cx.dim(n + 1))
+        if block > peak:
+            peak, largest = block, (n, dims[n], cx.dim(n + 1))
     return ComplexSize(degrees, dims, total, largest, peak)
 
 

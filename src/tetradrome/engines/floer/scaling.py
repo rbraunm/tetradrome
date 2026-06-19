@@ -22,7 +22,7 @@ import math
 from collections import defaultdict
 from multiprocessing import Pool
 
-from ...algebra import GradedComplex
+from ...algebra import GradedComplex, grading_peak_bytes
 from .differential import differential
 from .gradings import alexander, maslov
 from .grid import GridDiagram
@@ -142,23 +142,17 @@ def grading_histogram(grid, workers: int = 1) -> dict:
 def dense_reduction_bytes(histogram: dict) -> int:
     """Worst-case co-resident dense F2 reduction memory (bytes) implied by a grading histogram.
 
-    The packed reducer stores the degree-d boundary matrix of Alexander grading a as
-    ``dims[a][d]`` bitmask columns of ``ceil(dims[a][d+1] / 64)`` uint64 words each, so its
-    size is set by the DIMENSIONS, not the (sparse) differential. A worker reduces one grading
-    at a time, degree by degree, so its peak is the largest such matrix in its grading; with
-    more workers than Alexander gradings every grading can be co-resident, so the worst case is
-    the sum over gradings of those per-grading peaks. This term scales as D^2 and is what runs
-    a large grid out of memory (validated: it is the bulk of the measured reduction footprint
-    at n=10, and exceeds a 256 GiB box by n=11).
+    The packed reducer stores each degree-d boundary matrix of Alexander grading a as
+    ``dims[a][d]`` bitmask columns of ``ceil(dims[a][d+1] / 64)`` uint64 words, plus the pivot
+    columns it accumulates -- so its size is set by the DIMENSIONS, not the (sparse)
+    differential (the shared per-block cost is ``algebra.memory.dense_block_bytes``). A worker
+    reduces one grading at a time, degree by degree, so its peak is the largest such matrix in
+    its grading; with more workers than Alexander gradings every grading can be co-resident, so
+    the worst case is the sum over gradings of those per-grading peaks. This term scales as D^2
+    and is what runs a large grid out of memory (validated: it is the bulk of the measured
+    reduction footprint at n=10, and exceeds a 256 GiB box by n=11).
     """
     by_alexander: dict = defaultdict(dict)
     for (a_grading, degree), count in histogram.items():
         by_alexander[a_grading][degree] = count
-    total = 0
-    for degrees in by_alexander.values():
-        peak = 0
-        for degree, ncols in degrees.items():
-            nwords = max(1, (degrees.get(degree + 1, 0) + 63) // 64)
-            peak = max(peak, ncols * nwords * 8)
-        total += peak
-    return total
+    return sum(grading_peak_bytes(degrees) for degrees in by_alexander.values())
