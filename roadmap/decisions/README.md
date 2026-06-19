@@ -20,3 +20,7 @@ deliberately reversible where the SPEC says so; reversibility is noted per recor
 - `0011-harden-the-brute-reference.md` -- hardening the brute reference's speed (by
   exact means) is in scope; the floor is irreducible; (B)/(A)/(C) classification; the
   4D reach frontier is the binding engine.
+- `0012-performance-and-cost-architecture.md` -- names the four performance axes (backend
+  tier / generation parallelism / reduction parallelism + memory budget / one cost model),
+  unifies the duplicate reduction cost model onto the pivot-inclusive formula, and
+  dissolves the grab-bag `scaling.py` into honest homes. Reversible.
