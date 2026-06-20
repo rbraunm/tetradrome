@@ -21,7 +21,6 @@ rational reducer across the catalog.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from fractions import Fraction
 
 # Three well-known primes near 1e9; products of two fit comfortably in 61 bits.
 DEFAULT_PRIMES = (1_000_000_007, 1_000_000_009, 998_244_353)
