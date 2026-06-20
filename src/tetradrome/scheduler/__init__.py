@@ -11,14 +11,22 @@ parallel + memory-bounded execution. See roadmap for the design.
 from .graph import JobGraph
 from .inventory import GPU, Machine, NumaNode, detect_machine
 from .job import ComputePath, Job, Placement
+from .ledger import Allocation, Ledger
+from .placement import Decision, Outcome, Placed, plan_placement
 
 __all__ = [
     "GPU",
+    "Allocation",
     "ComputePath",
+    "Decision",
     "Job",
     "JobGraph",
+    "Ledger",
     "Machine",
     "NumaNode",
+    "Outcome",
+    "Placed",
     "Placement",
     "detect_machine",
+    "plan_placement",
 ]
