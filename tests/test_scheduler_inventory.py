@@ -95,18 +95,24 @@ def test_for_host_picks_the_right_platform():
         assert platform.name in ("ubuntu", "debian")
 
 
-def test_windows_platform_is_an_honest_skeleton():
-    # built next and validated on Win11; until then every method fails loud, never guesses
+def test_windows_platform_constructs_and_names_itself_anywhere():
+    # constructible on any OS since the ctypes calls are lazy; only its primitives need Windows
+    assert WindowsHostPlatform().name == "windows"
+
+
+def test_windows_platform_primitives_on_windows():
+    import os
+    import sys
+    if sys.platform != "win32":
+        pytest.skip("windows primitives run on windows")
     platform = WindowsHostPlatform()
-    assert platform.name == "windows"
-    with pytest.raises(NotImplementedError):
-        platform.nodes()
-    with pytest.raises(NotImplementedError):
-        platform.mem_cap_bytes(1 << 30)
-    with pytest.raises(NotImplementedError):
-        platform.pin({0})
-    with pytest.raises(NotImplementedError):
-        platform.private_bytes(1)
+    nodes = platform.nodes()
+    assert len(nodes) >= 1
+    assert all(node.cores for node in nodes)
+    assert platform.mem_cap_bytes(sum(n.ram_bytes for n in nodes)) > 0
+    assert platform.private_bytes(os.getpid()) > 0
+    assert platform.private_bytes(2 ** 31) is None
+    platform.pin(nodes[0].cores)
 
 
 def test_debian_is_the_ubuntu_shim_but_names_itself_debian():

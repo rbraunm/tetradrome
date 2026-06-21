@@ -275,35 +275,130 @@ class DebianHostPlatform(UbuntuHostPlatform):
 
 
 class WindowsHostPlatform(HostPlatform):
-    """Windows. Built next: the Win32 each method needs is noted, implemented with ctypes against
-    kernel32 and psapi and validated on a Windows 11 host. Until that lands every method fails
-    loud rather than return a number nobody verified.
+    """Windows, via ctypes against kernel32 and psapi, no third-party dependency. Validated on
+    Windows 11. The single-NUMA case (the common desktop and workstation) is fully handled;
+    multi-NUMA fails loud in nodes() rather than guess per-node RAM, which Windows does not expose
+    through a simple call, until there is a multi-socket Windows host to build it against.
+
+    The methods touch ctypes.windll only when called, so the class still imports and constructs on
+    a non-Windows host; only its primitives require Windows.
     """
 
     @property
     def name(self) -> str:
         return "windows"
 
+    def _allowed_cores(self) -> frozenset[int]:
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.windll.kernel32
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        k32.GetProcessAffinityMask.argtypes = [
+            wintypes.HANDLE, ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(ctypes.c_size_t)]
+        k32.GetProcessAffinityMask.restype = wintypes.BOOL
+        process_mask = ctypes.c_size_t()
+        system_mask = ctypes.c_size_t()
+        if not k32.GetProcessAffinityMask(k32.GetCurrentProcess(),
+                                          ctypes.byref(process_mask), ctypes.byref(system_mask)):
+            raise OSError("GetProcessAffinityMask failed")
+        mask = process_mask.value
+        return frozenset(i for i in range(mask.bit_length()) if mask & (1 << i))
+
+    def _total_physical_bytes(self) -> int:
+        import ctypes
+
+        class MEMORYSTATUSEX(ctypes.Structure):
+            _fields_ = [("dwLength", ctypes.c_uint32), ("dwMemoryLoad", ctypes.c_uint32),
+                        ("ullTotalPhys", ctypes.c_uint64), ("ullAvailPhys", ctypes.c_uint64),
+                        ("ullTotalPageFile", ctypes.c_uint64),
+                        ("ullAvailPageFile", ctypes.c_uint64),
+                        ("ullTotalVirtual", ctypes.c_uint64),
+                        ("ullAvailVirtual", ctypes.c_uint64),
+                        ("ullAvailExtendedVirtual", ctypes.c_uint64)]
+
+        status = MEMORYSTATUSEX()
+        status.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            raise OSError("GlobalMemoryStatusEx failed")
+        return int(status.ullTotalPhys)
+
     def nodes(self) -> tuple[NumaNode, ...]:
-        # TODO(windows): GetLogicalProcessorInformationEx(RelationNumaNode) for the nodes and each
-        # node's processor mask, intersected with GetProcessAffinityMask; per-node RAM via
-        # GetNumaAvailableMemoryNodeEx.
-        raise NotImplementedError("Windows topology is not implemented yet (next commit).")
+        import ctypes
+        from ctypes import wintypes
+        highest = wintypes.ULONG()
+        if not ctypes.windll.kernel32.GetNumaHighestNodeNumber(ctypes.byref(highest)):
+            raise OSError("GetNumaHighestNodeNumber failed")
+        if highest.value > 0:
+            # multi-NUMA: per-node physical RAM has no simple Win32 call, and dividing total by
+            # node count would be the silent-wrong-answer this design rejects. Build it against a
+            # real multi-socket Windows host.
+            raise NotImplementedError(
+                f"multi-NUMA Windows detection is not implemented yet (highest node "
+                f"{highest.value}); it needs a multi-socket Windows host to build against.")
+        return (NumaNode(index=0, cores=self._allowed_cores(),
+                         ram_bytes=self._total_physical_bytes()),)
 
     def mem_cap_bytes(self, physical_total_bytes: int) -> int:
-        # TODO(windows): GlobalMemoryStatusEx.ullTotalPhys; no cgroup, so a job-object limit
-        # (QueryInformationJobObject) is the analogue when one applies, else physical RAM.
-        raise NotImplementedError("Windows memory ceiling is not implemented yet (next commit).")
+        # Windows has no cgroup; absent a job-object memory limit, physical RAM is the ceiling.
+        # TODO(windows): honor a JOBOBJECT_EXTENDED_LIMIT_INFORMATION memory limit when present.
+        return physical_total_bytes
 
     def pin(self, cores) -> None:
-        # TODO(windows): SetProcessAffinityMask(GetCurrentProcess(), mask) for up to 64 logical
-        # processors; processor groups above that.
-        raise NotImplementedError("Windows pinning is not implemented yet (next commit).")
+        import ctypes
+        from ctypes import wintypes
+        cores = set(cores)
+        if any(c >= 64 for c in cores):
+            # processor groups: SetProcessAffinityMask is single-group. Above 64 logical
+            # processors leave it unpinned; the ledger still caps core count, only locality is
+            # lost. TODO(windows): SetThreadGroupAffinity for processor groups.
+            return
+        mask = 0
+        for c in cores:
+            mask |= (1 << c)
+        k32 = ctypes.windll.kernel32
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        k32.SetProcessAffinityMask.argtypes = [wintypes.HANDLE, ctypes.c_size_t]
+        k32.SetProcessAffinityMask.restype = wintypes.BOOL
+        if not k32.SetProcessAffinityMask(k32.GetCurrentProcess(), ctypes.c_size_t(mask)):
+            raise OSError("SetProcessAffinityMask failed")
 
     def private_bytes(self, pid: int) -> int | None:
-        # TODO(windows): OpenProcess + GetProcessMemoryInfo PROCESS_MEMORY_COUNTERS_EX.PrivateUsage.
-        # Spawn has no copy-on-write sharing, so private usage is already clean per process.
-        raise NotImplementedError("Windows memory sampling is not implemented yet (next commit).")
+        import ctypes
+        from ctypes import wintypes
+
+        class PROCESS_MEMORY_COUNTERS_EX(ctypes.Structure):
+            _fields_ = [("cb", ctypes.c_uint32), ("PageFaultCount", ctypes.c_uint32),
+                        ("PeakWorkingSetSize", ctypes.c_size_t),
+                        ("WorkingSetSize", ctypes.c_size_t),
+                        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                        ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                        ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                        ("PagefileUsage", ctypes.c_size_t),
+                        ("PeakPagefileUsage", ctypes.c_size_t),
+                        ("PrivateUsage", ctypes.c_size_t)]
+
+        process_query_limited_information = 0x1000
+        k32 = ctypes.windll.kernel32
+        psapi = ctypes.windll.psapi
+        k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        k32.OpenProcess.restype = wintypes.HANDLE
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = k32.OpenProcess(process_query_limited_information, False, pid)
+        if not handle:
+            return None                         # process gone or not queryable
+        try:
+            psapi.GetProcessMemoryInfo.argtypes = [
+                wintypes.HANDLE, ctypes.POINTER(PROCESS_MEMORY_COUNTERS_EX), wintypes.DWORD]
+            psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
+            counters = PROCESS_MEMORY_COUNTERS_EX()
+            counters.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS_EX)
+            if not psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters),
+                                              ctypes.sizeof(counters)):
+                return None
+            return int(counters.PrivateUsage)
+        finally:
+            k32.CloseHandle(handle)
 
 
 def _os_release_ids() -> tuple[str, str]:
