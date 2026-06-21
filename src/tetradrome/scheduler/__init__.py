@@ -14,12 +14,15 @@ from .inventory import GPU, Machine, NumaNode, detect_machine
 from .job import ComputePath, Job, Placement
 from .ledger import Allocation, Ledger
 from .placement import Decision, Outcome, Placed, plan_placement
+from .routing import Calibration, Execution, route_execution
 
 __all__ = [
     "GPU",
     "Allocation",
+    "Calibration",
     "ComputePath",
     "Decision",
+    "Execution",
     "Job",
     "JobGraph",
     "Ledger",
@@ -32,4 +35,5 @@ __all__ = [
     "Scheduler",
     "detect_machine",
     "plan_placement",
+    "route_execution",
 ]
