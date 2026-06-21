@@ -48,6 +48,8 @@ def _worker_main(key, run, inputs, deps, cores, gpu_index, result_queue):
         os.sched_setaffinity(0, set(cores))
         if gpu_index is not None:
             os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_index)
+        else:
+            os.environ["CUDA_VISIBLE_DEVICES"] = ""   # a CPU-placed worker must not grab a GPU
         result = run(inputs, deps)
     except Exception:
         result_queue.put((key, "error", traceback.format_exc()))
