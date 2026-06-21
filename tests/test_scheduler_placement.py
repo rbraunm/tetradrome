@@ -120,3 +120,22 @@ def test_gpu_admits_on_capable_machine():
     assert d.outcome is Outcome.ADMIT
     assert d.placed.gpu_index == 0
     assert d.placed.note is None
+
+
+def test_margin_blocks_admission_near_capacity():
+    m = _machine(nodes=((0, {0, 1}, 100),), cap=100)
+    # job needs 98; margin 3% of 100 = 3 -> schedulable 97 -> infeasible
+    d = plan_placement(m, Ledger(m), _job("j", (_pinned(1, 98),)), margin=0.03)
+    assert d.outcome is Outcome.INFEASIBLE
+
+
+def test_margin_zero_admits_to_full_capacity():
+    m = _machine(nodes=((0, {0, 1}, 100),), cap=100)
+    d = plan_placement(m, Ledger(m), _job("j", (_pinned(1, 98),)), margin=0.0)
+    assert d.outcome is Outcome.ADMIT
+
+
+def test_margin_leaves_headroom_when_it_fits():
+    m = _machine(nodes=((0, {0, 1}, 100),), cap=100)
+    d = plan_placement(m, Ledger(m), _job("j", (_pinned(1, 90),)), margin=0.03)
+    assert d.outcome is Outcome.ADMIT          # 90 <= 97 schedulable

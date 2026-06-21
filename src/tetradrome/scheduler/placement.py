@@ -4,16 +4,20 @@
 """The placement decision: for one ready job, choose the fastest path the machine can serve.
 
 Capability versus contention is the core distinction. A path is *capable* if the machine could
-ever serve it -- the resource type exists and total capacity could satisfy it -- regardless of
-what is busy now. The scheduler runs the fastest capable path:
+ever serve it -- the resource type exists and total capacity, less the reserved margin, could
+satisfy it -- regardless of what is busy now. The scheduler runs the fastest capable path:
 
 - if its resources are free now, admit it there (carrying a degradation note when a faster path
   was skipped because it is not capable on this box -- never because it was merely busy);
 - if its resources exist but are busy, wait for them (contention never degrades a job);
 - if no declared path is capable, the job is infeasible and fails loud.
 
-``plan_placement`` is pure: it reads the ledger and returns a Decision. The scheduler loop is
-what mutates the ledger (adding the allocation) when it acts on an ADMIT.
+``margin`` is a fraction of each node's RAM and of the cap held back from scheduling, so that
+several jobs under-predicting at once still have slack before anything approaches a real limit.
+It is folded into both capability and fit so a job that needs more than the schedulable share
+is reported infeasible rather than waiting on memory that policy will never hand out. The
+function is pure: it reads the ledger and returns a Decision; the loop mutates the ledger on
+ADMIT.
 """
 from __future__ import annotations
 
@@ -48,8 +52,9 @@ class Decision:
     reason: str | None = None
 
 
-def _capability_gap(machine: Machine, path: ComputePath) -> str | None:
+def _capability_gap(machine: Machine, path: ComputePath, margin: float) -> str | None:
     """None if the machine could ever serve this path; else why it cannot (a capability gap)."""
+    schedulable_cap = machine.mem_cap_bytes - int(margin * machine.mem_cap_bytes)
     if path.placement is Placement.GPU:
         if not machine.gpus:
             return "no GPU on this machine"
@@ -57,20 +62,21 @@ def _capability_gap(machine: Machine, path: ComputePath) -> str | None:
             return "no GPU with enough VRAM"
         if machine.total_cores < path.cores:
             return "not enough host cores"
-        if machine.mem_cap_bytes < path.ram_bytes:
+        if schedulable_cap < path.ram_bytes:
             return "exceeds the memory ceiling"
         return None
     if path.placement is Placement.CPU_PINNED:
-        if not any(len(node.cores) >= path.cores and node.ram_bytes >= path.ram_bytes
+        if not any(len(node.cores) >= path.cores
+                   and node.ram_bytes - int(margin * node.ram_bytes) >= path.ram_bytes
                    for node in machine.nodes):
             return "no single node has enough cores and RAM"
-        if machine.mem_cap_bytes < path.ram_bytes:
+        if schedulable_cap < path.ram_bytes:
             return "exceeds the memory ceiling"
         return None
     # CPU_UNPINNED
     if machine.total_cores < path.cores:
         return "not enough cores across all nodes"
-    if machine.mem_cap_bytes < path.ram_bytes:
+    if schedulable_cap < path.ram_bytes:
         return "exceeds the memory ceiling"
     return None
 
@@ -81,10 +87,11 @@ def _take(cores: frozenset, count: int) -> frozenset:
 
 
 def _place_now(machine: Machine, ledger: Ledger, path: ComputePath,
-               note: str | None) -> Placed | None:
+               note: str | None, margin: float) -> Placed | None:
     """A concrete Placed if the path's resources are free right now, else None."""
+    global_margin = int(margin * machine.mem_cap_bytes)
     if path.placement is Placement.GPU:
-        if ledger.global_free_ram() < path.ram_bytes:
+        if ledger.global_free_ram() - global_margin < path.ram_bytes:
             return None
         free = ledger.free_cores_all()
         if len(free) < path.cores:
@@ -95,16 +102,18 @@ def _place_now(machine: Machine, ledger: Ledger, path: ComputePath,
                               gpu_index=gpu.index, note=note)
         return None
     if path.placement is Placement.CPU_PINNED:
-        if ledger.global_free_ram() < path.ram_bytes:
+        if ledger.global_free_ram() - global_margin < path.ram_bytes:
             return None
         for node in machine.nodes:
             free = ledger.free_cores(node.index)
-            if len(free) >= path.cores and ledger.free_ram_node(node.index) >= path.ram_bytes:
+            node_margin = int(margin * node.ram_bytes)
+            if (len(free) >= path.cores
+                    and ledger.free_ram_node(node.index) - node_margin >= path.ram_bytes):
                 return Placed(path=path, cores=_take(free, path.cores),
                               node_index=node.index, note=note)
         return None
     # CPU_UNPINNED
-    if ledger.global_free_ram() < path.ram_bytes:
+    if ledger.global_free_ram() - global_margin < path.ram_bytes:
         return None
     free = ledger.free_cores_all()
     if len(free) < path.cores:
@@ -123,12 +132,12 @@ def _degradation_note(chosen: ComputePath, skipped: list) -> str | None:
             f"{_gap_summary(skipped)}")
 
 
-def plan_placement(machine: Machine, ledger: Ledger, job: Job) -> Decision:
-    """Decide where (if anywhere) ``job`` should run, given current ledger state."""
+def plan_placement(machine: Machine, ledger: Ledger, job: Job, margin: float = 0.0) -> Decision:
+    """Decide where (if anywhere) ``job`` should run, given current ledger state and margin."""
     skipped: list = []
     chosen = None
     for path in job.paths:
-        gap = _capability_gap(machine, path)
+        gap = _capability_gap(machine, path, margin)
         if gap is None:
             chosen = path
             break
@@ -140,7 +149,7 @@ def plan_placement(machine: Machine, ledger: Ledger, job: Job) -> Decision:
                    f"{_gap_summary(skipped)}",
         )
     note = _degradation_note(chosen, skipped)
-    placed = _place_now(machine, ledger, chosen, note)
+    placed = _place_now(machine, ledger, chosen, note, margin)
     if placed is not None:
         return Decision(Outcome.ADMIT, placed=placed)
     return Decision(

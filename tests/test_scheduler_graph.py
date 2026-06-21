@@ -98,3 +98,18 @@ def test_ready_progression_floer_shape():
     assert {j.key for j in g.ready({"gen", "rA"})} == {"rB"}
     assert {j.key for j in g.ready({"gen", "rA", "rB"})} == {"asm"}
     assert {j.key for j in g.ready({"gen", "rA", "rB", "asm"})} == set()
+
+
+def test_component_groups_whole_dag():
+    g = JobGraph([
+        _job("gen"),
+        _job("r1", deps=("gen",)),
+        _job("r2", deps=("gen",)),
+        _job("asm", deps=("r1", "r2")),
+        _job("other"),
+    ])
+    whole = {"gen", "r1", "r2", "asm"}
+    assert g.component("r1") == whole          # reaches root above and siblings/assembly below
+    assert g.component("gen") == whole
+    assert g.component("asm") == whole
+    assert g.component("other") == {"other"}

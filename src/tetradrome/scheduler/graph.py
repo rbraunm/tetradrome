@@ -64,6 +64,24 @@ class JobGraph:
         """Keys of the jobs that depend directly on ``key``."""
         return tuple(self._dependents[key])
 
+    def component(self, key: Hashable) -> frozenset:
+        """Every job connected to ``key`` through dependency edges in either direction.
+
+        For the per-knot DAG shape (a generation root, its per-grading reductions, the
+        assembly) this is the whole knot: walking parents and children from any member reaches
+        the root above and the siblings and assembly below. The scheduler uses it to abandon a
+        knot's entire DAG when any of its jobs fails."""
+        seen: set = set()
+        stack = [key]
+        while stack:
+            current = stack.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            stack.extend(self._jobs[current].dependencies)   # parents
+            stack.extend(self._dependents[current])           # children
+        return frozenset(seen)
+
     def ready(self, completed: Iterable[Hashable]) -> list[Job]:
         """Jobs whose dependencies are all completed and which are not themselves completed.
         The scheduler additionally filters out jobs already running."""
