@@ -126,3 +126,63 @@ def test_report_records_run_time():
 def test_failed_job_carries_no_timing():
     report = Scheduler(_machine()).run(JobGraph([_job("boom", boom, {})]))
     assert "boom" not in report.timings        # a job that did not finish has no usable runtime
+
+
+# -- warm worker: persistent, serial, frees between jobs --
+
+from tetradrome.scheduler.executor import WarmWorker, _start_context   # noqa: E402
+
+# State lives in the worker process. setup flips it once; between increments after each job. A
+# fresh process per job would reset it, so an accumulating count is proof of process reuse.
+_warm_state = {"setup": False, "betweens": 0}
+
+
+def warm_setup():
+    _warm_state["setup"] = True
+
+
+def warm_between():
+    _warm_state["betweens"] += 1
+
+
+def report_warm_state(inputs, deps):
+    return (_warm_state["setup"], _warm_state["betweens"])
+
+
+def test_warm_worker_runs_jobs_serially_in_one_process():
+    ctx = _start_context()
+    result_queue = ctx.Queue()
+    cores = frozenset(os.sched_getaffinity(0))
+    worker = WarmWorker(ctx, cores, None, result_queue, setup=warm_setup, between=warm_between)
+    try:
+        for key in ("a", "b", "c"):
+            worker.dispatch(key, report_warm_state, {}, {})
+        results = {}
+        for _ in range(3):
+            key, status, payload, _seconds = result_queue.get(timeout=30)
+            assert status == "ok"
+            results[key] = payload
+    finally:
+        worker.shutdown()
+    # setup ran once before any job; between ran once per finished job, so the count climbs 0,1,2.
+    # A new process each time would have shown (True, 0) all three times.
+    assert results["a"] == (True, 0)
+    assert results["b"] == (True, 1)
+    assert results["c"] == (True, 2)
+
+
+def test_warm_worker_survives_a_failing_job():
+    ctx = _start_context()
+    result_queue = ctx.Queue()
+    worker = WarmWorker(ctx, frozenset(os.sched_getaffinity(0)), None, result_queue)
+    try:
+        worker.dispatch("bad", boom, {}, {})
+        worker.dispatch("good", produce, {"value": 7}, {})
+        outcomes = {}
+        for _ in range(2):
+            key, status, payload, _seconds = result_queue.get(timeout=30)
+            outcomes[key] = (status, payload)
+    finally:
+        worker.shutdown()
+    assert outcomes["bad"][0] == "error"
+    assert outcomes["good"] == ("ok", 7)        # the worker kept serving after the failure

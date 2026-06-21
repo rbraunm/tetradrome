@@ -88,6 +88,72 @@ def _worker_main(key, run, inputs, deps, cores, gpu_index, result_queue):
     result_queue.put((key, "ok", result, compute_time))
 
 
+def _warm_worker_main(cores, gpu_index, job_queue, result_queue, setup, between):
+    """A persistent worker: pin once, optionally set up a session (a held CUDA context on the
+    GPU), then run jobs serially off ``job_queue`` until a None sentinel, posting each result to
+    the shared ``result_queue`` in the same shape an ephemeral worker uses so the loop reaps warm
+    and fresh jobs identically.
+
+    Strictly one job at a time: the held context drives a single stream, and serial execution is
+    also what keeps the memory sampler honest, since only one job's footprint is ever live in this
+    pid at once. ``between`` runs after every job, success or failure, to release per-job resources
+    (it frees the GPU memory pool); ``setup`` runs once before the first job. This worker is only
+    ever fed jobs the router classed small, so serializing them costs nothing the routing did not
+    already decide to accept.
+    """
+    os.sched_setaffinity(0, set(cores))
+    if gpu_index is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_index)
+    if setup is not None:
+        setup()
+    while True:
+        item = job_queue.get()
+        if item is None:
+            return
+        key, run, inputs, deps = item
+        try:
+            t0 = time.perf_counter()
+            result = run(inputs, deps)
+            result_queue.put((key, "ok", result, time.perf_counter() - t0))
+        except Exception:
+            result_queue.put((key, "error", traceback.format_exc(), 0.0))
+        finally:
+            if between is not None:
+                between()
+
+
+class WarmWorker:
+    """A handle to one persistent serial worker, one per GPU, that holds a session across jobs.
+
+    Started once, fed jobs one at a time with ``dispatch``, and stopped with ``shutdown`` at run
+    end. Results land on the shared result queue, not here, so the executor's reap loop is the
+    single place that handles every job's outcome. ``setup`` and ``between`` are module-level
+    callables (picklable for the worker process); the GPU build supplies ones that create a CUDA
+    context and free its memory pool between jobs, and the default None pair makes a plain serial
+    worker for exercising dispatch and lifecycle without a device.
+    """
+
+    def __init__(self, ctx, cores, gpu_index, result_queue, setup=None, between=None):
+        self._job_queue = ctx.Queue()
+        self._proc = ctx.Process(target=_warm_worker_main, args=(
+            cores, gpu_index, self._job_queue, result_queue, setup, between))
+        self._proc.start()
+
+    @property
+    def pid(self):
+        return self._proc.pid
+
+    def dispatch(self, key, run, inputs, deps) -> None:
+        self._job_queue.put((key, run, inputs, deps))
+
+    def shutdown(self) -> None:
+        self._job_queue.put(None)               # let the worker finish the current job and exit
+        self._proc.join(timeout=_GRACE_SECONDS)
+        if self._proc.is_alive():
+            self._proc.kill()
+            self._proc.join()
+
+
 def _read_private_bytes(pid: int) -> int | None:
     """Private resident bytes for a pid (USS = Private_Clean + Private_Dirty from smaps_rollup),
     or None if the process is gone or the file is unavailable.
