@@ -3,20 +3,22 @@
 
 """Machine inventory: per-NUMA-node cores and RAM, GPUs, and the real memory ceiling.
 
-The scheduler places work against this, so it must reflect the box as the kernel and the
-container actually present it: cores and RAM per NUMA node (so a job can be pinned where both
-its cores and its memory are local), the cgroup memory cap (the true ceiling on total use,
-which in a container is often below the sum of the nodes' RAM), and any CUDA devices.
+The scheduler places work against this, so it must reflect the box as the OS actually presents
+it: cores and RAM per NUMA node (so a job can be pinned where both its cores and its memory are
+local), the true ceiling on total memory, and any CUDA devices. Everything above this layer is
+platform-agnostic and consumes the resulting Machine.
 
-Discovery reads /sys and the cgroup. A machine that exposes no NUMA topology is modelled as a
-single node holding all allowed cores and all RAM -- the correct description of a non-NUMA
-box, not a fallback that hides an error. Parsing is split into pure functions so the fiddly
-/sys formats are tested directly.
+Topology discovery is host-specific and lives behind the NumaTopology class: for_host() returns
+the implementation for the OS we are on. Linux reads /sys and the cgroup. Windows is a skeleton
+that fails loud until it is implemented against a real Windows NUMA host. Parsing is split into
+pure functions so the fiddly /sys formats are tested directly.
 """
 from __future__ import annotations
 
+import abc
 import dataclasses
 import os
+import sys
 
 _NODE_ROOT = "/sys/devices/system/node"
 _CGROUP_MAX = (
@@ -125,10 +127,8 @@ def _read(path: str) -> str:
 
 
 def _allowed_cpus() -> frozenset[int]:
-    """The cores this process may actually run on (honours cpuset / taskset)."""
-    if not hasattr(os, "sched_getaffinity"):
-        raise RuntimeError("the scheduler needs Linux CPU affinity (os.sched_getaffinity); "
-                           "this OS does not provide it.")
+    """The cores this process may actually run on (honours cpuset / taskset). Linux-internal:
+    only the Linux topology calls it, and Linux always provides sched_getaffinity."""
     return frozenset(os.sched_getaffinity(0))
 
 
@@ -178,9 +178,73 @@ def detect_mem_ceiling(physical_total_bytes: int) -> int:
     return physical_total_bytes
 
 
+# ---- host-specific topology --------------------------------------------
+
+class NumaTopology(abc.ABC):
+    """Host-specific discovery of the schedulable topology: the NUMA nodes (the cores this
+    process may use on each, and that node's RAM) and the ceiling on total resident memory.
+
+    Instantiated per host by ``for_host``; everything above this layer consumes the resulting
+    Machine and never branches on platform. A new OS is supported by adding a subclass and a
+    branch in ``for_host`` -- the contract is just the two methods here.
+    """
+
+    @abc.abstractmethod
+    def nodes(self) -> tuple[NumaNode, ...]:
+        """The NUMA nodes. A non-NUMA box is one node spanning all allowed cores and all RAM."""
+
+    @abc.abstractmethod
+    def mem_cap_bytes(self, physical_total_bytes: int) -> int:
+        """The ceiling on total resident memory: a container limit capped by physical RAM, or
+        physical RAM when nothing tighter applies."""
+
+
+class LinuxNumaTopology(NumaTopology):
+    """Topology from /sys and the cgroup, as the Linux kernel and container present it."""
+
+    def nodes(self) -> tuple[NumaNode, ...]:
+        return detect_nodes()
+
+    def mem_cap_bytes(self, physical_total_bytes: int) -> int:
+        return detect_mem_ceiling(physical_total_bytes)
+
+
+class WindowsNumaTopology(NumaTopology):
+    """Topology on Windows. Not implemented yet: it needs a real Windows NUMA host to build and
+    test against, and modelling a Windows box as a single node without one would be a guess
+    dressed up as fact. The Win32 each method needs is noted; until it is in and tested on a
+    Windows platform, both fail loud rather than return a number nobody verified.
+    """
+
+    def nodes(self) -> tuple[NumaNode, ...]:
+        # TODO(windows-numa): GetLogicalProcessorInformationEx(RelationNumaNode) for the nodes
+        # and each node's processor mask, intersected with the process affinity mask from
+        # GetProcessAffinityMask; per-node RAM via GetNumaAvailableMemoryNodeEx. ctypes against
+        # kernel32, no third-party dependency.
+        raise NotImplementedError(
+            "Windows NUMA topology detection is not implemented yet; it needs a Windows NUMA "
+            "test platform to build against.")
+
+    def mem_cap_bytes(self, physical_total_bytes: int) -> int:
+        # TODO(windows-numa): GlobalMemoryStatusEx.ullTotalPhys for physical RAM. Windows has no
+        # cgroup; a job-object memory limit (QueryInformationJobObject) is the analogue when one
+        # applies, otherwise physical RAM is the ceiling.
+        raise NotImplementedError(
+            "Windows memory ceiling detection is not implemented yet; it needs a Windows test "
+            "platform to build against.")
+
+
+def for_host() -> NumaTopology:
+    """The topology discovery for the OS we are running on."""
+    if sys.platform == "win32":
+        return WindowsNumaTopology()
+    return LinuxNumaTopology()
+
+
 def detect_machine() -> Machine:
-    """Probe the box into a schedulable inventory."""
-    nodes = detect_nodes()
+    """Probe the box into a schedulable inventory via the host's topology discovery."""
+    topology = for_host()
+    nodes = topology.nodes()
     physical_total = sum(node.ram_bytes for node in nodes)
     return Machine(nodes=nodes, gpus=detect_gpus(),
-                   mem_cap_bytes=detect_mem_ceiling(physical_total))
+                   mem_cap_bytes=topology.mem_cap_bytes(physical_total))

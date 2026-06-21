@@ -6,6 +6,9 @@ import pytest
 
 from tetradrome.scheduler import Machine, NumaNode, detect_machine
 from tetradrome.scheduler.inventory import (
+    LinuxNumaTopology,
+    WindowsNumaTopology,
+    for_host,
     parse_cpulist,
     parse_mem_ceiling,
     parse_meminfo_total,
@@ -75,3 +78,33 @@ def test_detect_machine_smoke():
     assert all(node.cores for node in m.nodes)
     assert m.mem_cap_bytes > 0
     assert m.total_node_ram_bytes > 0
+
+# -- host-dispatched topology --
+
+def test_for_host_picks_linux_off_windows():
+    import sys
+    topology = for_host()
+    if sys.platform == "win32":
+        assert isinstance(topology, WindowsNumaTopology)
+    else:
+        assert isinstance(topology, LinuxNumaTopology)
+
+
+def test_windows_topology_is_an_honest_skeleton():
+    # deferred until there is a Windows NUMA test platform: it must fail loud, not guess
+    topology = WindowsNumaTopology()
+    with pytest.raises(NotImplementedError):
+        topology.nodes()
+    with pytest.raises(NotImplementedError):
+        topology.mem_cap_bytes(1 << 30)
+
+
+def test_linux_topology_matches_detect_machine():
+    import sys
+    if sys.platform == "win32":
+        pytest.skip("linux topology test runs on linux")
+    topology = LinuxNumaTopology()
+    nodes = topology.nodes()
+    assert len(nodes) >= 1
+    assert all(node.cores for node in nodes)
+    assert topology.mem_cap_bytes(sum(n.ram_bytes for n in nodes)) > 0
