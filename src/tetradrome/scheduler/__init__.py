@@ -8,6 +8,7 @@ node, GPUs, the real memory ceiling) and runs submitted jobs against it, memory-
 parallel, with dependencies. The math engines submit work to it rather than each reinventing
 parallel + memory-bounded execution. See roadmap for the design.
 """
+from .executor import RunReport, Scheduler
 from .graph import JobGraph
 from .inventory import GPU, Machine, NumaNode, detect_machine
 from .job import ComputePath, Job, Placement
@@ -27,6 +28,8 @@ __all__ = [
     "Outcome",
     "Placed",
     "Placement",
+    "RunReport",
+    "Scheduler",
     "detect_machine",
     "plan_placement",
 ]
