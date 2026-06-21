@@ -29,6 +29,7 @@ import os
 import queue
 import sys
 import threading
+import time
 import traceback
 
 from ..errors import TetradromeError
@@ -66,18 +67,25 @@ def _start_context():
 
 
 def _worker_main(key, run, inputs, deps, cores, gpu_index, result_queue):
-    """Top-level worker entry, picklable for spawn: pin, run, report exactly one message."""
+    """Top-level worker entry, picklable for spawn: pin, time the run, report one message.
+
+    The reported time covers only ``run`` itself, not affinity or device setup, so it is the
+    work the cost model predicts. A failure reports no time (0.0): a job that did not finish
+    carries no usable runtime, and including partial times would poison the calibration.
+    """
     try:
         os.sched_setaffinity(0, set(cores))
         if gpu_index is not None:
             os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_index)
         else:
             os.environ["CUDA_VISIBLE_DEVICES"] = ""   # a CPU-placed worker must not grab a GPU
+        t0 = time.perf_counter()
         result = run(inputs, deps)
+        compute_time = time.perf_counter() - t0
     except Exception:
-        result_queue.put((key, "error", traceback.format_exc()))
+        result_queue.put((key, "error", traceback.format_exc(), 0.0))
         return
-    result_queue.put((key, "ok", result))
+    result_queue.put((key, "ok", result, compute_time))
 
 
 def _read_private_bytes(pid: int) -> int | None:
@@ -123,10 +131,16 @@ class _Sampler(threading.Thread):
 
 @dataclasses.dataclass
 class RunReport:
-    """The outcome of a run: results for completed jobs, and one entry per failed component."""
+    """The outcome of a run: results for completed jobs, and one entry per failed component.
+
+    ``timings`` maps each completed job's key to the seconds its ``run`` took, the measured work
+    behind the cost model: comparing it to the job's predicted ``cost`` is what calibrates the
+    per-op constant and, in turn, the warm-versus-fresh routing.
+    """
     results: dict
     failures: list          # (component frozenset, failed_key, error_text)
     cancelled: frozenset
+    timings: dict = dataclasses.field(default_factory=dict)
 
 
 class Scheduler:
@@ -154,6 +168,7 @@ class Scheduler:
         peak_actual: dict = {}          # key -> max sampled private bytes
         over_warned: set = set()        # keys already warned for crossing their declaration
         results: dict = {}
+        timings: dict = {}              # key -> measured run seconds, for cost calibration
         completed: set = set()
         cancelled: set = set()
         failures: list = []
@@ -223,7 +238,7 @@ class Scheduler:
             return got
 
         def reap_one(item) -> None:
-            key, status, payload = item
+            key, status, payload, compute_time = item
             if key not in running:
                 return                  # stale message from a job already reaped or killed
             proc = running.pop(key)
@@ -236,6 +251,9 @@ class Scheduler:
             if status == "ok":
                 results[key] = payload
                 completed.add(key)
+                timings[key] = compute_time
+                logger.info("job %r runtime %.4fs vs predicted cost %g",
+                            key, compute_time, float(graph.get(key).cost))
             else:
                 poison(key, payload)
 
@@ -294,4 +312,5 @@ class Scheduler:
                 stop_worker(key)
             result_queue.close()
             result_queue.join_thread()
-        return RunReport(results=results, failures=failures, cancelled=frozenset(cancelled))
+        return RunReport(results=results, failures=failures,
+                         cancelled=frozenset(cancelled), timings=timings)

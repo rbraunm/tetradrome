@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from ...algebra import available_f2_backends, f2_homology, predict_size
+from ...algebra import available_f2_backends, f2_homology, predict_cost, predict_size
 from ...scheduler import ComputePath, Job, JobGraph, Placement
 
 _REDUCE = "reduce"
@@ -68,6 +68,7 @@ def reduction_jobs(complexes: dict, *, backend: str) -> tuple:
             key=key, run=_reduce_run,
             inputs={"complex": cx, "backend": backend},
             paths=_reduction_paths(cx, backend),
+            cost=predict_cost(cx),
         ))
         reduce_keys.append(key)
     assemble_key = (_ASSEMBLE,)

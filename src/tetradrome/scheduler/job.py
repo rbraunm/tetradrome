@@ -60,12 +60,16 @@ class Job:
     ``paths`` is ordered fastest to slowest and must be non-empty. ``run`` is invoked as
     ``run(inputs, deps)`` and returns the job's result, where ``deps`` maps each dependency
     key to its result. ``key`` is the job's identity and the handle its result is stored under.
+    ``cost`` is the predicted work in abstract units (the builder sets it, e.g. from
+    ``predict_cost``); the scheduler compares it to measured runtime to calibrate and to decide
+    whether a job is substantial enough to warrant its own process. Zero means unpredicted.
     """
     key: Hashable
     run: Callable
     inputs: object
     paths: tuple[ComputePath, ...]
     dependencies: frozenset = dataclasses.field(default_factory=frozenset)
+    cost: float = 0.0
 
     def __post_init__(self):
         # Accept any iterable for paths/dependencies; store normalized immutables.

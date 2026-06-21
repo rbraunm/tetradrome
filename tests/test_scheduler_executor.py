@@ -7,6 +7,7 @@ The job callables are module-level so they pickle to spawned workers. DAG orderi
 dependencies, so these are deterministic regardless of how many cores the host actually has.
 """
 import os
+import time
 
 from tetradrome.scheduler import (
     ComputePath,
@@ -44,6 +45,11 @@ def passthrough(inputs, deps):
 
 def boom(inputs, deps):
     raise RuntimeError("kaboom")
+
+
+def nap(inputs, deps):
+    time.sleep(inputs["seconds"])
+    return "rested"
 
 
 def _job(key, run, inputs, deps=()):
@@ -105,3 +111,18 @@ def test_job_too_big_for_machine_fails_its_component():
     assert "big" not in report.results
     assert len(report.failures) == 1
     assert report.failures[0][1] == "big"
+
+
+def test_report_records_run_time():
+    # the recorded time covers the run itself: at least the sleep, and not wildly more, since
+    # worker startup and affinity setup happen outside the measured window
+    seconds = 0.2
+    job = Job(key="n", run=nap, inputs={"seconds": seconds}, paths=(_cpu(),), cost=1000.0)
+    report = Scheduler(_machine()).run(JobGraph([job]))
+    assert report.results["n"] == "rested"
+    assert seconds <= report.timings["n"] < seconds + 1.0
+
+
+def test_failed_job_carries_no_timing():
+    report = Scheduler(_machine()).run(JobGraph([_job("boom", boom, {})]))
+    assert "boom" not in report.timings        # a job that did not finish has no usable runtime

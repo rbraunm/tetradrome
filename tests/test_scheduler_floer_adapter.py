@@ -11,11 +11,11 @@ from collections import defaultdict
 
 import pytest
 
-from tetradrome.algebra import available_f2_backends, f2_homology
+from tetradrome.algebra import available_f2_backends, f2_homology, predict_cost
 from tetradrome.engines.floer.generation import grid_complexes
 from tetradrome.engines.floer.grid import staircase_grid
 from tetradrome.scheduler import Scheduler, detect_machine
-from tetradrome.engines.floer.scheduling import reduction_graph
+from tetradrome.engines.floer.scheduling import reduction_graph, reduction_jobs
 
 _BACKENDS = [name for name, ok, _ in available_f2_backends() if ok and name != "packed-gpu"]
 
@@ -48,3 +48,13 @@ def test_all_backends_agree_through_the_scheduler():
     reference = answers["bitint"]
     for backend, answer in answers.items():
         assert answer == reference, f"{backend} disagrees with bitint through the scheduler"
+
+
+def test_reduction_jobs_carry_predicted_cost():
+    # each reduction job is priced with predict_cost of its complex; the assembly merge is free
+    complexes = grid_complexes(staircase_grid(5))
+    jobs, assemble_key = reduction_jobs(complexes, backend="bitint")
+    by_key = {job.key: job for job in jobs}
+    for alexander, cx in complexes.items():
+        assert by_key[("reduce", alexander)].cost == predict_cost(cx)
+    assert by_key[assemble_key].cost == 0.0
