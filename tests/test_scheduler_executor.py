@@ -132,6 +132,7 @@ def test_failed_job_carries_no_timing():
 # -- warm worker: persistent, serial, frees between jobs --
 
 from tetradrome.scheduler.executor import WarmWorker, _start_context   # noqa: E402
+from tetradrome.scheduler.inventory import for_host                    # noqa: E402
 
 # State lives in the worker process. setup flips it once; between increments after each job. A
 # fresh process per job would reset it, so an accumulating count is proof of process reuse.
@@ -154,7 +155,8 @@ def test_warm_worker_runs_jobs_serially_in_one_process():
     ctx = _start_context()
     result_queue = ctx.Queue()
     cores = frozenset(os.sched_getaffinity(0))
-    worker = WarmWorker(ctx, cores, None, result_queue, setup=warm_setup, between=warm_between)
+    worker = WarmWorker(ctx, cores, None, result_queue, setup=warm_setup,
+                        between=warm_between, platform=for_host())
     try:
         for key in ("a", "b", "c"):
             worker.dispatch(key, report_warm_state, {}, {})
@@ -175,7 +177,8 @@ def test_warm_worker_runs_jobs_serially_in_one_process():
 def test_warm_worker_survives_a_failing_job():
     ctx = _start_context()
     result_queue = ctx.Queue()
-    worker = WarmWorker(ctx, frozenset(os.sched_getaffinity(0)), None, result_queue)
+    worker = WarmWorker(ctx, frozenset(os.sched_getaffinity(0)), None, result_queue,
+                        platform=for_host())
     try:
         worker.dispatch("bad", boom, {}, {})
         worker.dispatch("good", produce, {"value": 7}, {})

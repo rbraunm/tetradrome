@@ -6,8 +6,9 @@ import pytest
 
 from tetradrome.scheduler import Machine, NumaNode, detect_machine
 from tetradrome.scheduler.inventory import (
-    LinuxNumaTopology,
-    WindowsNumaTopology,
+    DebianHostPlatform,
+    UbuntuHostPlatform,
+    WindowsHostPlatform,
     for_host,
     parse_cpulist,
     parse_mem_ceiling,
@@ -81,30 +82,52 @@ def test_detect_machine_smoke():
 
 # -- host-dispatched topology --
 
-def test_for_host_picks_linux_off_windows():
+# -- host platform --
+
+def test_for_host_picks_the_right_platform():
     import sys
-    topology = for_host()
+    platform = for_host()
     if sys.platform == "win32":
-        assert isinstance(topology, WindowsNumaTopology)
+        assert isinstance(platform, WindowsHostPlatform)
     else:
-        assert isinstance(topology, LinuxNumaTopology)
+        # our container is Ubuntu; debian-family would be the shim, anything else would raise
+        assert isinstance(platform, UbuntuHostPlatform)
+        assert platform.name in ("ubuntu", "debian")
 
 
-def test_windows_topology_is_an_honest_skeleton():
-    # deferred until there is a Windows NUMA test platform: it must fail loud, not guess
-    topology = WindowsNumaTopology()
+def test_windows_platform_is_an_honest_skeleton():
+    # built next and validated on Win11; until then every method fails loud, never guesses
+    platform = WindowsHostPlatform()
+    assert platform.name == "windows"
     with pytest.raises(NotImplementedError):
-        topology.nodes()
+        platform.nodes()
     with pytest.raises(NotImplementedError):
-        topology.mem_cap_bytes(1 << 30)
+        platform.mem_cap_bytes(1 << 30)
+    with pytest.raises(NotImplementedError):
+        platform.pin({0})
+    with pytest.raises(NotImplementedError):
+        platform.private_bytes(1)
 
 
-def test_linux_topology_matches_detect_machine():
+def test_debian_is_the_ubuntu_shim_but_names_itself_debian():
+    # reuses Ubuntu's implementation (it is a subclass) but reports 'debian' so logs show the shim
+    platform = DebianHostPlatform()
+    assert isinstance(platform, UbuntuHostPlatform)
+    assert platform.name == "debian"
+    assert UbuntuHostPlatform().name == "ubuntu"
+
+
+def test_ubuntu_platform_topology_and_primitives():
+    import os
     import sys
     if sys.platform == "win32":
-        pytest.skip("linux topology test runs on linux")
-    topology = LinuxNumaTopology()
-    nodes = topology.nodes()
+        pytest.skip("ubuntu platform test runs on linux")
+    platform = UbuntuHostPlatform()
+    nodes = platform.nodes()
     assert len(nodes) >= 1
     assert all(node.cores for node in nodes)
-    assert topology.mem_cap_bytes(sum(n.ram_bytes for n in nodes)) > 0
+    assert platform.mem_cap_bytes(sum(n.ram_bytes for n in nodes)) > 0
+    # sampling our own process reports some private memory; a dead pid reports None
+    assert platform.private_bytes(os.getpid()) > 0
+    assert platform.private_bytes(2 ** 31) is None
+    platform.pin(os.sched_getaffinity(0))      # pinning to our own allowed set is a no-op-safe call

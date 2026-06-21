@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import abc
 import dataclasses
+import logging
 import os
 import sys
 
@@ -178,16 +179,24 @@ def detect_mem_ceiling(physical_total_bytes: int) -> int:
     return physical_total_bytes
 
 
-# ---- host-specific topology --------------------------------------------
+# ---- host platform: everything OS-specific, one class per host ---------
 
-class NumaTopology(abc.ABC):
-    """Host-specific discovery of the schedulable topology: the NUMA nodes (the cores this
-    process may use on each, and that node's RAM) and the ceiling on total resident memory.
+class HostPlatform(abc.ABC):
+    """All OS-specific behavior the scheduler needs, in one place per host: discovering the
+    topology, pinning a worker to cores, and reading a process's private memory. ``for_host``
+    returns the implementation for the OS we are on, and everything above this layer is
+    platform-agnostic. Adding an OS is one new subclass plus a branch in ``for_host``.
 
-    Instantiated per host by ``for_host``; everything above this layer consumes the resulting
-    Machine and never branches on platform. A new OS is supported by adding a subclass and a
-    branch in ``for_host`` -- the contract is just the two methods here.
+    The methods are called from different places -- topology from the main process, ``pin`` from
+    inside each worker, ``private_bytes`` from the sampler -- but they are all host-specific, so
+    they live together rather than scattered as platform branches across the executor.
     """
+
+    @property
+    @abc.abstractmethod
+    def name(self) -> str:
+        """Short identity for logs, so a shimmed or unusual host is visible (e.g. 'ubuntu',
+        'debian', 'windows')."""
 
     @abc.abstractmethod
     def nodes(self) -> tuple[NumaNode, ...]:
@@ -198,9 +207,23 @@ class NumaTopology(abc.ABC):
         """The ceiling on total resident memory: a container limit capped by physical RAM, or
         physical RAM when nothing tighter applies."""
 
+    @abc.abstractmethod
+    def pin(self, cores) -> None:
+        """Bind the calling process to ``cores``."""
 
-class LinuxNumaTopology(NumaTopology):
-    """Topology from /sys and the cgroup, as the Linux kernel and container present it."""
+    @abc.abstractmethod
+    def private_bytes(self, pid: int) -> int | None:
+        """The private resident bytes of a process, or None if it is gone or unreadable."""
+
+
+class UbuntuHostPlatform(HostPlatform):
+    """The validated Linux platform, exercised on Ubuntu 24.04. Topology from /sys and the
+    cgroup, pinning via sched_setaffinity, and private memory from /proc smaps_rollup.
+    """
+
+    @property
+    def name(self) -> str:
+        return "ubuntu"
 
     def nodes(self) -> tuple[NumaNode, ...]:
         return detect_nodes()
@@ -208,43 +231,114 @@ class LinuxNumaTopology(NumaTopology):
     def mem_cap_bytes(self, physical_total_bytes: int) -> int:
         return detect_mem_ceiling(physical_total_bytes)
 
+    def pin(self, cores) -> None:
+        os.sched_setaffinity(0, set(cores))
 
-class WindowsNumaTopology(NumaTopology):
-    """Topology on Windows. Not implemented yet: it needs a real Windows NUMA host to build and
-    test against, and modelling a Windows box as a single node without one would be a guess
-    dressed up as fact. The Win32 each method needs is noted; until it is in and tested on a
-    Windows platform, both fail loud rather than return a number nobody verified.
+    def private_bytes(self, pid: int) -> int | None:
+        # USS = Private_Clean + Private_Dirty from smaps_rollup. Under forkserver every worker
+        # shares the parent's warm pages copy-on-write, so RSS would count that inherited
+        # footprint in full in every worker and summing it would phantom-charge memory that
+        # physically exists once. Private bytes are what the job actually added on top of the
+        # shared base, which is the marginal footprint the ledger should charge.
+        private = 0
+        try:
+            with open(f"/proc/{pid}/smaps_rollup") as handle:
+                for line in handle:
+                    if line.startswith("Private_Clean:") or line.startswith("Private_Dirty:"):
+                        private += int(line.split()[1]) * 1024     # the field is in kB
+        except (FileNotFoundError, ProcessLookupError, ValueError, IndexError):
+            return None
+        return private
+
+
+class DebianHostPlatform(UbuntuHostPlatform):
+    """Debian on the Ubuntu shim. Debian is debian-family like Ubuntu and should behave the same,
+    so it reuses the Ubuntu implementation wholesale and only reports its name as 'debian', so the
+    shimming is visible in logs without anyone having to say the host is Debian. If Debian ever
+    needs its own behavior it starts as small overrides here and graduates to a full platform if
+    it grows enough to warrant one.
     """
 
+    _warned = False
+
+    def __init__(self) -> None:
+        if not DebianHostPlatform._warned:
+            DebianHostPlatform._warned = True
+            logging.getLogger(__name__).warning(
+                "running Debian on the Ubuntu host-platform shim: behavior should match but is "
+                "unverified on Debian. Please open an issue for anything that misbehaves so a "
+                "real Debian platform can be built out.")
+
+    @property
+    def name(self) -> str:
+        return "debian"
+
+
+class WindowsHostPlatform(HostPlatform):
+    """Windows. Built next: the Win32 each method needs is noted, implemented with ctypes against
+    kernel32 and psapi and validated on a Windows 11 host. Until that lands every method fails
+    loud rather than return a number nobody verified.
+    """
+
+    @property
+    def name(self) -> str:
+        return "windows"
+
     def nodes(self) -> tuple[NumaNode, ...]:
-        # TODO(windows-numa): GetLogicalProcessorInformationEx(RelationNumaNode) for the nodes
-        # and each node's processor mask, intersected with the process affinity mask from
-        # GetProcessAffinityMask; per-node RAM via GetNumaAvailableMemoryNodeEx. ctypes against
-        # kernel32, no third-party dependency.
-        raise NotImplementedError(
-            "Windows NUMA topology detection is not implemented yet; it needs a Windows NUMA "
-            "test platform to build against.")
+        # TODO(windows): GetLogicalProcessorInformationEx(RelationNumaNode) for the nodes and each
+        # node's processor mask, intersected with GetProcessAffinityMask; per-node RAM via
+        # GetNumaAvailableMemoryNodeEx.
+        raise NotImplementedError("Windows topology is not implemented yet (next commit).")
 
     def mem_cap_bytes(self, physical_total_bytes: int) -> int:
-        # TODO(windows-numa): GlobalMemoryStatusEx.ullTotalPhys for physical RAM. Windows has no
-        # cgroup; a job-object memory limit (QueryInformationJobObject) is the analogue when one
-        # applies, otherwise physical RAM is the ceiling.
-        raise NotImplementedError(
-            "Windows memory ceiling detection is not implemented yet; it needs a Windows test "
-            "platform to build against.")
+        # TODO(windows): GlobalMemoryStatusEx.ullTotalPhys; no cgroup, so a job-object limit
+        # (QueryInformationJobObject) is the analogue when one applies, else physical RAM.
+        raise NotImplementedError("Windows memory ceiling is not implemented yet (next commit).")
+
+    def pin(self, cores) -> None:
+        # TODO(windows): SetProcessAffinityMask(GetCurrentProcess(), mask) for up to 64 logical
+        # processors; processor groups above that.
+        raise NotImplementedError("Windows pinning is not implemented yet (next commit).")
+
+    def private_bytes(self, pid: int) -> int | None:
+        # TODO(windows): OpenProcess + GetProcessMemoryInfo PROCESS_MEMORY_COUNTERS_EX.PrivateUsage.
+        # Spawn has no copy-on-write sharing, so private usage is already clean per process.
+        raise NotImplementedError("Windows memory sampling is not implemented yet (next commit).")
 
 
-def for_host() -> NumaTopology:
-    """The topology discovery for the OS we are running on."""
+def _os_release_ids() -> tuple[str, str]:
+    """(ID, ID_LIKE) from /etc/os-release, or empty strings if it is absent."""
+    ids: dict[str, str] = {}
+    try:
+        with open("/etc/os-release") as handle:
+            for line in handle:
+                if "=" in line:
+                    key, value = line.rstrip("\n").split("=", 1)
+                    ids[key] = value.strip().strip('"')
+    except FileNotFoundError:
+        return ("", "")
+    return (ids.get("ID", ""), ids.get("ID_LIKE", ""))
+
+
+def for_host() -> HostPlatform:
+    """The host platform for the OS we are running on. Raises loudly on an unrecognized host so
+    that supporting it is a deliberate addition, not a silent guess."""
     if sys.platform == "win32":
-        return WindowsNumaTopology()
-    return LinuxNumaTopology()
+        return WindowsHostPlatform()
+    distro_id, id_like = _os_release_ids()
+    if distro_id == "ubuntu":
+        return UbuntuHostPlatform()
+    if distro_id == "debian" or "debian" in id_like.split():
+        return DebianHostPlatform()
+    raise RuntimeError(
+        f"unsupported host platform (os-release ID={distro_id!r}, ID_LIKE={id_like!r}); add a "
+        f"HostPlatform subclass and a branch in for_host().")
 
 
 def detect_machine() -> Machine:
-    """Probe the box into a schedulable inventory via the host's topology discovery."""
-    topology = for_host()
-    nodes = topology.nodes()
+    """Probe the box into a schedulable inventory via the host platform."""
+    platform = for_host()
+    nodes = platform.nodes()
     physical_total = sum(node.ram_bytes for node in nodes)
     return Machine(nodes=nodes, gpus=detect_gpus(),
-                   mem_cap_bytes=topology.mem_cap_bytes(physical_total))
+                   mem_cap_bytes=platform.mem_cap_bytes(physical_total))

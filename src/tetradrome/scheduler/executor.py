@@ -34,7 +34,7 @@ import traceback
 
 from ..errors import TetradromeError
 from .graph import JobGraph
-from .inventory import Machine
+from .inventory import Machine, for_host
 from .job import Placement
 from .ledger import Allocation, Ledger
 from .placement import Outcome, plan_placement
@@ -68,7 +68,7 @@ def _start_context():
     return context
 
 
-def _worker_main(key, run, inputs, deps, cores, gpu_index, result_queue):
+def _worker_main(key, run, inputs, deps, cores, gpu_index, result_queue, platform):
     """Top-level worker entry, picklable for spawn: pin, time the run, report one message.
 
     The reported time covers only ``run`` itself, not affinity or device setup, so it is the
@@ -76,7 +76,7 @@ def _worker_main(key, run, inputs, deps, cores, gpu_index, result_queue):
     carries no usable runtime, and including partial times would poison the calibration.
     """
     try:
-        os.sched_setaffinity(0, set(cores))
+        platform.pin(cores)
         if gpu_index is not None:
             os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_index)
         else:
@@ -90,7 +90,7 @@ def _worker_main(key, run, inputs, deps, cores, gpu_index, result_queue):
     result_queue.put((key, "ok", result, compute_time))
 
 
-def _warm_worker_main(cores, gpu_index, job_queue, result_queue, setup, between):
+def _warm_worker_main(cores, gpu_index, job_queue, result_queue, setup, between, platform):
     """A persistent worker: pin once, optionally set up a session (a held CUDA context on the
     GPU), then run jobs serially off ``job_queue`` until a None sentinel, posting each result to
     the shared ``result_queue`` in the same shape an ephemeral worker uses so the loop reaps warm
@@ -103,7 +103,7 @@ def _warm_worker_main(cores, gpu_index, job_queue, result_queue, setup, between)
     ever fed jobs the router classed small, so serializing them costs nothing the routing did not
     already decide to accept.
     """
-    os.sched_setaffinity(0, set(cores))
+    platform.pin(cores)
     if gpu_index is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_index)
     if setup is not None:
@@ -135,10 +135,11 @@ class WarmWorker:
     worker for exercising dispatch and lifecycle without a device.
     """
 
-    def __init__(self, ctx, cores, gpu_index, result_queue, setup=None, between=None):
+    def __init__(self, ctx, cores, gpu_index, result_queue, setup=None, between=None,
+                 platform=None):
         self._job_queue = ctx.Queue()
         self._proc = ctx.Process(target=_warm_worker_main, args=(
-            cores, gpu_index, self._job_queue, result_queue, setup, between))
+            cores, gpu_index, self._job_queue, result_queue, setup, between, platform))
         self._proc.start()
 
     @property
@@ -156,42 +157,23 @@ class WarmWorker:
             self._proc.join()
 
 
-def _read_private_bytes(pid: int) -> int | None:
-    """Private resident bytes for a pid (USS = Private_Clean + Private_Dirty from smaps_rollup),
-    or None if the process is gone or the file is unavailable.
-
-    Under forkserver every worker shares the parent's warm pages (numpy, the package) copy-on-
-    write, so RSS would count that inherited footprint in full in every worker and summing it
-    would phantom-charge memory that physically exists once. Private bytes are what the job
-    actually added on top of the shared base, which is the marginal footprint the ledger should
-    charge and the right thing to compare against the cost model's predicted peak.
-    """
-    private = 0
-    try:
-        with open(f"/proc/{pid}/smaps_rollup") as handle:
-            for line in handle:
-                if line.startswith("Private_Clean:") or line.startswith("Private_Dirty:"):
-                    private += int(line.split()[1]) * 1024   # the field is in kB
-    except (FileNotFoundError, ProcessLookupError, ValueError, IndexError):
-        return None
-    return private
-
-
 class _Sampler(threading.Thread):
-    """A pure reader: snapshot the running pids, read each one's private memory, post to the
-    loop's queue."""
+    """A pure reader: snapshot the running pids, read each one's private memory via the host
+    platform, post to the loop's queue."""
 
-    def __init__(self, snapshot, sink: queue.Queue, interval: float, stop: threading.Event):
+    def __init__(self, snapshot, sink: queue.Queue, interval: float, stop: threading.Event,
+                 platform):
         super().__init__(daemon=True)
         self._snapshot = snapshot
         self._sink = sink
         self._interval = interval
         self._stopping = stop
+        self._platform = platform
 
     def run(self) -> None:
         while not self._stopping.is_set():
             for key, pid in self._snapshot().items():
-                private = _read_private_bytes(pid)
+                private = self._platform.private_bytes(pid)
                 if private is not None:
                     self._sink.put((key, private))
             self._stopping.wait(self._interval)
@@ -240,6 +222,8 @@ class Scheduler:
     def run(self, graph: JobGraph) -> RunReport:
         if self.numba_cache_dir:
             os.environ["NUMBA_CACHE_DIR"] = self.numba_cache_dir
+        platform = for_host()
+        logger.info("host platform: %s", platform.name)
         ctx = _start_context()
         result_queue = ctx.Queue()
         sample_queue: queue.Queue = queue.Queue()
@@ -277,7 +261,7 @@ class Scheduler:
             cores = next((n.cores for n in self.machine.nodes if n.index == node),
                          self.machine.nodes[0].cores)
             worker = WarmWorker(ctx, cores, gpu_index, result_queue,
-                                self.warm_setup, self.warm_between)
+                                self.warm_setup, self.warm_between, platform)
             warm_workers[gpu_index] = worker
             if self.context_vram_reserve > 0:
                 # Hold the held context's baseline VRAM out of the budget so admission cannot
@@ -316,7 +300,7 @@ class Scheduler:
             else:
                 proc = ctx.Process(target=_worker_main, args=(
                     job.key, job.run, job.inputs, deps,
-                    placed.cores, placed.gpu_index, result_queue,
+                    placed.cores, placed.gpu_index, result_queue, platform,
                 ))
                 proc.start()
                 running[job.key] = proc
@@ -431,7 +415,7 @@ class Scheduler:
             return did
 
         stop = threading.Event()
-        sampler = _Sampler(snapshot, sample_queue, self.sample_interval, stop)
+        sampler = _Sampler(snapshot, sample_queue, self.sample_interval, stop, platform)
         sampler.start()
         total = len(graph)
         try:
