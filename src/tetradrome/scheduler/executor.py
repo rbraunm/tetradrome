@@ -27,6 +27,7 @@ import logging
 import multiprocessing
 import os
 import queue
+import sys
 import threading
 import traceback
 
@@ -38,8 +39,30 @@ from .placement import Outcome, plan_placement
 
 logger = logging.getLogger(__name__)
 
-_PAGE_SIZE = os.sysconf("SC_PAGE_SIZE")
 _GRACE_SECONDS = 2.0
+
+# Modules the forkserver imports once so every forked worker inherits them warm, turning a
+# cold ~400ms import per job into a ~1ms fork. Best-effort: a module that cannot import (e.g.
+# numpy absent) is skipped and that worker just imports it cold, so the pure-Python floor still
+# runs. CUDA is deliberately not warmed here -- a context cannot survive a fork, so a GPU worker
+# initializes its device after forking.
+_FORKSERVER_PRELOAD = [
+    "numpy",
+    "tetradrome.algebra",
+    "tetradrome.engines.floer.scheduling",
+    "tetradrome.scheduler.executor",
+]
+
+
+def _start_context():
+    """The process-start mechanism best suited to the platform: forkserver where the OS can
+    fork (Linux, macOS), so workers inherit a warm interpreter cheaply and still die clean;
+    spawn on Windows, which cannot fork, so it pays the cold start the OS forces."""
+    if sys.platform == "win32":
+        return multiprocessing.get_context("spawn")
+    context = multiprocessing.get_context("forkserver")
+    context.set_forkserver_preload(_FORKSERVER_PRELOAD)
+    return context
 
 
 def _worker_main(key, run, inputs, deps, cores, gpu_index, result_queue):
@@ -57,18 +80,30 @@ def _worker_main(key, run, inputs, deps, cores, gpu_index, result_queue):
     result_queue.put((key, "ok", result))
 
 
-def _read_rss(pid: int) -> int | None:
-    """Resident bytes for a pid, or None if the process is gone or unreadable."""
+def _read_private_bytes(pid: int) -> int | None:
+    """Private resident bytes for a pid (USS = Private_Clean + Private_Dirty from smaps_rollup),
+    or None if the process is gone or the file is unavailable.
+
+    Under forkserver every worker shares the parent's warm pages (numpy, the package) copy-on-
+    write, so RSS would count that inherited footprint in full in every worker and summing it
+    would phantom-charge memory that physically exists once. Private bytes are what the job
+    actually added on top of the shared base, which is the marginal footprint the ledger should
+    charge and the right thing to compare against the cost model's predicted peak.
+    """
+    private = 0
     try:
-        with open(f"/proc/{pid}/statm") as handle:
-            resident_pages = int(handle.read().split()[1])
+        with open(f"/proc/{pid}/smaps_rollup") as handle:
+            for line in handle:
+                if line.startswith("Private_Clean:") or line.startswith("Private_Dirty:"):
+                    private += int(line.split()[1]) * 1024   # the field is in kB
     except (FileNotFoundError, ProcessLookupError, ValueError, IndexError):
         return None
-    return resident_pages * _PAGE_SIZE
+    return private
 
 
 class _Sampler(threading.Thread):
-    """A pure reader: snapshot the running pids, read each RSS, post to the loop's queue."""
+    """A pure reader: snapshot the running pids, read each one's private memory, post to the
+    loop's queue."""
 
     def __init__(self, snapshot, sink: queue.Queue, interval: float, stop: threading.Event):
         super().__init__(daemon=True)
@@ -80,9 +115,9 @@ class _Sampler(threading.Thread):
     def run(self) -> None:
         while not self._stopping.is_set():
             for key, pid in self._snapshot().items():
-                rss = _read_rss(pid)
-                if rss is not None:
-                    self._sink.put((key, rss))
+                private = _read_private_bytes(pid)
+                if private is not None:
+                    self._sink.put((key, private))
             self._stopping.wait(self._interval)
 
 
@@ -107,7 +142,7 @@ class Scheduler:
     def run(self, graph: JobGraph) -> RunReport:
         if self.numba_cache_dir:
             os.environ["NUMBA_CACHE_DIR"] = self.numba_cache_dir
-        ctx = multiprocessing.get_context("spawn")
+        ctx = _start_context()
         result_queue = ctx.Queue()
         sample_queue: queue.Queue = queue.Queue()
         ledger = Ledger(self.machine)
@@ -116,7 +151,7 @@ class Scheduler:
         running_pids: dict = {}         # key -> pid, shared with the sampler under the lock
         pids_lock = threading.Lock()
         declared_ram: dict = {}         # key -> declared peak, for warnings and the summary
-        peak_actual: dict = {}          # key -> max sampled rss
+        peak_actual: dict = {}          # key -> max sampled private bytes
         over_warned: set = set()        # keys already warned for crossing their declaration
         results: dict = {}
         completed: set = set()
@@ -173,18 +208,18 @@ class Scheduler:
             got = False
             while True:
                 try:
-                    key, rss = sample_queue.get_nowait()
+                    key, private = sample_queue.get_nowait()
                 except queue.Empty:
                     break
                 got = True
                 if key not in running:
                     continue
-                peak_actual[key] = max(peak_actual.get(key, 0), rss)
-                ledger.set_actual(key, rss)
-                if rss > declared_ram[key] and key not in over_warned:
+                peak_actual[key] = max(peak_actual.get(key, 0), private)
+                ledger.set_actual(key, private)
+                if private > declared_ram[key] and key not in over_warned:
                     over_warned.add(key)
-                    logger.warning("job %r exceeded declared RAM: declared %d, actual %d",
-                                   key, declared_ram[key], rss)
+                    logger.warning("job %r exceeded predicted memory: predicted %d, private %d",
+                                   key, declared_ram[key], private)
             return got
 
         def reap_one(item) -> None:
@@ -196,7 +231,7 @@ class Scheduler:
                 running_pids.pop(key, None)
             ledger.remove(key)
             proc.join()
-            logger.info("job %r done: declared %d, peak actual %d",
+            logger.info("job %r done: predicted %d, peak private %d",
                         key, declared_ram[key], peak_actual.get(key, 0))
             if status == "ok":
                 results[key] = payload
