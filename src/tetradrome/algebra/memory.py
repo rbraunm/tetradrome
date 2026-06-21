@@ -58,6 +58,20 @@ def dense_block_bytes(cols: int, rows: int) -> int:
     return (cols + min(cols, rows)) * nwords * 8
 
 
+def dense_block_ops(cols: int, rows: int) -> int:
+    """Word-XOR operations to F2-reduce one boundary block of ``cols`` columns into ``rows``
+    rows: each of ``cols`` columns is eliminated against up to ``min(cols, rows)`` accumulated
+    pivots, and each elimination touches ``ceil(rows / 64)`` uint64 words. Zero when either
+    side is empty. This is the work analog of ``dense_block_bytes`` and is backend-independent;
+    wall time is this count times a per-backend per-op cost the scheduler calibrates from
+    telemetry.
+    """
+    if cols == 0 or rows == 0:
+        return 0
+    nwords = (rows + 63) // 64
+    return cols * min(cols, rows) * nwords
+
+
 def grading_peak_bytes(degree_dims: Mapping[int, int]) -> int:
     """Peak packed-reduction bytes for a single grading whose chain dimensions are
     ``degree_dims`` (``{degree: dim}``). The reducer holds one boundary block
@@ -83,6 +97,16 @@ def predict_size(cx) -> ComplexSize:
         if block > peak:
             peak, largest = block, (n, dims[n], cx.dim(n + 1))
     return ComplexSize(degrees, dims, total, largest, peak)
+
+
+def predict_cost(cx) -> int:
+    """Total word-XOR operations to reduce a GradedComplex over F2: the sum over degrees of the
+    work on each boundary block d^n: C^n -> C^(n+1). An op-count, not a time. The scheduler
+    turns it into a predicted time with a per-backend constant it calibrates from observed
+    runtimes, and uses that to decide whether a job is substantial enough to warrant its own
+    process.
+    """
+    return sum(dense_block_ops(cx.dim(n), cx.dim(n + 1)) for n in cx.degrees())
 
 
 def route_backend(
