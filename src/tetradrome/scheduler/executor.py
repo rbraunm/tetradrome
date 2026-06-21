@@ -35,8 +35,10 @@ import traceback
 from ..errors import TetradromeError
 from .graph import JobGraph
 from .inventory import Machine
+from .job import Placement
 from .ledger import Allocation, Ledger
 from .placement import Outcome, plan_placement
+from .routing import Calibration, Execution, route_execution
 
 logger = logging.getLogger(__name__)
 
@@ -207,17 +209,33 @@ class RunReport:
     failures: list          # (component frozenset, failed_key, error_text)
     cancelled: frozenset
     timings: dict = dataclasses.field(default_factory=dict)
+    calibration: "Calibration | None" = None     # final per-placement rates, for inspection
 
 
 class Scheduler:
     """Runs a JobGraph on a machine, ephemeral spawn workers, no forced order."""
 
     def __init__(self, machine: Machine, margin: float = 0.03,
-                 sample_interval: float = 0.5, numba_cache_dir: str | None = None):
+                 sample_interval: float = 0.5, numba_cache_dir: str | None = None,
+                 context_overhead: float = float("inf"), vram_fraction: float = 0.5,
+                 time_multiple: float = 10.0, context_vram_reserve: int = 0,
+                 warm_setup=None, warm_between=None):
         self.machine = machine
         self.margin = margin
         self.sample_interval = sample_interval
         self.numba_cache_dir = numba_cache_dir
+        # Warm-versus-fresh routing knobs. context_overhead defaults to infinity so the time
+        # trigger stays off until it is measured on a real device; until then the decision is
+        # vram-only. context_vram_reserve is the held context's baseline VRAM, held back from a
+        # GPU's budget while its warm worker is up. warm_setup/warm_between are the warm worker's
+        # session hooks; the GPU build supplies the pair that holds a CUDA context and frees its
+        # pool, and None makes a plain serial worker.
+        self.context_overhead = context_overhead
+        self.vram_fraction = vram_fraction
+        self.time_multiple = time_multiple
+        self.context_vram_reserve = context_vram_reserve
+        self.warm_setup = warm_setup
+        self.warm_between = warm_between
 
     def run(self, graph: JobGraph) -> RunReport:
         if self.numba_cache_dir:
@@ -227,40 +245,91 @@ class Scheduler:
         sample_queue: queue.Queue = queue.Queue()
         ledger = Ledger(self.machine)
 
-        running: dict = {}              # key -> Process
+        running: dict = {}              # key -> Process, fresh jobs with their own process
+        warm_running: dict = {}         # key -> gpu_index, jobs dispatched to a warm worker
+        warm_workers: dict = {}         # gpu_index -> WarmWorker, started lazily
         running_pids: dict = {}         # key -> pid, shared with the sampler under the lock
         pids_lock = threading.Lock()
         declared_ram: dict = {}         # key -> declared peak, for warnings and the summary
         peak_actual: dict = {}          # key -> max sampled private bytes
         over_warned: set = set()        # keys already warned for crossing their declaration
+        placement_of: dict = {}         # key -> the placement it ran on, for calibration
+        calibration = Calibration()
         results: dict = {}
         timings: dict = {}              # key -> measured run seconds, for cost calibration
         completed: set = set()
         cancelled: set = set()
         failures: list = []
 
+        def is_running(key) -> bool:
+            return key in running or key in warm_running
+
         def snapshot() -> dict:
             with pids_lock:
                 return dict(running_pids)
 
+        def ensure_warm(gpu_index):
+            worker = warm_workers.get(gpu_index)
+            if worker is not None:
+                return worker
+            gpu = next(g for g in self.machine.gpus if g.index == gpu_index)
+            node = gpu.numa_node if gpu.numa_node is not None else self.machine.nodes[0].index
+            cores = next((n.cores for n in self.machine.nodes if n.index == node),
+                         self.machine.nodes[0].cores)
+            worker = WarmWorker(ctx, cores, gpu_index, result_queue,
+                                self.warm_setup, self.warm_between)
+            warm_workers[gpu_index] = worker
+            if self.context_vram_reserve > 0:
+                # Hold the held context's baseline VRAM out of the budget so admission cannot
+                # hand out device memory the context is already using.
+                ledger.add(Allocation(
+                    job_key=("__warm_context__", gpu_index), placement=Placement.GPU, cores=0,
+                    declared_ram=0, node_index=node, gpu_index=gpu_index,
+                    declared_vram=self.context_vram_reserve))
+            return worker
+
+        def route_warm(job, placed) -> bool:
+            gpu = next(g for g in self.machine.gpus if g.index == placed.gpu_index)
+            predicted = calibration.predicted_time(float(job.cost), Placement.GPU)
+            decision = route_execution(
+                predicted_vram=placed.path.vram_bytes, vram_budget=gpu.vram_bytes,
+                predicted_time=predicted, context_overhead=self.context_overhead,
+                vram_fraction=self.vram_fraction, time_multiple=self.time_multiple)
+            return decision is Execution.WARM
+
         def launch(job, placed) -> None:
             deps = {dep: results[dep] for dep in job.dependencies}
+            placement = placed.path.placement
             ledger.add(Allocation(
-                job_key=job.key, placement=placed.path.placement, cores=placed.cores,
+                job_key=job.key, placement=placement, cores=placed.cores,
                 declared_ram=placed.path.ram_bytes, node_index=placed.node_index,
                 gpu_index=placed.gpu_index, declared_vram=placed.path.vram_bytes,
             ))
-            proc = ctx.Process(target=_worker_main, args=(
-                job.key, job.run, job.inputs, deps,
-                placed.cores, placed.gpu_index, result_queue,
-            ))
-            proc.start()
-            running[job.key] = proc
             declared_ram[job.key] = placed.path.ram_bytes
-            with pids_lock:
-                running_pids[job.key] = proc.pid
+            placement_of[job.key] = placement
+            if placement is Placement.GPU and route_warm(job, placed):
+                # Small GPU job: serialize it through the held context. Not RAM-sampled -- it is
+                # small by the gate, and only one warm job's footprint is ever live in the shared
+                # pid at a time, so a live sample could not be attributed to it cleanly anyway.
+                ensure_warm(placed.gpu_index).dispatch(job.key, job.run, job.inputs, deps)
+                warm_running[job.key] = placed.gpu_index
+            else:
+                proc = ctx.Process(target=_worker_main, args=(
+                    job.key, job.run, job.inputs, deps,
+                    placed.cores, placed.gpu_index, result_queue,
+                ))
+                proc.start()
+                running[job.key] = proc
+                with pids_lock:
+                    running_pids[job.key] = proc.pid
             if placed.note:
                 logger.info("job %r degraded: %s", job.key, placed.note)
+
+        def forget_warm(key) -> None:
+            # Drop a warm job's bookkeeping without touching the shared worker. A stray result
+            # that arrives after this is ignored by reap_one's not-running guard.
+            warm_running.pop(key, None)
+            ledger.remove(key)
 
         def stop_worker(key) -> None:
             proc = running.pop(key)
@@ -278,6 +347,8 @@ class Scheduler:
             for member in component:
                 if member in running:
                     stop_worker(member)
+                elif member in warm_running:
+                    forget_warm(member)     # leave the shared worker up for other components
                 results.pop(member, None)
                 completed.discard(member)
                 cancelled.add(member)
@@ -305,19 +376,25 @@ class Scheduler:
 
         def reap_one(item) -> None:
             key, status, payload, compute_time = item
-            if key not in running:
+            if not is_running(key):
                 return                  # stale message from a job already reaped or killed
-            proc = running.pop(key)
-            with pids_lock:
-                running_pids.pop(key, None)
-            ledger.remove(key)
-            proc.join()
-            logger.info("job %r done: predicted %d, peak private %d",
-                        key, declared_ram[key], peak_actual.get(key, 0))
+            if key in running:          # fresh: its own process to reap
+                proc = running.pop(key)
+                with pids_lock:
+                    running_pids.pop(key, None)
+                ledger.remove(key)
+                proc.join()
+                logger.info("job %r done: predicted %d, peak private %d",
+                            key, declared_ram[key], peak_actual.get(key, 0))
+            else:                       # warm: the worker persists, only the allocation clears
+                warm_running.pop(key)
+                ledger.remove(key)
+                logger.info("job %r done (warm)", key)
             if status == "ok":
                 results[key] = payload
                 completed.add(key)
                 timings[key] = compute_time
+                calibration.observe(float(graph.get(key).cost), placement_of[key], compute_time)
                 logger.info("job %r runtime %.4fs vs predicted cost %g",
                             key, compute_time, float(graph.get(key).cost))
             else:
@@ -342,7 +419,7 @@ class Scheduler:
         def admit() -> bool:
             did = False
             for job in graph.ready(completed):
-                if job.key in running or job.key in cancelled:
+                if is_running(job.key) or job.key in cancelled:
                     continue
                 decision = plan_placement(self.machine, ledger, job, self.margin)
                 if decision.outcome is Outcome.ADMIT:
@@ -364,7 +441,7 @@ class Scheduler:
                 progressed = admit() or progressed
                 if progressed:
                     continue
-                if running:
+                if running or warm_running:
                     reap(block=True)
                 else:
                     remaining = [job.key for job in graph.jobs()
@@ -376,7 +453,12 @@ class Scheduler:
             sampler.join(timeout=1.0)
             for key in list(running):
                 stop_worker(key)
+            for gpu_index, worker in warm_workers.items():
+                if self.context_vram_reserve > 0:
+                    ledger.remove(("__warm_context__", gpu_index))
+                worker.shutdown()
             result_queue.close()
             result_queue.join_thread()
         return RunReport(results=results, failures=failures,
-                         cancelled=frozenset(cancelled), timings=timings)
+                         cancelled=frozenset(cancelled), timings=timings,
+                         calibration=calibration)

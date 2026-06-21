@@ -11,6 +11,7 @@ import time
 
 from tetradrome.scheduler import (
     ComputePath,
+    GPU,
     Job,
     JobGraph,
     Machine,
@@ -186,3 +187,61 @@ def test_warm_worker_survives_a_failing_job():
         worker.shutdown()
     assert outcomes["bad"][0] == "error"
     assert outcomes["good"] == ("ok", 7)        # the worker kept serving after the failure
+
+
+# -- GPU execution routing wired through the loop (fabricated device, CPU stand-in callables) --
+
+def _gpu_machine():
+    cores = frozenset(os.sched_getaffinity(0))
+    return Machine(nodes=(NumaNode(0, cores, 8 * _GIB),),
+                   gpus=(GPU(index=0, vram_bytes=_GIB, numa_node=0),),
+                   mem_cap_bytes=8 * _GIB)
+
+
+def _gpu(vram):
+    return ComputePath(Placement.GPU, cores=1, ram_bytes=_SMALL, vram_bytes=vram)
+
+
+def test_small_gpu_jobs_route_warm_and_serialize_in_one_worker():
+    # three small-vram GPU jobs, uncalibrated, so the gate sends them warm. The hooked warm
+    # worker's between-count climbs 0,1,2 across one reused process; if any had gone fresh it
+    # would have reset to 0, so distinct climbing counts prove warm + serial + single process.
+    jobs = [Job(key=k, run=report_warm_state, inputs={}, paths=(_gpu(_GIB // 10),), cost=1000)
+            for k in ("a", "b", "c")]
+    report = Scheduler(_gpu_machine(), warm_setup=warm_setup,
+                       warm_between=warm_between).run(JobGraph(jobs))
+    setups = {report.results[k][0] for k in ("a", "b", "c")}
+    counts = sorted(report.results[k][1] for k in ("a", "b", "c"))
+    assert setups == {True}             # every job ran in the worker that ran setup once
+    assert counts == [0, 1, 2]          # one process, serial, freed between each
+
+
+def test_big_gpu_job_routes_fresh():
+    # vram at 60% of the budget trips the firm trigger; a fresh worker never runs warm_setup, so
+    # the state it reports is the module default rather than the hooked-worker's True.
+    job = Job(key="big", run=report_warm_state, inputs={},
+              paths=(_gpu(6 * _GIB // 10),), cost=1000)
+    report = Scheduler(_gpu_machine(), warm_setup=warm_setup,
+                       warm_between=warm_between).run(JobGraph([job]))
+    assert report.results["big"] == (False, 0)
+
+
+def test_calibration_accumulates_a_gpu_rate():
+    jobs = [Job(key=k, run=produce, inputs={"value": k}, paths=(_gpu(_GIB // 10),), cost=1000)
+            for k in ("a", "b")]
+    report = Scheduler(_gpu_machine()).run(JobGraph(jobs))
+    assert report.results == {"a": "a", "b": "b"}
+    rate = report.calibration.rate(Placement.GPU)
+    assert rate is not None and rate > 0.0          # observed seconds/cost folded in
+
+
+def test_failing_warm_job_does_not_kill_the_shared_worker():
+    # two independent components, both small so both route warm; one fails. The shared worker
+    # must still complete the other, proving one component's failure stays isolated.
+    bad = Job(key="bad", run=boom, inputs={}, paths=(_gpu(_GIB // 10),), cost=1000)
+    good = Job(key="good", run=produce, inputs={"value": 42}, paths=(_gpu(_GIB // 10),), cost=1000)
+    report = Scheduler(_gpu_machine(), warm_setup=warm_setup,
+                       warm_between=warm_between).run(JobGraph([bad, good]))
+    assert report.results.get("good") == 42
+    assert "bad" in report.cancelled
+    assert any(failed == "bad" for _component, failed, _err in report.failures)
