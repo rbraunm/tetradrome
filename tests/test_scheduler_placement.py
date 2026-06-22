@@ -6,12 +6,14 @@ from tetradrome.scheduler import (
     GPU,
     Allocation,
     ComputePath,
+    InfeasibilityAxis,
     Job,
     Ledger,
     Machine,
     NumaNode,
     Outcome,
     Placement,
+    job_feasibility,
     plan_placement,
 )
 
@@ -61,9 +63,11 @@ def test_too_big_for_any_node_degrades_to_unpinned_with_note():
 
 def test_gpu_only_on_gpuless_machine_is_infeasible():
     m = _machine(gpus=())
-    d = plan_placement(m, Ledger(m), _job("j", (_gpu(1, 10, 8),)))
-    assert d.outcome is Outcome.INFEASIBLE
-    assert "no GPU" in d.reason
+    error = job_feasibility(m, _job("j", (_gpu(1, 10, 8),)))
+    assert error is not None
+    assert error.job_key == "j"
+    assert len(error.gaps) == 1
+    assert error.gaps[0].axis is InfeasibilityAxis.NO_DEVICE
 
 
 def test_gpu_unavailable_degrades_to_cpu_with_note():
@@ -122,11 +126,13 @@ def test_gpu_admits_on_capable_machine():
     assert d.placed.note is None
 
 
-def test_margin_blocks_admission_near_capacity():
+def test_margin_makes_over_schedulable_job_infeasible():
     m = _machine(nodes=((0, {0, 1}, 100),), cap=100)
-    # job needs 98; margin 3% of 100 = 3 -> schedulable 97 -> infeasible
-    d = plan_placement(m, Ledger(m), _job("j", (_pinned(1, 98),)), margin=0.03)
-    assert d.outcome is Outcome.INFEASIBLE
+    # job needs 98; margin 3% of 100 = 3 -> schedulable 97 -> no path the bare machine can serve
+    error = job_feasibility(m, _job("j", (_pinned(1, 98),)), margin=0.03)
+    assert error is not None
+    assert error.gaps[0].axis is InfeasibilityAxis.EXCEEDS_RAM
+    assert error.gaps[0].available == 97
 
 
 def test_margin_zero_admits_to_full_capacity():

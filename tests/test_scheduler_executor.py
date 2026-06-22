@@ -12,6 +12,7 @@ import time
 from tetradrome.scheduler import (
     ComputePath,
     GPU,
+    InfeasibilityAxis,
     Job,
     JobGraph,
     Machine,
@@ -105,13 +106,15 @@ def test_failure_abandons_its_component_only():
     assert component == {"genX", "boom", "endX"}
 
 
-def test_job_too_big_for_machine_fails_its_component():
+def test_job_too_big_for_machine_is_infeasible():
     big = Job(key="big", run=produce, inputs={"value": 1},
               paths=(ComputePath(Placement.CPU_PINNED, cores=1, ram_bytes=1 << 40),))
     report = Scheduler(_machine()).run(JobGraph([big]))
     assert "big" not in report.results
-    assert len(report.failures) == 1
-    assert report.failures[0][1] == "big"
+    assert not report.failures                       # not a runtime failure; caught up front
+    assert [e.job_key for e in report.infeasible] == ["big"]
+    assert report.infeasible[0].gaps[0].axis is InfeasibilityAxis.EXCEEDS_RAM
+    assert "big" in report.cancelled
 
 
 def test_report_records_run_time():
@@ -326,3 +329,20 @@ def test_overhead_probe_reports_real_private_memory():
     ram, context_vram = measured
     assert isinstance(ram, int) and ram > 0
     assert context_vram == 0
+
+
+def test_infeasible_job_does_not_sink_the_batch():
+    # One feasible component (a -> b) and one independent job whose only path needs more RAM than
+    # the whole machine. Pre-flight abandons only the infeasible job's lineage; the feasible
+    # component still completes, and the infeasible job is reported, not raised.
+    m = _machine()                                       # 8 GiB ceiling
+    feasible_a = _job("a", produce, {"value": 7})
+    feasible_b = _job("b", passthrough, {"add": 3}, deps=("a",))
+    huge = ComputePath(Placement.CPU_PINNED, cores=1, ram_bytes=64 * _GIB)
+    bad = Job(key="bad", run=produce, inputs={"value": 1}, paths=(huge,))
+    report = Scheduler(m).run(JobGraph([feasible_a, feasible_b, bad]))
+
+    assert report.results["b"] == 10                     # feasible component ran to its terminal
+    assert "bad" in report.cancelled                     # the infeasible job's lineage abandoned
+    assert [e.job_key for e in report.infeasible] == ["bad"]
+    assert report.infeasible[0].gaps[0].axis is InfeasibilityAxis.EXCEEDS_RAM

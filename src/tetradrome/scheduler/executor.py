@@ -39,7 +39,7 @@ from .accelerator import detect_accelerator
 from .inventory import Machine
 from .job import Placement
 from .ledger import Allocation, Ledger
-from .placement import Outcome, plan_placement
+from .placement import Outcome, job_feasibility, plan_placement
 from .routing import Calibration, Execution, route_execution
 
 logger = logging.getLogger(__name__)
@@ -250,15 +250,19 @@ class _Sampler(threading.Thread):
 
 @dataclasses.dataclass
 class RunReport:
-    """The outcome of a run: results for completed jobs, and one entry per failed component.
+    """The outcome of a run: results for completed jobs, one entry per failed component, and one
+    per job found infeasible up front.
 
     ``timings`` maps each completed job's key to the seconds its ``run`` took, the measured work
     behind the cost model: comparing it to the job's predicted ``cost`` is what calibrates the
-    per-op constant and, in turn, the warm-versus-fresh routing.
+    per-op constant and, in turn, the warm-versus-fresh routing. ``infeasible`` holds one
+    InfeasibleJobError per job the bare machine could serve on no declared path; their lineages are
+    abandoned but the rest of the batch runs.
     """
     results: dict
     failures: list          # (component frozenset, failed_key, error_text)
     cancelled: frozenset
+    infeasible: tuple = ()  # InfeasibleJobError per job infeasible on the bare machine
     timings: dict = dataclasses.field(default_factory=dict)
     calibration: "Calibration | None" = None     # final per-placement rates, for inspection
 
@@ -545,10 +549,31 @@ class Scheduler:
                 if decision.outcome is Outcome.ADMIT:
                     launch(job, decision.placed, gpu_execution)
                     did = True
-                elif decision.outcome is Outcome.INFEASIBLE:
-                    poison(job.key, f"infeasible placement: {decision.reason}")
-                    did = True
             return did
+
+        # Pre-flight feasibility: a job whose every declared path, with its own per-process
+        # overhead folded in, overflows the bare machine can never run, no matter what frees up.
+        # Decide it here, once, against the same augmented view the loop places against. Each
+        # infeasible job poisons only its own lineage (component), so independent components still
+        # run; every infeasible job is collected and surfaced in the report rather than raised, so
+        # one bad job does not sink the batch.
+        infeasible: list = []
+        for job in graph.jobs():
+            predicted = calibration.predicted_time(float(job.cost), Placement.GPU)
+            aug_paths, _ = _augment_for_admission(
+                job.paths, worker_shared=worker_shared, ram_baseline=ram_baseline,
+                context_vram=context_vram, gpu_budget=gpu_budget, predicted_gpu_time=predicted,
+                context_overhead=self.context_overhead, vram_fraction=self.vram_fraction,
+                time_multiple=self.time_multiple)
+            error = job_feasibility(self.machine, dataclasses.replace(job, paths=aug_paths),
+                                    self.margin)
+            if error is not None:
+                infeasible.append(error)
+        for error in infeasible:
+            cancelled |= graph.component(error.job_key)
+        if infeasible:
+            logger.warning("pre-flight: %d job(s) infeasible, abandoning their lineage: %s",
+                           len(infeasible), ", ".join(repr(e.job_key) for e in infeasible))
 
         stop = threading.Event()
         sampler = _Sampler(snapshot, sample_queue, self.sample_interval, stop, platform)
@@ -580,5 +605,5 @@ class Scheduler:
             result_queue.close()
             result_queue.join_thread()
         return RunReport(results=results, failures=failures,
-                         cancelled=frozenset(cancelled), timings=timings,
-                         calibration=calibration)
+                         cancelled=frozenset(cancelled), infeasible=tuple(infeasible),
+                         timings=timings, calibration=calibration)
