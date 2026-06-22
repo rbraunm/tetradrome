@@ -7,9 +7,13 @@ This is the one part of the scheduler that needs hardware: the warm worker holdi
 context and the packed-gpu reducer running through both execution paths. The whole module skips
 when cupy is not usable, so it is green in the sandbox and CI and runs for real on a GPU host.
 
-It forces each path by the routing knob rather than by job size: vram_fraction 1.0 keeps small
-reductions in the warm worker, vram_fraction 0.0 sends every one to a fresh process. In both, the
-scheduled GPU result must equal the in-process pure-Python reduction for every grading.
+Each path is forced by the routing knob. vram_fraction 1.0 keeps reductions in the single serial
+warm worker, so the full grid is safe: one context, one job at a time. vram_fraction 0.0 forces a
+fresh process per reduction, so the fresh test uses only TWO reductions on purpose. Forcing fresh
+on a full grid spawns a CUDA context per reduction all at once, and on a desktop whose GPU also
+drives the display that swarm exhausts the card and hangs the machine. Never force fresh on more
+than a couple of jobs; real routing never does this, since the router sends small jobs warm and
+only large, VRAM-bound jobs fresh.
 """
 import pytest
 
@@ -18,7 +22,7 @@ from tetradrome.algebra.gpu import usable_cupy
 from tetradrome.engines.floer.generation import grid_complexes
 from tetradrome.engines.floer.grid import staircase_grid
 from tetradrome.engines.floer.scheduling import reduction_graph
-from tetradrome.scheduler import Scheduler, detect_machine
+from tetradrome.scheduler import Placement, Scheduler, detect_machine
 from tetradrome.scheduler.gpu_session import gpu_session_setup, gpu_session_between
 
 pytestmark = pytest.mark.skipif(not usable_cupy(), reason="no usable CUDA device / cupy")
@@ -28,19 +32,32 @@ def _packed_gpu_available() -> bool:
     return any(name == "packed-gpu" and ok for name, ok, _note in available_f2_backends())
 
 
-@pytest.mark.parametrize("vram_fraction, path", [(1.0, "warm"), (0.0, "fresh")])
-def test_gpu_reductions_match_pure_python_oracle(vram_fraction, path):
+def test_gpu_warm_path_matches_oracle():
+    # vram_fraction 1.0 keeps every reduction in the one serial warm worker: a single held
+    # context, one job at a time, so the full grid is safe to run on a desktop GPU.
     assert _packed_gpu_available(), "cupy is usable but packed-gpu is not listed as a backend"
     complexes = grid_complexes(staircase_grid(7))
     oracle = {alexander: f2_homology(cx, "bitint") for alexander, cx in complexes.items()}
-
-    graph, _assemble_key = reduction_graph(complexes, backend="auto")
-    report = Scheduler(detect_machine(), vram_fraction=vram_fraction,
-                       warm_setup=gpu_session_setup, warm_between=gpu_session_between).run(graph)
-
+    report = Scheduler(detect_machine(), vram_fraction=1.0, warm_setup=gpu_session_setup,
+                       warm_between=gpu_session_between).run(reduction_graph(complexes,
+                                                                            backend="auto")[0])
     assert not report.failures, report.failures
     for alexander, cx in complexes.items():
         assert report.results[("reduce", alexander)] == oracle[alexander]
-    # the GPU placement was calibrated from real runs
-    from tetradrome.scheduler import Placement
-    assert report.calibration.rate(Placement.GPU) is not None
+    assert report.calibration.rate(Placement.GPU) is not None     # calibrated from real runs
+
+
+def test_gpu_fresh_path_matches_oracle():
+    # vram_fraction 0.0 forces a fresh process per reduction. DELIBERATELY two reductions only, so
+    # at most two fresh CUDA contexts are ever resident. See the module docstring: forcing fresh
+    # on a full grid swarms the GPU and hangs a desktop. Two proves the fresh path is correct.
+    assert _packed_gpu_available(), "cupy is usable but packed-gpu is not listed as a backend"
+    complexes = grid_complexes(staircase_grid(7))
+    pair = dict(list(complexes.items())[:2])
+    oracle = {alexander: f2_homology(cx, "bitint") for alexander, cx in pair.items()}
+    report = Scheduler(detect_machine(), vram_fraction=0.0, warm_setup=gpu_session_setup,
+                       warm_between=gpu_session_between).run(reduction_graph(pair,
+                                                                            backend="auto")[0])
+    assert not report.failures, report.failures
+    for alexander, cx in pair.items():
+        assert report.results[("reduce", alexander)] == oracle[alexander]
