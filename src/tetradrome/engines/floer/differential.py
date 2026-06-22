@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """The grid (knot Floer) differentials: empty rectangles between grid states (Phase 6).
 
 Two grid states connected by transposing the points in two rows bound a rectangle. The

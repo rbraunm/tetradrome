@@ -39,6 +39,27 @@ benchmark number means anything.
 Local validation order: baseline pytest; GPU detection + cupy install; JIT agreement
 tests; NUMA pinning benchmarks.
 
+## Running commands on a provisioned box (tools/ct_exec.py)
+`scripts/provision_runner.py` stands up a compute container; `tools/ct_exec.py` runs commands
+on it over SSH using the key and login the provisioner wrote beside itself
+(`scripts/ctNNN-ssh-key`, `scripts/ctNNN-ssh-credentials.txt`). It defaults to `--ctid 250`,
+needs no password, streams output live, and exits with the remote command's status.
+- Put the command after `--` or quote it:
+
+      python tools/ct_exec.py -- nproc
+      python tools/ct_exec.py -- "cd /opt/tetradrome/src && venv/bin/python -m pytest -q"
+
+- Invoke it as a SINGLE standalone command so it matches the `Bash(python tools/ct_exec.py:*)`
+  allow rule. Do not glue it to other local commands with `;`/`&&`/`echo`/`cd` -- those extra
+  segments are not in the allow list and force a permission prompt. Keep any sequencing INSIDE
+  the remote argument (it runs in the container's shell). Chaining two `ct_exec` calls is fine
+  (each segment matches), but the single remote-arg form is preferred.
+- Long jobs: launch detached and poll the log as two separate ct_exec calls, so the run is not
+  tied to the SSH session:
+
+      python tools/ct_exec.py -- 'cd /opt/tetradrome/src && setsid venv/bin/python <cmd> > /tmp/job.log 2>&1 < /dev/null & echo PID=$!'
+      python tools/ct_exec.py -- 'cat /tmp/job.log'
+
 ## Testing
 Tests make real assertions about computed invariants and complexes. No monkeypatching the
 logic under test. Tests verify behavior; they never drive design.

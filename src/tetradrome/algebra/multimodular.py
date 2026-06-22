@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Multimodular rational rank and homology (engine Phase 5).
 
 The rational lane needs only homology *dimensions*, and for an integer matrix the rank over
@@ -18,7 +21,6 @@ rational reducer across the catalog.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from fractions import Fraction
 
 # Three well-known primes near 1e9; products of two fit comfortably in 61 bits.
 DEFAULT_PRIMES = (1_000_000_007, 1_000_000_009, 998_244_353)

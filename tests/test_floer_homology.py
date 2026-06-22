@@ -1,8 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Tests for the grid differential and its homology (engine Phase 6).
 
 Structural: the differential lowers Maslov by one, preserves Alexander, and squares to zero.
-Against KnotInfo: the resulting HFK-hat matches the tabulated ranks up to mirror (the flat
-marker list does not fix chirality), and the top Alexander grading recovers the three-genus.
+Against KnotInfo: HFK-hat matches the tabulated ranks and its top Alexander grading recovers
+the three-genus, by direct equality over the derived roster (n <= 8 serial by default, n <= 10
+across all cores under --heavy). HFK and the genus share one computation per knot. The KnotInfo
+grid_notation chirality has matched the tabulated convention across the validated set; a mirror
+mismatch on the wider sweep would be a chirality (D1) finding to systematize, not something to
+paper over with an up-to-mirror fallback.
 """
 from collections import defaultdict
 
@@ -13,7 +20,6 @@ from tetradrome.engines.floer import differential, hfk_hat, seifert_genus
 from tetradrome.engines.floer.grid import GridDiagram
 from tetradrome.engines.floer.gradings import alexander, maslov
 
-HFK_KNOTS = ["3_1", "4_1", "5_1", "5_2"]   # n up to 7
 STRUCTURAL_KNOTS = ["3_1", "4_1"]          # the d^2 sweep over all n! states, kept cheap
 
 
@@ -32,13 +38,14 @@ def test_differential_grades_and_squares_to_zero(name):
         assert all(count % 2 == 0 for count in composite.values())
 
 
-@pytest.mark.parametrize("name", HFK_KNOTS)
-def test_hfk_matches_knotinfo(name):
+def test_hfk_and_genus_match_knotinfo(floer_knot, floer_workers):
+    name, _ = floer_knot
     grid = GridDiagram.from_knotinfo(name)
-    assert hfk_hat(grid) == ki.hfk_ranks(name)
+    ranks = hfk_hat(grid, workers=floer_workers)        # one computation; genus reads its top grading
+    assert ranks == ki.hfk_ranks(name)
+    assert max(a for _m, a in ranks) == int(ki.lookup(name)["three_genus"])
 
 
-@pytest.mark.parametrize("name", HFK_KNOTS)
-def test_genus_matches_three_genus(name):
-    grid = GridDiagram.from_knotinfo(name)
-    assert seifert_genus(grid) == int(ki.lookup(name)["three_genus"])
+def test_seifert_genus_reads_top_grading():
+    # cover the public wrapper directly (the roster test derives the genus inline)
+    assert seifert_genus(GridDiagram.from_knotinfo("4_1")) == 1

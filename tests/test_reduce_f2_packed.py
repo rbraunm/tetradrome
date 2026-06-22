@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Tests for the bit-packed F2 reducers and the tier registry (engine Phase 5).
 
 The whole point of an acceleration tier is that it is faster *and indistinguishable* from
@@ -15,6 +18,7 @@ from tetradrome.algebra.reduce_f2_jit import f2_rank_jit
 from tetradrome.algebra.reduce_f2_packed import f2_rank_bitint, f2_rank_dense, f2_rank_words
 from tetradrome.algebra.reduce_reference import f2_rank, homology
 from tetradrome.engines import khovanov
+from tetradrome.errors import BackendUnavailable
 
 KNOTS = ["3_1", "4_1", "5_1", "5_2", "6_1", "6_2", "6_3", "7_4"]
 
@@ -183,3 +187,13 @@ def test_gpu_dense_finds_dependencies_on_rank_deficient_input():
     assert rank == ref
     assert rank <= n_indep < mat.shape[1]                   # deficiency really is present
 
+
+
+def test_jit_without_numpy_fails_loud(monkeypatch):
+    # numpy is an optional accel dep; with it absent the jit/packed reducer must fail loud
+    # (BackendUnavailable), never a raw ImportError and never a silent degrade. Simulate the
+    # dependency boundary by clearing the lazily-bound module global and its presence flag.
+    monkeypatch.setattr(reduce_f2_jit, "np", None)
+    monkeypatch.setattr(reduce_f2_jit, "HAVE_NUMPY", False)
+    with pytest.raises(BackendUnavailable):
+        f2_rank_jit([{0, 1}, {1, 2}], 3)

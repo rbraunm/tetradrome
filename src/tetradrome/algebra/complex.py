@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Graded chain complexes over F2 -- the shared back-end data structure.
 
 This is the invariant-agnostic core (SPEC.md 13.6; homology-engine design section 2):

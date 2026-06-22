@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Numba-JIT bit-packed F2 reducer (engine Phase 5).
 
 The reduction logic lives in `_f2_rank_packed_impl`, written to be valid both as plain
@@ -6,22 +9,25 @@ integer pivot table indexed by leading row, in-place column XOR. When numba is i
 the function is compiled with `njit` on first use; otherwise it runs as ordinary Python,
 so `f2_rank_jit` is correct everywhere and merely faster with numba.
 
-numba is imported lazily, only when the jit reducer is first called -- not at import
-time. That matters under multiprocessing `spawn` (Windows/macOS), where importing numba in
-every worker that uses a *different* backend would be pure overhead; with the lazy import,
-only workers that actually run the jit tier pay for it.
+Both numpy and numba are imported lazily, only when the jit reducer is first called -- not
+at import time. For numpy that keeps the package importable, and the pure-Python `reference`
+and `bitint` tiers usable, with no numpy installed (it is an optional accel dependency);
+numpy is required only when this tier actually runs. The lazy numba import additionally
+avoids paying its cost under multiprocessing `spawn` in workers that run a *different*
+backend -- only workers that run the jit tier compile it.
 """
 from __future__ import annotations
 
 import importlib.util
 
-import numpy as np
-
+from ..errors import BackendUnavailable
 from .reduce_f2_packed import _pack
 
-# Cheap presence check that does NOT import (or compile) numba.
+# Cheap presence checks that do NOT import (or compile) the optional deps.
+HAVE_NUMPY = importlib.util.find_spec("numpy") is not None
 HAVE_NUMBA = importlib.util.find_spec("numba") is not None
 
+np = None           # bound lazily on first call; numpy is an optional accel dependency
 _reducer = None     # lazily bound to the compiled (or plain) implementation on first call
 
 
@@ -79,6 +85,14 @@ def _get_reducer():
 
 def f2_rank_jit(columns, nrows: int) -> int:
     """GF(2) rank via the (numba-compiled if available) packed reducer."""
+    global np
+    if np is None:
+        if not HAVE_NUMPY:
+            raise BackendUnavailable(
+                "the jit/packed reducer needs numpy (pip install the 'jit' or 'accel' "
+                "extra); the pure-Python 'reference' and 'bitint' backends need no numpy."
+            )
+        import numpy as np
     mat = _pack(columns, nrows, np)
     if mat.shape[0] == 0:
         return 0

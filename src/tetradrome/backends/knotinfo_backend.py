@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """KnotInfo backend.
 
 Read access to the offline KnotInfo table (`database_knotinfo`). Serves two roles:
@@ -113,6 +116,14 @@ def normalize_name(name: str) -> str:
     if m:
         return f"{m.group(1)}_{m.group(2)}"
     return n
+
+
+def rows() -> list[dict]:
+    """All KnotInfo rows (read-only); loads the table on first use. This is the public
+    enumerator the validation rosters build on -- callers must not mutate the result."""
+    _load()
+    assert _TABLE is not None
+    return _TABLE
 
 
 def lookup(name: str) -> dict:

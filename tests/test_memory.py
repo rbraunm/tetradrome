@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Tests for complex-size prediction and backend routing (engine Phase 5).
 
 predict_size reports exact structural facts, so it is checked against the actual complex.
@@ -10,7 +13,13 @@ import pytest
 from tetradrome import knots
 from tetradrome.algebra import tiers
 from tetradrome.algebra.gpu import GpuConfig
-from tetradrome.algebra.memory import ComplexSize, predict_size, route_backend
+from tetradrome.algebra.memory import (
+    ComplexSize,
+    dense_block_ops,
+    predict_cost,
+    predict_size,
+    route_backend,
+)
 from tetradrome.engines import khovanov
 
 # A complex whose largest grading is known, to check the peak arithmetic exactly.
@@ -43,6 +52,40 @@ def test_predict_size_peak_arithmetic():
     size = predict_size(cx)
     assert size.largest_map == (0, 3, 2)
     assert size.packed_peak_bytes == (3 + 2) * 1 * 8
+
+
+def test_dense_block_ops_arithmetic():
+    # 3 cols into 2 rows: nwords=1, ops = cols*min(cols,rows)*nwords = 3*2*1 = 6
+    assert dense_block_ops(3, 2) == 6
+    # 100 cols into 70 rows: nwords=ceil(70/64)=2, ops = 100*70*2 = 14000
+    assert dense_block_ops(100, 70) == 14000
+    # an empty side is no work
+    assert dense_block_ops(0, 5) == 0
+    assert dense_block_ops(5, 0) == 0
+
+
+def test_predict_cost_sums_block_ops():
+    # C^0 (3) -> C^1 (2) -> C^2 (0): only the first block costs, 3*2*1 = 6
+    cx = GradedComplex({0: 3, 1: 2}, {0: [{0}, {1}, {0}]})
+    assert predict_cost(cx) == dense_block_ops(3, 2)
+
+
+def test_predict_cost_grows_with_complex_size():
+    small = predict_cost(GradedComplex({0: 4, 1: 4}, {0: [{0}, {1}, {2}, {3}]}))
+    big = predict_cost(GradedComplex({0: 40, 1: 40}, {0: [{i} for i in range(40)]}))
+    assert big > small > 0
+
+
+def test_predict_cost_is_dimension_based_like_predict_size():
+    # predict_cost predicts the dense block from the dimensions (an upper bound), the same basis
+    # as predict_size: C^0=5 -> C^1=3 predicts 5*3*1 ops even with the differential unpopulated.
+    cx = GradedComplex({0: 5, 1: 3}, {})
+    assert predict_cost(cx) == dense_block_ops(5, 3)
+
+
+def test_predict_cost_zero_without_an_adjacent_degree():
+    # a lone nonempty degree has no boundary block to reduce
+    assert predict_cost(GradedComplex({0: 5}, {})) == 0
 
 
 _GPU_ON = GpuConfig(enabled=True, device_id=0, vram_budget_mib=1024, compute_capability="8.6")

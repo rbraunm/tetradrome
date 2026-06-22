@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Tests for exact reduction by Gaussian cancellation (engine Phase 4).
 
 The headline is `raw == reduced`: cancelling every unit in the differential is an exact

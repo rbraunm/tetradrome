@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Tests for the Khovanov differential (engines/khovanov/differential.py).
 
 The decisive check: d^2 = 0 on the assembled complexes. If the merge/split

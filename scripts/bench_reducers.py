@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Compare the F2 reduction tiers on accuracy and speed.
 
 Accuracy is the gate: every available tier must reproduce the reference homology on the

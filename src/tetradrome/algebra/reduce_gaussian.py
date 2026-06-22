@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Exact reduction by Gaussian elimination of the complex (engine Phase 4).
 
 The Gaussian elimination lemma: if the differential has a unit entry a -> b (a a

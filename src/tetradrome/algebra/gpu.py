@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """GPU detection, auto-configuration, and enablement guidance for the reduction tiers.
 
 Detection is layered and side-effect-free: an NVIDIA driver via ``nvidia-smi`` (no Python

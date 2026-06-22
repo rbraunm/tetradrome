@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Runtime tier registry for F2 reduction (engine Phase 5).
 
 The pure-Python reference is the always-present floor; faster tiers are optional and

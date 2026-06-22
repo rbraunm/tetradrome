@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """The Jones polynomial, via the Kauffman bracket over the resolution cube.
 
 State sum: <L> = sum over states s of  A^(a(s)-b(s)) * delta^(|s|-1),  where a/b are

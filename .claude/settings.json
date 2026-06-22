@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python tools/ct_exec.py:*)"
+    ]
+  }
+}

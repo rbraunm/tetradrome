@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Lee deformation of Khovanov homology over Q.
 
 Lee keeps the cube, its enhanced-state generators, and the cube edge signs, but deforms

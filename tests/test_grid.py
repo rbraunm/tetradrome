@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Tests for the grid-diagram model and gradings (engine Phase 6).
 
 The model's correctness is pinned by an already-validated invariant: tracing the KnotInfo

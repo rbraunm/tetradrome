@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Khovanov enhanced states and (i, j) gradings, built on the shared cube skeleton.
 
 An *enhanced state* is a cube state together with a labeling of each of its circles by

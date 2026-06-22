@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Tests for multi-core reduction (engine Phase 5).
 
 Parallelism must not change answers, only timing -- so the contract is parallel == serial.

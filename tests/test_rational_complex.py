@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Tests for the rational back-end lane (RationalComplex + rational_homology).
 
 Hand-built complexes with homology computed by hand, exercising genuine rational

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Grid homology, reduced to knot Floer homology HFK-hat (Phase 6).
 
 The differential preserves the Alexander grading and lowers Maslov by one, so each Alexander
@@ -16,52 +19,25 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from ...algebra import GradedComplex, f2_homology, parallel_f2_homology
+from ...algebra import f2_homology, parallel_f2_homology
 from ...errors import UnvalidatedResult
-from .differential import differential
-from .gradings import alexander, maslov
-
-
-def grid_complexes(grid) -> dict:
-    """The generation step: build the per-Alexander-grading F2 complexes ``{A: GradedComplex}``.
-
-    Within an Alexander grading the complex is graded by degree = -Maslov (so the back end's
-    degree-raising differential matches), and the bigraded differential preserves Alexander, so
-    every target lands in the same grading. This is the n! step -- it dominates for large grids
-    and is what a scaling study measures separately from the reduction.
-    """
-    by_alexander: dict = defaultdict(list)
-    for state in grid.generators():
-        by_alexander[alexander(grid, state)].append(state)
-
-    complexes: dict = {}
-    for a_grading, group in by_alexander.items():
-        degree = {state: -maslov(grid, state) for state in group}
-        position: dict = {}
-        dims: dict = defaultdict(int)
-        for state in group:
-            position[state] = dims[degree[state]]
-            dims[degree[state]] += 1
-        columns = {d: [None] * dims[d] for d in dims}
-        for state in group:
-            d = degree[state]
-            columns[d][position[state]] = frozenset(
-                position[y] for y in differential(grid, state) if degree.get(y) == d + 1
-            )
-        complexes[a_grading] = GradedComplex(dict(dims), columns)
-    return complexes
+from .generation import parallel_grid_complexes
 
 
 def reduce_complexes(complexes: dict, *, backend: str = "bitint",
-                     workers: int = 1, pin: bool = False) -> dict:
+                     workers: int = 1, pin: bool = False,
+                     ram_budget_bytes: int | None = None) -> dict:
     """Reduce ``{A: GradedComplex}`` to ``{(Maslov, Alexander): dimension}``.
 
     The per-grading complexes are independent, so with ``workers > 1`` they reduce across
     processes (``parallel_f2_homology``, CPU backends only, optional NUMA ``pin``). Every
     backend returns the identical answer as the reference (Phase 5 agreement discipline).
+    ``ram_budget_bytes`` caps co-resident reduction memory (deterministic waves, fail loud on
+    a single grading that cannot fit); it applies on the serial path too.
     """
-    if workers > 1:
-        homologies = parallel_f2_homology(complexes, backend=backend, workers=workers, pin=pin)
+    if workers > 1 or ram_budget_bytes is not None:
+        homologies = parallel_f2_homology(complexes, backend=backend, workers=workers,
+                                          pin=pin, ram_budget_bytes=ram_budget_bytes)
     else:
         homologies = {a: f2_homology(cx, backend=backend) for a, cx in complexes.items()}
 
@@ -73,9 +49,15 @@ def reduce_complexes(complexes: dict, *, backend: str = "bitint",
 
 
 def grid_poincare(grid, *, backend: str = "bitint", workers: int = 1, pin: bool = False) -> dict:
-    """Grid (hat) homology as ``{(Maslov, Alexander): dimension}`` over F2."""
+    """Grid (hat) homology as ``{(Maslov, Alexander): dimension}`` over F2.
+
+    ``workers`` drives both phases: generation across the permutation space (the n! step) and
+    reduction across the independent gradings. Both reproduce the serial reference exactly --
+    generation bit-for-bit (locked by test_parallel_generation_matches_serial), reduction by the
+    backend-agreement tier. With ``workers == 1`` both fall back to the serial path unchanged.
+    """
     return reduce_complexes(
-        grid_complexes(grid), backend=backend, workers=workers, pin=pin
+        parallel_grid_complexes(grid, workers), backend=backend, workers=workers, pin=pin
     )
 
 

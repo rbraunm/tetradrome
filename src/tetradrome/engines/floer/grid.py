@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """Grid diagrams for combinatorial knot Floer homology (engine Phase 6).
 
 A grid diagram is an n x n toroidal grid with one O and one X marker in every row and
@@ -106,3 +109,11 @@ class GridDiagram:
 
     def __repr__(self) -> str:
         return f"GridDiagram(n={self.n}, O={self.O}, X={self.X})"
+
+
+def staircase_grid(n: int) -> GridDiagram:
+    """A valid n x n grid (O on the diagonal, X one step right) -- the unknot on an n-grid.
+    Has the full n! generators, so it isolates generation scaling without a KnotInfo lookup."""
+    if n < 2:
+        raise ValueError("grid size must be at least 2.")
+    return GridDiagram(list(range(n)), [(i + 1) % n for i in range(n)])

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
 """The normalized diagram: Tetradrome's single internal representation of a knot.
 
 Everything downstream (backends, invariants, validation, reports) consumes this,
