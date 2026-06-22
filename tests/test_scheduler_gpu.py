@@ -23,7 +23,7 @@ from tetradrome.engines.floer.generation import grid_complexes
 from tetradrome.engines.floer.grid import staircase_grid
 from tetradrome.engines.floer.scheduling import reduction_graph
 from tetradrome.scheduler import Placement, Scheduler, detect_machine
-from tetradrome.scheduler.gpu_session import gpu_session_setup, gpu_session_between
+from tetradrome.scheduler.accelerator import gpu_session_setup, gpu_session_between
 
 pytestmark = pytest.mark.skipif(not usable_cupy(), reason="no usable CUDA device / cupy")
 

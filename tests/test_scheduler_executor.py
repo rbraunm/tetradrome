@@ -134,7 +134,7 @@ def test_failed_job_carries_no_timing():
 from tetradrome.scheduler.executor import (                            # noqa: E402
     WarmWorker, _augment_for_admission, _start_context)
 from tetradrome.scheduler.routing import Execution                     # noqa: E402
-from tetradrome.scheduler.inventory import for_host                    # noqa: E402
+from tetradrome.scheduler.hostplatform import for_host                    # noqa: E402
 
 # State lives in the worker process. setup flips it once; between increments after each job. A
 # fresh process per job would reset it, so an accumulating count is proof of process reuse.

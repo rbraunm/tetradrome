@@ -34,7 +34,8 @@ import traceback
 
 from ..errors import TetradromeError
 from .graph import JobGraph
-from .inventory import Machine, for_host
+from .hostplatform import for_host
+from .inventory import Machine
 from .job import Placement
 from .ledger import Allocation, Ledger
 from .placement import Outcome, plan_placement
