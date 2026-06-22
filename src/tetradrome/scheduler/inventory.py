@@ -241,6 +241,15 @@ class HostPlatform(abc.ABC):
     def private_bytes(self, pid: int) -> int | None:
         """The private resident bytes of a process, or None if it is gone or unreadable."""
 
+    @abc.abstractmethod
+    def worker_memory_shared(self) -> bool:
+        """Whether a fresh worker inherits the interpreter and preloaded imports copy-on-write
+        rather than paying for them privately. True where workers fork (the parent's pages are
+        shared, so a worker's marginal RAM is just its own working set); False where they spawn
+        (each worker re-imports everything into private memory). The scheduler charges a
+        per-worker RAM baseline only when this is False -- under sharing the baseline physically
+        exists once and the USS sampler already excludes it."""
+
 
 class UbuntuHostPlatform(HostPlatform):
     """The validated Linux platform, exercised on Ubuntu 24.04. Topology from /sys and the
@@ -275,6 +284,12 @@ class UbuntuHostPlatform(HostPlatform):
         except (FileNotFoundError, ProcessLookupError, ValueError, IndexError):
             return None
         return private
+
+    def worker_memory_shared(self) -> bool:
+        # Workers start via forkserver here: each forks off a server that already imported the
+        # interpreter and the preloaded modules, so those pages are shared copy-on-write and a
+        # worker's marginal RAM is just its own working set. No per-worker baseline to charge.
+        return True
 
 
 class DebianHostPlatform(UbuntuHostPlatform):
@@ -425,6 +440,12 @@ class WindowsHostPlatform(HostPlatform):
             return int(counters.PrivateUsage)
         finally:
             k32.CloseHandle(handle)
+
+    def worker_memory_shared(self) -> bool:
+        # Windows cannot fork, so workers start via spawn: each is a cold interpreter that
+        # re-imports the package and its dependencies into private memory. That baseline exists
+        # once per worker with no sharing, so the scheduler must charge it per fresh worker.
+        return False
 
 
 def _os_release_ids() -> tuple[str, str]:

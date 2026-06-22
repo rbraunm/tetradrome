@@ -90,6 +90,74 @@ def _worker_main(key, run, inputs, deps, cores, gpu_index, result_queue, platfor
     result_queue.put((key, "ok", result, compute_time))
 
 
+def _baseline_probe_main(result_queue, platform):
+    """A single probe that measures one worker's private RAM baseline: the interpreter plus the
+    imports a real worker pulls in, before it does any work. Started the same way real workers
+    are, so under spawn it pays the full cold re-import (the cost we must charge) and under fork
+    it inherits them shared (a near-zero baseline we would not charge anyway). It imports the
+    workload modules explicitly so the measurement reflects what a job-running worker holds, then
+    reports its own private bytes. Reports None if the platform cannot read them, so the caller
+    fails loud rather than charging a zero baseline it never actually measured.
+    """
+    import importlib
+    importlib.import_module("numpy")                 # the heavy shared base a worker imports
+    importlib.import_module("tetradrome.algebra")
+    result_queue.put(platform.private_bytes(os.getpid()))
+
+
+def _context_vram_probe_main(result_queue, setup):
+    """A single probe that measures what a CUDA context costs in VRAM: read free device memory,
+    stand up a context the way the warm worker does, read free memory again. The difference is
+    the per-process VRAM every GPU worker holds before any matrix is allocated. Reports None on
+    any failure so the caller fails loud rather than charging an unmeasured context reserve.
+    """
+    try:
+        import cupy
+        free_before, _ = cupy.cuda.runtime.memGetInfo()
+        setup()                                  # create + warm a CUDA context, as a worker does
+        free_after, _ = cupy.cuda.runtime.memGetInfo()
+    except Exception:
+        result_queue.put(None)
+        return
+    result_queue.put(max(free_before - free_after, 0))
+
+
+def _augment_for_admission(paths, *, worker_shared, ram_baseline, context_vram, gpu_budget,
+                           predicted_gpu_time, context_overhead, vram_fraction, time_multiple):
+    """Augment a job's compute paths so admission sees each fresh worker's true footprint, not
+    just its working set. A fresh worker carries two costs the path omits: a RAM baseline (the
+    interpreter and imports, charged only where workers spawn rather than fork) and, for a fresh
+    GPU process, the CUDA context's VRAM. Return the augmented paths plus the GPU path's
+    warm-versus-fresh decision (None when the job has no GPU path or the machine has no GPU).
+
+    A GPU path that routes warm adds nothing here: it reuses the standing warm worker, whose
+    baseline and context are reserved once when it starts. CPU paths always run fresh. Charging
+    these makes admission bind on memory the box actually has, so a swarm of fresh processes each
+    holding an uncounted context and import baseline cannot be admitted in the first place.
+    """
+    fresh_ram = 0 if worker_shared else ram_baseline
+    gpu_execution = None
+    augmented = []
+    for path in paths:
+        if path.placement is Placement.GPU:
+            if gpu_budget is None:
+                augmented.append(path)          # no device to place it on; leave untouched
+                continue
+            gpu_execution = route_execution(
+                predicted_vram=path.vram_bytes, vram_budget=gpu_budget,
+                predicted_time=predicted_gpu_time, context_overhead=context_overhead,
+                vram_fraction=vram_fraction, time_multiple=time_multiple)
+            if gpu_execution is Execution.FRESH:
+                augmented.append(dataclasses.replace(
+                    path, ram_bytes=path.ram_bytes + fresh_ram,
+                    vram_bytes=path.vram_bytes + context_vram))
+            else:
+                augmented.append(path)          # warm: shares the standing worker
+        else:
+            augmented.append(dataclasses.replace(path, ram_bytes=path.ram_bytes + fresh_ram))
+    return tuple(augmented), gpu_execution
+
+
 def _warm_worker_main(cores, gpu_index, job_queue, result_queue, setup, between, platform):
     """A persistent worker: pin once, optionally set up a session (a held CUDA context on the
     GPU), then run jobs serially off ``job_queue`` until a None sentinel, posting each result to
@@ -200,7 +268,7 @@ class Scheduler:
     def __init__(self, machine: Machine, margin: float = 0.03,
                  sample_interval: float = 0.5, numba_cache_dir: str | None = None,
                  context_overhead: float = float("inf"), vram_fraction: float = 0.5,
-                 time_multiple: float = 10.0, context_vram_reserve: int = 0,
+                 time_multiple: float = 10.0, context_vram_reserve: int | None = None,
                  warm_setup=None, warm_between=None):
         self.machine = machine
         self.margin = margin
@@ -208,16 +276,62 @@ class Scheduler:
         self.numba_cache_dir = numba_cache_dir
         # Warm-versus-fresh routing knobs. context_overhead defaults to infinity so the time
         # trigger stays off until it is measured on a real device; until then the decision is
-        # vram-only. context_vram_reserve is the held context's baseline VRAM, held back from a
-        # GPU's budget while its warm worker is up. warm_setup/warm_between are the warm worker's
-        # session hooks; the GPU build supplies the pair that holds a CUDA context and frees its
-        # pool, and None makes a plain serial worker.
+        # vram-only. context_vram_reserve is the CUDA context's VRAM: held back once for the warm
+        # worker and charged to every fresh GPU process. None means measure it on the device at
+        # run start (when a GPU and warm hooks are present); an explicit int overrides the probe.
+        # warm_setup/warm_between are the warm worker's session hooks; the GPU build supplies the
+        # pair that holds a CUDA context and frees its pool, and None makes a plain serial worker.
         self.context_overhead = context_overhead
         self.vram_fraction = vram_fraction
         self.time_multiple = time_multiple
         self.context_vram_reserve = context_vram_reserve
         self.warm_setup = warm_setup
         self.warm_between = warm_between
+
+    def _measure_ram_baseline(self, ctx, platform) -> int:
+        """Spawn one probe worker and read the private RAM a fresh worker holds before doing any
+        work. Only meaningful where workers do not share memory (spawn); fails loud if the probe
+        cannot report, rather than charging a baseline that was never measured."""
+        probe_queue = ctx.Queue()
+        proc = ctx.Process(target=_baseline_probe_main, args=(probe_queue, platform))
+        proc.start()
+        try:
+            baseline = probe_queue.get(timeout=120)
+        finally:
+            proc.join()
+        if baseline is None:
+            raise TetradromeError(
+                "RAM-baseline probe could not read its own private memory; cannot size the "
+                "per-worker baseline this platform needs.")
+        return baseline
+
+    def _resolve_context_vram(self, ctx) -> int:
+        """The CUDA context's VRAM to reserve and charge per GPU process. An explicit
+        context_vram_reserve wins; otherwise probe the device when a GPU and warm hooks are
+        present, and fall to zero when there is no GPU to charge against."""
+        if self.context_vram_reserve is not None:
+            return self.context_vram_reserve
+        if self.machine.gpus and self.warm_setup is not None:
+            measured = self._measure_context_vram(ctx)
+            logger.info("measured CUDA context VRAM (charged per GPU process): %d bytes",
+                        measured)
+            return measured
+        return 0
+
+    def _measure_context_vram(self, ctx) -> int:
+        """Spawn one probe that creates a CUDA context and reports the VRAM it consumed. Fails
+        loud if the probe cannot report, rather than charging an unmeasured reserve."""
+        probe_queue = ctx.Queue()
+        proc = ctx.Process(target=_context_vram_probe_main, args=(probe_queue, self.warm_setup))
+        proc.start()
+        try:
+            used = probe_queue.get(timeout=120)
+        finally:
+            proc.join()
+        if used is None:
+            raise TetradromeError(
+                "CUDA context VRAM probe failed; cannot size the per-process context reserve.")
+        return used
 
     def run(self, graph: JobGraph) -> RunReport:
         if self.numba_cache_dir:
@@ -228,6 +342,18 @@ class Scheduler:
         result_queue = ctx.Queue()
         sample_queue: queue.Queue = queue.Queue()
         ledger = Ledger(self.machine)
+
+        # Per-process overhead the working-set footprint omits. A fresh worker's RAM baseline is
+        # zero where workers fork (the imports are shared) and a measured cold-import cost where
+        # they spawn. The CUDA context's VRAM is reserved once for the warm worker and charged to
+        # every fresh GPU process; None means probe the device for it now.
+        worker_shared = platform.worker_memory_shared()
+        ram_baseline = 0 if worker_shared else self._measure_ram_baseline(ctx, platform)
+        if ram_baseline:
+            logger.info("per-worker RAM baseline (spawn, charged per fresh worker): %d bytes",
+                        ram_baseline)
+        context_vram = self._resolve_context_vram(ctx)
+        gpu_budget = self.machine.gpus[0].vram_bytes if self.machine.gpus else None
 
         running: dict = {}              # key -> Process, fresh jobs with their own process
         warm_running: dict = {}         # key -> gpu_index, jobs dispatched to a warm worker
@@ -263,27 +389,22 @@ class Scheduler:
             worker = WarmWorker(ctx, cores, gpu_index, result_queue,
                                 self.warm_setup, self.warm_between, platform)
             warm_workers[gpu_index] = worker
-            if self.context_vram_reserve > 0:
-                # Hold the held context's baseline VRAM out of the budget so admission cannot
-                # hand out device memory the context is already using.
+            if context_vram > 0 or ram_baseline > 0:
+                # The warm worker is one standing process holding a CUDA context. Reserve its
+                # context VRAM and (under spawn) its import baseline once, so admission never
+                # hands out memory the worker itself is already using; its serial jobs then
+                # charge only their own working set.
                 ledger.add(Allocation(
-                    job_key=("__warm_context__", gpu_index), placement=Placement.GPU, cores=0,
-                    declared_ram=0, node_index=node, gpu_index=gpu_index,
-                    declared_vram=self.context_vram_reserve))
+                    job_key=("__warm_context__", gpu_index), placement=Placement.GPU,
+                    cores=frozenset(), declared_ram=ram_baseline, node_index=node,
+                    gpu_index=gpu_index, declared_vram=context_vram))
             return worker
 
-        def route_warm(job, placed) -> bool:
-            gpu = next(g for g in self.machine.gpus if g.index == placed.gpu_index)
-            predicted = calibration.predicted_time(float(job.cost), Placement.GPU)
-            decision = route_execution(
-                predicted_vram=placed.path.vram_bytes, vram_budget=gpu.vram_bytes,
-                predicted_time=predicted, context_overhead=self.context_overhead,
-                vram_fraction=self.vram_fraction, time_multiple=self.time_multiple)
-            return decision is Execution.WARM
-
-        def launch(job, placed) -> None:
+        def launch(job, placed, gpu_execution) -> None:
             deps = {dep: results[dep] for dep in job.dependencies}
             placement = placed.path.placement
+            # placed.path is the admission view: its footprint already includes the per-process
+            # overhead for a fresh worker, and is the bare working set for a warm one.
             ledger.add(Allocation(
                 job_key=job.key, placement=placement, cores=placed.cores,
                 declared_ram=placed.path.ram_bytes, node_index=placed.node_index,
@@ -291,7 +412,7 @@ class Scheduler:
             ))
             declared_ram[job.key] = placed.path.ram_bytes
             placement_of[job.key] = placement
-            if placement is Placement.GPU and route_warm(job, placed):
+            if placement is Placement.GPU and gpu_execution is Execution.WARM:
                 # Small GPU job: serialize it through the held context. Not RAM-sampled -- it is
                 # small by the gate, and only one warm job's footprint is ever live in the shared
                 # pid at a time, so a live sample could not be attributed to it cleanly anyway.
@@ -405,9 +526,19 @@ class Scheduler:
             for job in graph.ready(completed):
                 if is_running(job.key) or job.key in cancelled:
                     continue
-                decision = plan_placement(self.machine, ledger, job, self.margin)
+                # Show the placer the fresh-worker footprint, not just the working set, so it
+                # cannot admit more processes than the box can actually hold. The GPU path's
+                # warm/fresh decision comes back so launch dispatches it the same way.
+                predicted = calibration.predicted_time(float(job.cost), Placement.GPU)
+                aug_paths, gpu_execution = _augment_for_admission(
+                    job.paths, worker_shared=worker_shared, ram_baseline=ram_baseline,
+                    context_vram=context_vram, gpu_budget=gpu_budget, predicted_gpu_time=predicted,
+                    context_overhead=self.context_overhead, vram_fraction=self.vram_fraction,
+                    time_multiple=self.time_multiple)
+                aug_job = dataclasses.replace(job, paths=aug_paths)
+                decision = plan_placement(self.machine, ledger, aug_job, self.margin)
                 if decision.outcome is Outcome.ADMIT:
-                    launch(job, decision.placed)
+                    launch(job, decision.placed, gpu_execution)
                     did = True
                 elif decision.outcome is Outcome.INFEASIBLE:
                     poison(job.key, f"infeasible placement: {decision.reason}")
@@ -438,7 +569,7 @@ class Scheduler:
             for key in list(running):
                 stop_worker(key)
             for gpu_index, worker in warm_workers.items():
-                if self.context_vram_reserve > 0:
+                if context_vram > 0 or ram_baseline > 0:
                     ledger.remove(("__warm_context__", gpu_index))
                 worker.shutdown()
             result_queue.close()

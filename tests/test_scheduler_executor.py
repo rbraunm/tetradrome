@@ -131,7 +131,9 @@ def test_failed_job_carries_no_timing():
 
 # -- warm worker: persistent, serial, frees between jobs --
 
-from tetradrome.scheduler.executor import WarmWorker, _start_context   # noqa: E402
+from tetradrome.scheduler.executor import (                            # noqa: E402
+    WarmWorker, _augment_for_admission, _start_context)
+from tetradrome.scheduler.routing import Execution                     # noqa: E402
 from tetradrome.scheduler.inventory import for_host                    # noqa: E402
 
 # State lives in the worker process. setup flips it once; between increments after each job. A
@@ -211,8 +213,8 @@ def test_small_gpu_jobs_route_warm_and_serialize_in_one_worker():
     # would have reset to 0, so distinct climbing counts prove warm + serial + single process.
     jobs = [Job(key=k, run=report_warm_state, inputs={}, paths=(_gpu(_GIB // 10),), cost=1000)
             for k in ("a", "b", "c")]
-    report = Scheduler(_gpu_machine(), warm_setup=warm_setup,
-                       warm_between=warm_between).run(JobGraph(jobs))
+    report = Scheduler(_gpu_machine(), warm_setup=warm_setup, warm_between=warm_between,
+                       context_vram_reserve=0).run(JobGraph(jobs))
     setups = {report.results[k][0] for k in ("a", "b", "c")}
     counts = sorted(report.results[k][1] for k in ("a", "b", "c"))
     assert setups == {True}             # every job ran in the worker that ran setup once
@@ -224,8 +226,8 @@ def test_big_gpu_job_routes_fresh():
     # the state it reports is the module default rather than the hooked-worker's True.
     job = Job(key="big", run=report_warm_state, inputs={},
               paths=(_gpu(6 * _GIB // 10),), cost=1000)
-    report = Scheduler(_gpu_machine(), warm_setup=warm_setup,
-                       warm_between=warm_between).run(JobGraph([job]))
+    report = Scheduler(_gpu_machine(), warm_setup=warm_setup, warm_between=warm_between,
+                       context_vram_reserve=0).run(JobGraph([job]))
     assert report.results["big"] == (False, 0)
 
 
@@ -243,8 +245,74 @@ def test_failing_warm_job_does_not_kill_the_shared_worker():
     # must still complete the other, proving one component's failure stays isolated.
     bad = Job(key="bad", run=boom, inputs={}, paths=(_gpu(_GIB // 10),), cost=1000)
     good = Job(key="good", run=produce, inputs={"value": 42}, paths=(_gpu(_GIB // 10),), cost=1000)
-    report = Scheduler(_gpu_machine(), warm_setup=warm_setup,
-                       warm_between=warm_between).run(JobGraph([bad, good]))
+    report = Scheduler(_gpu_machine(), warm_setup=warm_setup, warm_between=warm_between,
+                       context_vram_reserve=0).run(JobGraph([bad, good]))
     assert report.results.get("good") == 42
     assert "bad" in report.cancelled
     assert any(failed == "bad" for _component, failed, _err in report.failures)
+
+
+# -- per-process overhead in the admission view (pure, no processes spawned) --
+
+_CTX = 100 * _SMALL          # 100 MiB: what a CUDA context costs in VRAM
+_BASE = 500 * _SMALL         # 500 MiB: what a spawned worker's cold imports cost in RAM
+
+
+def _aug(paths, *, shared, gpu_budget=_GIB, predicted=None):
+    return _augment_for_admission(
+        paths, worker_shared=shared, ram_baseline=_BASE, context_vram=_CTX,
+        gpu_budget=gpu_budget, predicted_gpu_time=predicted,
+        context_overhead=float("inf"), vram_fraction=0.5, time_multiple=10.0)
+
+
+def test_spawn_charges_baseline_to_a_fresh_cpu_path():
+    cpu = ComputePath(Placement.CPU_PINNED, cores=2, ram_bytes=_SMALL)
+    (aug,), gpu_exec = _aug((cpu,), shared=False)
+    assert aug.ram_bytes == _SMALL + _BASE      # the cold-import baseline a spawned worker pays
+    assert aug.vram_bytes == 0
+    assert gpu_exec is None                     # no GPU path present
+
+
+def test_fork_charges_no_cpu_baseline():
+    cpu = ComputePath(Placement.CPU_PINNED, cores=2, ram_bytes=_SMALL)
+    (aug,), _ = _aug((cpu,), shared=True)
+    assert aug.ram_bytes == _SMALL              # forked workers share the imports; nothing added
+
+
+def test_fresh_gpu_path_charges_context_and_baseline():
+    big = _gpu(6 * _GIB // 10)                  # 60% of the 1 GiB budget -> routes fresh
+    (aug,), gpu_exec = _aug((big,), shared=False)
+    assert gpu_exec is Execution.FRESH
+    assert aug.vram_bytes == big.vram_bytes + _CTX     # its own CUDA context
+    assert aug.ram_bytes == big.ram_bytes + _BASE      # plus the spawn baseline
+
+
+def test_warm_gpu_path_adds_no_overhead():
+    small = _gpu(_GIB // 10)                     # 10% of budget -> routes warm
+    (aug,), gpu_exec = _aug((small,), shared=False)
+    assert gpu_exec is Execution.WARM
+    assert aug.vram_bytes == small.vram_bytes    # shares the standing warm worker's context
+    assert aug.ram_bytes == small.ram_bytes      # and its baseline
+
+
+def test_fresh_gpu_under_fork_charges_context_only():
+    big = _gpu(6 * _GIB // 10)
+    (aug,), gpu_exec = _aug((big,), shared=True)
+    assert gpu_exec is Execution.FRESH
+    assert aug.vram_bytes == big.vram_bytes + _CTX
+    assert aug.ram_bytes == big.ram_bytes        # fork shares imports; no RAM baseline
+
+
+def test_no_device_leaves_gpu_path_untouched():
+    small = _gpu(_GIB // 10)
+    (aug,), gpu_exec = _aug((small,), shared=False, gpu_budget=None)
+    assert gpu_exec is None
+    assert aug.vram_bytes == small.vram_bytes and aug.ram_bytes == small.ram_bytes
+
+
+def test_ram_baseline_probe_measures_real_private_memory():
+    # The probe runs a real worker process and reads back a positive private footprint, not None
+    # and not zero -- that round-trip is what the spawn-platform baseline charge depends on.
+    ctx = _start_context()
+    baseline = Scheduler(_machine())._measure_ram_baseline(ctx, for_host())
+    assert isinstance(baseline, int) and baseline > 0
