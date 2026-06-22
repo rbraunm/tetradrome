@@ -10,10 +10,11 @@ from tetradrome.scheduler.inventory import (
     UbuntuHostPlatform,
     WindowsHostPlatform,
     for_host,
+    parse_cgroup_limit,
     parse_cpulist,
-    parse_mem_ceiling,
     parse_meminfo_total,
     parse_node_meminfo_total,
+    tightest_ceiling,
 )
 
 
@@ -48,17 +49,39 @@ def test_parse_meminfo_total():
     assert parse_meminfo_total("MemTotal:  32768 kB\nMemFree: 1024 kB\n") == 32768 * 1024
 
 
-def test_parse_mem_ceiling_limit_under_physical_binds():
-    assert parse_mem_ceiling("200\n", physical_total_bytes=300) == 200
+def test_parse_cgroup_limit_real_value():
+    assert parse_cgroup_limit("200\n") == 200
 
 
-def test_parse_mem_ceiling_max_uses_physical():
-    assert parse_mem_ceiling("max\n", physical_total_bytes=300) == 300
+def test_parse_cgroup_limit_max_is_none():
+    assert parse_cgroup_limit("max\n") is None
 
 
-def test_parse_mem_ceiling_sentinel_above_physical_uses_physical():
-    # a cgroup-v1 'unlimited' sentinel sits far above physical, so physical is the real ceiling
-    assert parse_mem_ceiling("9223372036854771712", physical_total_bytes=300) == 300
+def test_tightest_ceiling_container_cap_binds():
+    # In a container, physical is the host node-sum (300), but /proc/meminfo is virtualized to
+    # the 200 cap and the cgroup agrees. The cap, not host RAM, is the real ceiling.
+    assert tightest_ceiling(physical_total_bytes=300, meminfo_total_bytes=200,
+                            cgroup_limit_bytes=200) == 200
+
+
+def test_tightest_ceiling_meminfo_binds_without_cgroup():
+    # cgroup limit absent ('max' -> None), but the virtualized /proc/meminfo still carries the
+    # container cap below host RAM.
+    assert tightest_ceiling(physical_total_bytes=300, meminfo_total_bytes=200,
+                            cgroup_limit_bytes=None) == 200
+
+
+def test_tightest_ceiling_bare_metal_is_physical():
+    # No container: the three sources agree, cgroup unlimited. Physical RAM is the ceiling.
+    assert tightest_ceiling(physical_total_bytes=300, meminfo_total_bytes=300,
+                            cgroup_limit_bytes=None) == 300
+
+
+def test_tightest_ceiling_cgroup_sentinel_dropped_by_min():
+    # A cgroup-v1 'unlimited' sentinel sits far above physical; min() ignores it without a
+    # special case, so physical (matching meminfo on bare metal) remains the ceiling.
+    assert tightest_ceiling(physical_total_bytes=300, meminfo_total_bytes=300,
+                            cgroup_limit_bytes=9223372036854771712) == 300
 
 
 def test_machine_aggregates():

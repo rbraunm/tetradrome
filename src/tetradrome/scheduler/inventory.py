@@ -111,13 +111,34 @@ def parse_meminfo_total(text: str) -> int:
     raise ValueError("no MemTotal line in /proc/meminfo")
 
 
-def parse_mem_ceiling(cgroup_text: str, physical_total_bytes: int) -> int:
-    """The true memory ceiling: the cgroup limit capped by physical RAM. 'max' (cgroup v2) or
-    any sentinel above physical means physical RAM is the real ceiling."""
+def parse_cgroup_limit(cgroup_text: str) -> int | None:
+    """The raw cgroup memory limit in bytes, or None when there is no real limit (cgroup v2
+    'max'). A cgroup v1 'unlimited' sentinel is a real integer sitting far above physical RAM;
+    tightest_ceiling drops it naturally via min(), so it is not special-cased here."""
     cgroup_text = cgroup_text.strip()
     if cgroup_text == "max":
-        return physical_total_bytes
-    return min(int(cgroup_text), physical_total_bytes)
+        return None
+    return int(cgroup_text)
+
+
+def tightest_ceiling(physical_total_bytes: int, meminfo_total_bytes: int,
+                     cgroup_limit_bytes: int | None) -> int:
+    """The binding total-memory ceiling: the smallest real candidate.
+
+    physical_total_bytes: sum of per-NUMA-node RAM from /sys. lxcfs does NOT virtualize the
+        per-node meminfo, so inside a container this is the HOST total, not the cap.
+    meminfo_total_bytes: MemTotal from /proc/meminfo. lxcfs DOES virtualize this, so inside a
+        container it reflects the container's memory cap.
+    cgroup_limit_bytes: the cgroup memory.max / memory.limit_in_bytes, or None when unset/'max'.
+
+    On bare metal these agree (or the cgroup is unlimited). In a container the cgroup and/or the
+    virtualized /proc/meminfo bind below host RAM, and the scheduler must size against whichever
+    is tightest -- over-counting host RAM that the container can never use is what causes the
+    OOM the scheduler exists to prevent."""
+    candidates = [physical_total_bytes, meminfo_total_bytes]
+    if cgroup_limit_bytes is not None:
+        candidates.append(cgroup_limit_bytes)
+    return min(candidates)
 
 
 # ---- discovery ----------------------------------------------------------
@@ -171,12 +192,17 @@ def detect_gpus() -> tuple[GPU, ...]:
 
 
 def detect_mem_ceiling(physical_total_bytes: int) -> int:
-    """The total-memory ceiling from the cgroup, capped by physical RAM; physical when there
-    is no tighter cgroup limit."""
+    """The binding total-memory ceiling: the tightest of the physical node-sum RAM, the
+    (container-virtualized) /proc/meminfo MemTotal, and the cgroup limit if one is set. In a
+    container the per-node /sys RAM that feeds physical_total_bytes is the host's, so it alone
+    would over-count; /proc/meminfo and/or the cgroup carry the real cap."""
+    meminfo_total = parse_meminfo_total(_read(_MEMINFO))
+    cgroup_limit = None
     for path in _CGROUP_MAX:
         if os.path.exists(path):
-            return parse_mem_ceiling(_read(path), physical_total_bytes)
-    return physical_total_bytes
+            cgroup_limit = parse_cgroup_limit(_read(path))
+            break
+    return tightest_ceiling(physical_total_bytes, meminfo_total, cgroup_limit)
 
 
 # ---- host platform: everything OS-specific, one class per host ---------
