@@ -26,6 +26,7 @@ import dataclasses
 import logging
 import multiprocessing
 import os
+import pickle
 import queue
 import sys
 import threading
@@ -372,6 +373,8 @@ class Scheduler:
         declared_ram: dict = {}         # key -> declared peak, for warnings and the summary
         peak_actual: dict = {}          # key -> max sampled private bytes
         over_warned: set = set()        # keys already warned for crossing their declaration
+        output_over_warned: set = set()  # keys already warned for an oversized result
+        pending_consumers: dict = {}    # key -> dependents not yet dispatched; free its result at 0
         placement_of: dict = {}         # key -> the placement it ran on, for calibration
         calibration = Calibration()
         results: dict = {}
@@ -438,6 +441,14 @@ class Scheduler:
                     running_pids[job.key] = proc.pid
             if placed.note:
                 logger.info("job %r degraded: %s", job.key, placed.note)
+            # The deps have been copied into the worker (started or dispatched), so each producer's
+            # held result is no longer needed by this consumer. Drop it once its last consumer has
+            # been dispatched, releasing both the parent's copy and its global-RAM charge.
+            for dep in job.dependencies:
+                pending_consumers[dep] -= 1
+                if pending_consumers[dep] == 0:
+                    del results[dep]
+                    ledger.remove(("__output__", dep))
 
         def forget_warm(key) -> None:
             # Drop a warm job's bookkeeping without touching the shared worker. A stray result
@@ -463,6 +474,8 @@ class Scheduler:
                     stop_worker(member)
                 elif member in warm_running:
                     forget_warm(member)     # leave the shared worker up for other components
+                ledger.discard(("__output__", member))   # release its held-result charge if any
+                pending_consumers.pop(member, None)
                 results.pop(member, None)
                 completed.discard(member)
                 cancelled.add(member)
@@ -509,6 +522,21 @@ class Scheduler:
                 completed.add(key)
                 timings[key] = compute_time
                 calibration.observe(float(graph.get(key).cost), placement_of[key], compute_time)
+                # The result persists in the parent until its last consumer drains it, so charge it
+                # against global RAM like a working-set footprint: declared budget, measured actual,
+                # max of the two, and an over-budget warning when the result outgrows its
+                # declaration so the estimate is a tuning signal rather than a silent under-charge.
+                declared_out = graph.get(key).output_bytes
+                measured_out = len(pickle.dumps(payload))
+                ledger.add(Allocation(
+                    job_key=("__output__", key), placement=Placement.CPU_UNPINNED,
+                    cores=frozenset(), declared_ram=max(declared_out, measured_out),
+                    node_index=None))
+                pending_consumers[key] = len(graph.dependents(key))
+                if declared_out and measured_out > declared_out and key not in output_over_warned:
+                    output_over_warned.add(key)
+                    logger.warning("job %r output exceeded declared budget: declared %d, actual %d",
+                                   key, declared_out, measured_out)
                 logger.debug("job %r runtime %.4fs vs predicted cost %g",
                              key, compute_time, float(graph.get(key).cost))
             else:

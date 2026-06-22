@@ -63,6 +63,13 @@ class Job:
     ``cost`` is the predicted work in abstract units (the builder sets it, e.g. from
     ``predict_cost``); the scheduler compares it to measured runtime to calibrate and to decide
     whether a job is substantial enough to warrant its own process. Zero means unpredicted.
+
+    ``output_bytes`` is the declared size of the job's result, the portion of its working set that
+    persists in the parent after the job exits and is held until the last consumer drains it. It is
+    charged against global RAM like a working-set footprint -- ``max(declared, measured)``, with an
+    over-budget warning when the measured result exceeds the declaration -- so a too-low estimate
+    is a tuning signal, not a silent under-charge. Zero means unpredicted: the measured size is
+    charged reactively.
     """
     key: Hashable
     run: Callable
@@ -70,6 +77,7 @@ class Job:
     paths: tuple[ComputePath, ...]
     dependencies: frozenset = dataclasses.field(default_factory=frozenset)
     cost: float = 0.0
+    output_bytes: int = 0
 
     def __post_init__(self):
         # Accept any iterable for paths/dependencies; store normalized immutables.

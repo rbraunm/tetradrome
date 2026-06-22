@@ -346,3 +346,24 @@ def test_infeasible_job_does_not_sink_the_batch():
     assert "bad" in report.cancelled                     # the infeasible job's lineage abandoned
     assert [e.job_key for e in report.infeasible] == ["bad"]
     assert report.infeasible[0].gaps[0].axis is InfeasibilityAxis.EXCEEDS_RAM
+
+
+def test_intermediate_results_freed_terminals_kept():
+    # A producer consumed by one terminal. After the run, the terminal's result remains but the
+    # intermediate's is dropped, freed when its last consumer was dispatched.
+    a = _job("a", produce, {"value": 5})
+    b = _job("b", passthrough, {"add": 1}, deps=("a",))
+    report = Scheduler(_machine()).run(JobGraph([a, b]))
+    assert report.results["b"] == 6                  # terminal kept
+    assert "a" not in report.results                 # intermediate freed on b's dispatch
+
+
+def test_output_over_budget_warns(caplog):
+    import logging
+    # declares a 1-byte output but returns a list that pickles far larger: the measured result
+    # exceeds the declaration, so the same kind of warning the working set throws fires for tuning.
+    big_output = Job(key="x", run=produce, inputs={"value": list(range(1000))},
+                     paths=(_cpu(),), output_bytes=1)
+    with caplog.at_level(logging.WARNING):
+        Scheduler(_machine()).run(JobGraph([big_output]))
+    assert any("output exceeded declared budget" in r.message for r in caplog.records)
