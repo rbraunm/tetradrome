@@ -489,19 +489,19 @@ class Scheduler:
                     running_pids.pop(key, None)
                 ledger.remove(key)
                 proc.join()
-                logger.info("job %r done: predicted %d, peak private %d",
-                            key, declared_ram[key], peak_actual.get(key, 0))
+                logger.debug("job %r done: predicted %d, peak private %d",
+                             key, declared_ram[key], peak_actual.get(key, 0))
             else:                       # warm: the worker persists, only the allocation clears
                 warm_running.pop(key)
                 ledger.remove(key)
-                logger.info("job %r done (warm)", key)
+                logger.debug("job %r done (warm)", key)
             if status == "ok":
                 results[key] = payload
                 completed.add(key)
                 timings[key] = compute_time
                 calibration.observe(float(graph.get(key).cost), placement_of[key], compute_time)
-                logger.info("job %r runtime %.4fs vs predicted cost %g",
-                            key, compute_time, float(graph.get(key).cost))
+                logger.debug("job %r runtime %.4fs vs predicted cost %g",
+                             key, compute_time, float(graph.get(key).cost))
             else:
                 poison(key, payload)
 
