@@ -37,6 +37,20 @@ class Accelerator(abc.ABC):
     def detect_devices(self) -> tuple[GPU, ...]:
         """The usable devices on this box with their VRAM, empty if none are usable."""
 
+    @abc.abstractmethod
+    def free_vram_bytes(self, device_index: int = 0) -> int:
+        """Free VRAM on a device, read without creating a context, so it can bracket context
+        creation to measure what the context costs."""
+
+    @abc.abstractmethod
+    def session_setup(self):
+        """The callable that stands up a device session (a held context) in a worker, or None if
+        the vendor needs none. Must be a module-level callable so it pickles to a spawned worker."""
+
+    @abc.abstractmethod
+    def session_between(self):
+        """The callable that releases per-job device resources between jobs, or None."""
+
 
 class NvidiaCudaAccelerator(Accelerator):
     """NVIDIA CUDA devices, driven through cupy. The one implemented and validated vendor. Device
@@ -56,6 +70,24 @@ class NvidiaCudaAccelerator(Accelerator):
         return tuple(
             GPU(index=i, vram_bytes=(dev.memory_total_mib or 0) * 1024 * 1024, numa_node=None)
             for i, dev in enumerate(info.devices))
+
+    def free_vram_bytes(self, device_index: int = 0) -> int:
+        # nvidia-smi reads driver-level free memory without a CUDA context, so it can be read
+        # before a context exists and again after, and the difference is the context's cost. It
+        # ships with the driver, so it is present wherever CUDA is. Fails loud if it cannot run.
+        import subprocess
+
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits",
+             f"--id={device_index}"],
+            capture_output=True, text=True, check=True)
+        return int(result.stdout.strip().splitlines()[0]) * 1024 * 1024     # MiB -> bytes
+
+    def session_setup(self):
+        return gpu_session_setup
+
+    def session_between(self):
+        return gpu_session_between
 
 
 # ---- warm-worker session hooks (NVIDIA/cupy) ----------------------------

@@ -23,7 +23,6 @@ from tetradrome.engines.floer.generation import grid_complexes
 from tetradrome.engines.floer.grid import staircase_grid
 from tetradrome.engines.floer.scheduling import reduction_graph
 from tetradrome.scheduler import Placement, Scheduler, detect_machine
-from tetradrome.scheduler.accelerator import gpu_session_setup, gpu_session_between
 
 pytestmark = pytest.mark.skipif(not usable_cupy(), reason="no usable CUDA device / cupy")
 
@@ -38,8 +37,7 @@ def test_gpu_warm_path_matches_oracle():
     assert _packed_gpu_available(), "cupy is usable but packed-gpu is not listed as a backend"
     complexes = grid_complexes(staircase_grid(7))
     oracle = {alexander: f2_homology(cx, "bitint") for alexander, cx in complexes.items()}
-    report = Scheduler(detect_machine(), vram_fraction=1.0, warm_setup=gpu_session_setup,
-                       warm_between=gpu_session_between).run(reduction_graph(complexes,
+    report = Scheduler(detect_machine(), vram_fraction=1.0).run(reduction_graph(complexes,
                                                                             backend="auto")[0])
     assert not report.failures, report.failures
     for alexander, cx in complexes.items():
@@ -55,8 +53,7 @@ def test_gpu_fresh_path_matches_oracle():
     complexes = grid_complexes(staircase_grid(7))
     pair = dict(list(complexes.items())[:2])
     oracle = {alexander: f2_homology(cx, "bitint") for alexander, cx in pair.items()}
-    report = Scheduler(detect_machine(), vram_fraction=0.0, warm_setup=gpu_session_setup,
-                       warm_between=gpu_session_between).run(reduction_graph(pair,
+    report = Scheduler(detect_machine(), vram_fraction=0.0).run(reduction_graph(pair,
                                                                             backend="auto")[0])
     assert not report.failures, report.failures
     for alexander, cx in pair.items():

@@ -132,7 +132,7 @@ def test_failed_job_carries_no_timing():
 # -- warm worker: persistent, serial, frees between jobs --
 
 from tetradrome.scheduler.executor import (                            # noqa: E402
-    WarmWorker, _augment_for_admission, _start_context)
+    WarmWorker, _augment_for_admission, _overhead_probe_main, _start_context)
 from tetradrome.scheduler.routing import Execution                     # noqa: E402
 from tetradrome.scheduler.hostplatform import for_host                    # noqa: E402
 
@@ -310,9 +310,19 @@ def test_no_device_leaves_gpu_path_untouched():
     assert aug.vram_bytes == small.vram_bytes and aug.ram_bytes == small.ram_bytes
 
 
-def test_ram_baseline_probe_measures_real_private_memory():
-    # The probe runs a real worker process and reads back a positive private footprint, not None
-    # and not zero -- that round-trip is what the spawn-platform baseline charge depends on.
+def test_overhead_probe_reports_real_private_memory():
+    # The probe runs a real worker process and reads back a positive private footprint; with no
+    # accelerator it reports zero context VRAM. That round-trip is what the per-process charge
+    # depends on. (The charge itself is zero under fork, where imports are shared.)
     ctx = _start_context()
-    baseline = Scheduler(_machine())._measure_ram_baseline(ctx, for_host())
-    assert isinstance(baseline, int) and baseline > 0
+    q = ctx.Queue()
+    proc = ctx.Process(target=_overhead_probe_main, args=(q, for_host(), None, None))
+    proc.start()
+    try:
+        measured = q.get(timeout=120)
+    finally:
+        proc.join()
+    assert measured is not None
+    ram, context_vram = measured
+    assert isinstance(ram, int) and ram > 0
+    assert context_vram == 0

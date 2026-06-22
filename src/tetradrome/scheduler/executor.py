@@ -35,6 +35,7 @@ import traceback
 from ..errors import TetradromeError
 from .graph import JobGraph
 from .hostplatform import for_host
+from .accelerator import detect_accelerator
 from .inventory import Machine
 from .job import Placement
 from .ledger import Allocation, Ledger
@@ -91,36 +92,35 @@ def _worker_main(key, run, inputs, deps, cores, gpu_index, result_queue, platfor
     result_queue.put((key, "ok", result, compute_time))
 
 
-def _baseline_probe_main(result_queue, platform):
-    """A single probe that measures one worker's private RAM baseline: the interpreter plus the
-    imports a real worker pulls in, before it does any work. Started the same way real workers
-    are, so under spawn it pays the full cold re-import (the cost we must charge) and under fork
-    it inherits them shared (a near-zero baseline we would not charge anyway). It imports the
-    workload modules explicitly so the measurement reflects what a job-running worker holds, then
-    reports its own private bytes. Reports None if the platform cannot read them, so the caller
-    fails loud rather than charging a zero baseline it never actually measured.
+def _overhead_probe_main(result_queue, platform, accelerator, session_setup):
+    """One probe that measures what a worker process costs before it does any work, by being what
+    the heaviest worker is. It imports the workload, and when a GPU is present it also stands up
+    the device session the way a GPU worker does, so its own private RAM reflects the real
+    per-worker baseline (interpreter, imports, and the context's host-side memory under spawn).
+
+    For the context's device VRAM it reads free memory through the accelerator -- a context-free
+    read -- before standing the context up and again after, so the difference is the context's
+    cost rather than whatever was already resident. Reports (ram_baseline, context_vram), or None
+    on any failure, so the caller fails loud rather than charging an unmeasured overhead.
     """
     import importlib
     importlib.import_module("numpy")                 # the heavy shared base a worker imports
     importlib.import_module("tetradrome.algebra")
-    result_queue.put(platform.private_bytes(os.getpid()))
-
-
-def _context_vram_probe_main(result_queue, setup):
-    """A single probe that measures what a CUDA context costs in VRAM: read free device memory,
-    stand up a context the way the warm worker does, read free memory again. The difference is
-    the per-process VRAM every GPU worker holds before any matrix is allocated. Reports None on
-    any failure so the caller fails loud rather than charging an unmeasured context reserve.
-    """
+    context_vram = 0
     try:
-        import cupy
-        free_before, _ = cupy.cuda.runtime.memGetInfo()
-        setup()                                  # create + warm a CUDA context, as a worker does
-        free_after, _ = cupy.cuda.runtime.memGetInfo()
+        if accelerator is not None and session_setup is not None:
+            free_before = accelerator.free_vram_bytes()
+            session_setup()                          # stand up the context, as a GPU worker does
+            free_after = accelerator.free_vram_bytes()
+            context_vram = max(free_before - free_after, 0)
+        ram_baseline = platform.private_bytes(os.getpid())
     except Exception:
         result_queue.put(None)
         return
-    result_queue.put(max(free_before - free_after, 0))
+    if ram_baseline is None:
+        result_queue.put(None)
+        return
+    result_queue.put((ram_baseline, context_vram))
 
 
 def _augment_for_admission(paths, *, worker_shared, ram_baseline, context_vram, gpu_budget,
@@ -289,50 +289,41 @@ class Scheduler:
         self.warm_setup = warm_setup
         self.warm_between = warm_between
 
-    def _measure_ram_baseline(self, ctx, platform) -> int:
-        """Spawn one probe worker and read the private RAM a fresh worker holds before doing any
-        work. Only meaningful where workers do not share memory (spawn); fails loud if the probe
-        cannot report, rather than charging a baseline that was never measured."""
+    def _measure_overhead(self, ctx, platform, accelerator, session_setup):
+        """The per-process overhead admission must charge: the per-worker RAM baseline (zero where
+        workers share imports via fork, a measured cold-import cost where they spawn) and the
+        device context's VRAM (charged per fresh GPU process). Both come from one probe that is
+        what the heaviest worker is. An explicit context_vram_reserve overrides the device probe.
+        Skips the probe entirely when there is nothing to measure (shared imports and no device
+        VRAM to size). Fails loud if a probe that should report cannot."""
+        worker_shared = platform.worker_memory_shared()
+        explicit_context = self.context_vram_reserve is not None
+        measure_context = (accelerator is not None and bool(self.machine.gpus)
+                           and session_setup is not None and not explicit_context)
+        if worker_shared and not measure_context:
+            return 0, (self.context_vram_reserve if explicit_context else 0)
+
         probe_queue = ctx.Queue()
-        proc = ctx.Process(target=_baseline_probe_main, args=(probe_queue, platform))
+        proc = ctx.Process(target=_overhead_probe_main,
+                           args=(probe_queue, platform, accelerator, session_setup))
         proc.start()
         try:
-            baseline = probe_queue.get(timeout=120)
+            measured = probe_queue.get(timeout=120)
         finally:
             proc.join()
-        if baseline is None:
+        if measured is None:
             raise TetradromeError(
-                "RAM-baseline probe could not read its own private memory; cannot size the "
-                "per-worker baseline this platform needs.")
-        return baseline
-
-    def _resolve_context_vram(self, ctx) -> int:
-        """The CUDA context's VRAM to reserve and charge per GPU process. An explicit
-        context_vram_reserve wins; otherwise probe the device when a GPU and warm hooks are
-        present, and fall to zero when there is no GPU to charge against."""
-        if self.context_vram_reserve is not None:
-            return self.context_vram_reserve
-        if self.machine.gpus and self.warm_setup is not None:
-            measured = self._measure_context_vram(ctx)
-            logger.info("measured CUDA context VRAM (charged per GPU process): %d bytes",
-                        measured)
-            return measured
-        return 0
-
-    def _measure_context_vram(self, ctx) -> int:
-        """Spawn one probe that creates a CUDA context and reports the VRAM it consumed. Fails
-        loud if the probe cannot report, rather than charging an unmeasured reserve."""
-        probe_queue = ctx.Queue()
-        proc = ctx.Process(target=_context_vram_probe_main, args=(probe_queue, self.warm_setup))
-        proc.start()
-        try:
-            used = probe_queue.get(timeout=120)
-        finally:
-            proc.join()
-        if used is None:
-            raise TetradromeError(
-                "CUDA context VRAM probe failed; cannot size the per-process context reserve.")
-        return used
+                "overhead probe failed; cannot size the per-worker RAM baseline and context "
+                "VRAM this platform and device need.")
+        probe_ram, probe_context = measured
+        ram_baseline = 0 if worker_shared else probe_ram
+        if explicit_context:
+            context_vram = self.context_vram_reserve
+        elif measure_context:
+            context_vram = probe_context
+        else:
+            context_vram = 0
+        return ram_baseline, context_vram
 
     def run(self, graph: JobGraph) -> RunReport:
         if self.numba_cache_dir:
@@ -344,16 +335,29 @@ class Scheduler:
         sample_queue: queue.Queue = queue.Queue()
         ledger = Ledger(self.machine)
 
-        # Per-process overhead the working-set footprint omits. A fresh worker's RAM baseline is
-        # zero where workers fork (the imports are shared) and a measured cold-import cost where
-        # they spawn. The CUDA context's VRAM is reserved once for the warm worker and charged to
-        # every fresh GPU process; None means probe the device for it now.
+        # The accelerator axis: which device vendor is present, if any. It supplies the warm
+        # session hooks (a caller-provided pair still overrides) and the context-free VRAM read
+        # the overhead probe needs.
+        accelerator = detect_accelerator()
+        warm_setup = self.warm_setup
+        warm_between = self.warm_between
+        if accelerator is not None:
+            if warm_setup is None:
+                warm_setup = accelerator.session_setup()
+            if warm_between is None:
+                warm_between = accelerator.session_between()
+
+        # Per-process overhead the working-set footprint omits: a fresh worker's RAM baseline
+        # (zero where workers fork and share imports, a measured cold-import cost where they
+        # spawn) and the device context's VRAM (reserved once for the warm worker, charged to
+        # every fresh GPU process). One probe measures both on the box.
+        ram_baseline, context_vram = self._measure_overhead(ctx, platform, accelerator, warm_setup)
         worker_shared = platform.worker_memory_shared()
-        ram_baseline = 0 if worker_shared else self._measure_ram_baseline(ctx, platform)
         if ram_baseline:
             logger.info("per-worker RAM baseline (spawn, charged per fresh worker): %d bytes",
                         ram_baseline)
-        context_vram = self._resolve_context_vram(ctx)
+        if context_vram:
+            logger.info("CUDA context VRAM (charged per GPU process): %d bytes", context_vram)
         gpu_budget = self.machine.gpus[0].vram_bytes if self.machine.gpus else None
 
         running: dict = {}              # key -> Process, fresh jobs with their own process
@@ -388,7 +392,7 @@ class Scheduler:
             cores = next((n.cores for n in self.machine.nodes if n.index == node),
                          self.machine.nodes[0].cores)
             worker = WarmWorker(ctx, cores, gpu_index, result_queue,
-                                self.warm_setup, self.warm_between, platform)
+                                warm_setup, warm_between, platform)
             warm_workers[gpu_index] = worker
             if context_vram > 0 or ram_baseline > 0:
                 # The warm worker is one standing process holding a CUDA context. Reserve its
