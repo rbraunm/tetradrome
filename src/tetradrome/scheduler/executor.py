@@ -28,7 +28,9 @@ import multiprocessing
 import os
 import pickle
 import queue
+import shutil
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -258,12 +260,16 @@ class RunReport:
     behind the cost model: comparing it to the job's predicted ``cost`` is what calibrates the
     per-op constant and, in turn, the warm-versus-fresh routing. ``infeasible`` holds one
     InfeasibleJobError per job the bare machine could serve on no declared path; their lineages are
-    abandoned but the rest of the batch runs.
+    abandoned but the rest of the batch runs. ``spill_count``/``spilled_bytes`` record the degraded
+    path: how many held results were written to disk under memory pressure, and their total size. A
+    nonzero count means the run completed only by spilling.
     """
     results: dict
     failures: list          # (component frozenset, failed_key, error_text)
     cancelled: frozenset
     infeasible: tuple = ()  # InfeasibleJobError per job infeasible on the bare machine
+    spilled_bytes: int = 0  # total held-result bytes written to disk under pressure (0 = none)
+    spill_count: int = 0    # how many held results were spilled (the degraded path fired if > 0)
     timings: dict = dataclasses.field(default_factory=dict)
     calibration: "Calibration | None" = None     # final per-placement rates, for inspection
 
@@ -275,7 +281,9 @@ class Scheduler:
                  sample_interval: float = 0.5, numba_cache_dir: str | None = None,
                  context_overhead: float = float("inf"), vram_fraction: float = 0.5,
                  time_multiple: float = 10.0, context_vram_reserve: int | None = None,
-                 warm_setup=None, warm_between=None):
+                 warm_setup=None, warm_between=None,
+                 spill_dir: str | None = None, spill_floor_bytes: int = 16 * 1024 * 1024,
+                 spill_budget_bytes: int = 4 * 1024 * 1024 * 1024):
         self.machine = machine
         self.margin = margin
         self.sample_interval = sample_interval
@@ -293,6 +301,13 @@ class Scheduler:
         self.context_vram_reserve = context_vram_reserve
         self.warm_setup = warm_setup
         self.warm_between = warm_between
+        # Spill: under memory pressure, the largest held results above the floor are written to
+        # disk to free RAM rather than stalling. The floor keeps spill to heavy outputs so small,
+        # fast results never thrash through disk; the budget caps total on-disk spill. spill_dir
+        # None means a per-run directory under the system temp.
+        self.spill_dir = spill_dir
+        self.spill_floor_bytes = spill_floor_bytes
+        self.spill_budget_bytes = spill_budget_bytes
 
     def _measure_overhead(self, ctx, platform, accelerator, session_setup):
         """The per-process overhead admission must charge: the per-worker RAM baseline (zero where
@@ -375,6 +390,9 @@ class Scheduler:
         over_warned: set = set()        # keys already warned for crossing their declaration
         output_over_warned: set = set()  # keys already warned for an oversized result
         pending_consumers: dict = {}    # key -> dependents not yet dispatched; free its result at 0
+        held_size: dict = {}            # key -> charged bytes of a RAM-resident held result
+        spilled: dict = {}              # key -> (path, bytes) for a result written to disk
+        spill_state = {"dir": None, "count": 0, "total_bytes": 0, "disk_used": 0}
         placement_of: dict = {}         # key -> the placement it ran on, for calibration
         calibration = Calibration()
         results: dict = {}
@@ -412,8 +430,17 @@ class Scheduler:
                     gpu_index=gpu_index, declared_vram=context_vram))
             return worker
 
+        def _load_dep(dep):
+            # A spilled dep is read back from disk to feed this consumer; a resident one is taken
+            # from memory. The restored object is transient -- it lives only long enough to be
+            # copied into the worker -- and is bounded by the consumer's fan-in, not the whole pile.
+            if dep in spilled:
+                with open(spilled[dep][0], "rb") as f:
+                    return pickle.load(f)
+            return results[dep]
+
         def launch(job, placed, gpu_execution) -> None:
-            deps = {dep: results[dep] for dep in job.dependencies}
+            deps = {dep: _load_dep(dep) for dep in job.dependencies}
             placement = placed.path.placement
             # placed.path is the admission view: its footprint already includes the per-process
             # overhead for a fresh worker, and is the bare working set for a warm one.
@@ -443,12 +470,19 @@ class Scheduler:
                 logger.info("job %r degraded: %s", job.key, placed.note)
             # The deps have been copied into the worker (started or dispatched), so each producer's
             # held result is no longer needed by this consumer. Drop it once its last consumer has
-            # been dispatched, releasing both the parent's copy and its global-RAM charge.
+            # been dispatched: a resident result releases its copy and its global-RAM charge; a
+            # spilled one deletes its file and reclaims its disk-budget bytes.
             for dep in job.dependencies:
                 pending_consumers[dep] -= 1
                 if pending_consumers[dep] == 0:
-                    del results[dep]
-                    ledger.remove(("__output__", dep))
+                    if dep in spilled:
+                        path, size = spilled.pop(dep)
+                        os.remove(path)
+                        spill_state["disk_used"] -= size
+                    else:
+                        del results[dep]
+                        held_size.pop(dep, None)
+                        ledger.remove(("__output__", dep))
 
         def forget_warm(key) -> None:
             # Drop a warm job's bookkeeping without touching the shared worker. A stray result
@@ -475,7 +509,12 @@ class Scheduler:
                 elif member in warm_running:
                     forget_warm(member)     # leave the shared worker up for other components
                 ledger.discard(("__output__", member))   # release its held-result charge if any
+                held_size.pop(member, None)
                 pending_consumers.pop(member, None)
+                if member in spilled:
+                    path, size = spilled.pop(member)
+                    os.remove(path)
+                    spill_state["disk_used"] -= size
                 results.pop(member, None)
                 completed.discard(member)
                 cancelled.add(member)
@@ -528,10 +567,11 @@ class Scheduler:
                 # declaration so the estimate is a tuning signal rather than a silent under-charge.
                 declared_out = graph.get(key).output_bytes
                 measured_out = len(pickle.dumps(payload))
+                size = max(declared_out, measured_out)
                 ledger.add(Allocation(
                     job_key=("__output__", key), placement=Placement.CPU_UNPINNED,
-                    cores=frozenset(), declared_ram=max(declared_out, measured_out),
-                    node_index=None))
+                    cores=frozenset(), declared_ram=size, node_index=None))
+                held_size[key] = size               # what spill would reclaim if this is spilled
                 pending_consumers[key] = len(graph.dependents(key))
                 if declared_out and measured_out > declared_out and key not in output_over_warned:
                     output_over_warned.add(key)
@@ -579,6 +619,42 @@ class Scheduler:
                     did = True
             return did
 
+        def _spill_dir() -> str:
+            if spill_state["dir"] is None:
+                spill_state["dir"] = tempfile.mkdtemp(prefix="tetradrome-spill-",
+                                                      dir=self.spill_dir)
+            return spill_state["dir"]
+
+        def spill_to_make_room() -> bool:
+            # Free RAM by writing the largest RAM-resident held result above the floor that still
+            # fits the disk budget out to disk, releasing its global-RAM charge. Heavy results only
+            # (the floor) and largest first, so each spill reclaims the most RAM for one write and
+            # small, fast results never thrash through disk. Returns whether one was spilled; False
+            # means nothing is left to spill, the true all-tiers-full dead-end.
+            candidates = sorted(
+                (key for key, size in held_size.items()
+                 if key in results and size >= self.spill_floor_bytes),
+                key=lambda k: held_size[k], reverse=True)
+            for key in candidates:
+                size = held_size[key]
+                if spill_state["disk_used"] + size > self.spill_budget_bytes:
+                    continue                     # this heavy result will not fit the disk budget
+                path = os.path.join(_spill_dir(), f"{spill_state['count']:06d}.pkl")
+                with open(path, "wb") as f:
+                    pickle.dump(results[key], f)
+                del results[key]
+                held_size.pop(key, None)
+                ledger.remove(("__output__", key))
+                spilled[key] = (path, size)
+                spill_state["disk_used"] += size
+                spill_state["total_bytes"] += size
+                spill_state["count"] += 1
+                if spill_state["count"] == 1:
+                    logger.warning("memory pressure: spilling held results to disk (degraded "
+                                   "path); first spill %r, %d bytes", key, size)
+                return True
+            return False
+
         # Pre-flight feasibility: a job whose every declared path, with its own per-process
         # overhead folded in, overflows the bare machine can never run, no matter what frees up.
         # Decide it here, once, against the same augmented view the loop places against. Each
@@ -616,11 +692,14 @@ class Scheduler:
                     continue
                 if running or warm_running:
                     reap(block=True)
+                elif spill_to_make_room():
+                    continue            # freed RAM by spilling a heavy held result; retry admission
                 else:
                     remaining = [job.key for job in graph.jobs()
                                  if job.key not in completed and job.key not in cancelled]
                     raise TetradromeError(
-                        f"scheduler stalled with nothing running; remaining: {remaining}")
+                        "scheduler stalled with nothing running and nothing left to spill "
+                        f"(RAM full and disk budget exhausted); remaining: {remaining}")
         finally:
             stop.set()
             sampler.join(timeout=1.0)
@@ -632,6 +711,10 @@ class Scheduler:
                 worker.shutdown()
             result_queue.close()
             result_queue.join_thread()
+            if spill_state["dir"] is not None:
+                shutil.rmtree(spill_state["dir"], ignore_errors=True)
         return RunReport(results=results, failures=failures,
                          cancelled=frozenset(cancelled), infeasible=tuple(infeasible),
+                         spilled_bytes=spill_state["total_bytes"],
+                         spill_count=spill_state["count"],
                          timings=timings, calibration=calibration)

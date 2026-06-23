@@ -9,6 +9,9 @@ dependencies, so these are deterministic regardless of how many cores the host a
 import os
 import time
 
+import pytest
+
+from tetradrome.errors import TetradromeError
 from tetradrome.scheduler import (
     ComputePath,
     GPU,
@@ -367,3 +370,44 @@ def test_output_over_budget_warns(caplog):
     with caplog.at_level(logging.WARNING):
         Scheduler(_machine()).run(JobGraph([big_output]))
     assert any("output exceeded declared budget" in r.message for r in caplog.records)
+
+
+def _small_machine(cap):
+    cores = frozenset(os.sched_getaffinity(0))
+    return Machine(nodes=(NumaNode(0, cores, cap),), gpus=(), mem_cap_bytes=cap)
+
+
+def _producer(key, value):
+    # 1 MiB working set, but a declared 2 MiB held result -- the result is what builds up.
+    return Job(key=key, run=produce, inputs={"value": value},
+               paths=(ComputePath(Placement.CPU_PINNED, cores=1, ram_bytes=_SMALL),),
+               output_bytes=2 * _SMALL)
+
+
+def test_spill_relieves_output_pressure_and_restores():
+    # Three producers whose held 2 MiB results (6 MiB) overflow a 4 MiB ceiling, feeding one
+    # consumer. Without spill the run stalls once all three complete; with it, the heavy held
+    # results are written to disk to make room, then read back to feed the consumer correctly.
+    cap = 4 * _SMALL
+    producers = [_producer("p1", 100), _producer("p2", 20), _producer("p3", 3)]
+    consumer = Job(key="sum", run=passthrough, inputs={"add": 0},
+                   paths=(_cpu(),), dependencies=("p1", "p2", "p3"))
+    report = Scheduler(_small_machine(cap), margin=0.0,
+                       spill_floor_bytes=_SMALL).run(JobGraph(producers + [consumer]))
+    assert report.results["sum"] == 123          # restored deps fed the consumer correctly
+    assert report.spill_count >= 1               # the degraded path fired
+    assert report.spilled_bytes >= 2 * _SMALL
+    assert "sum" not in report.cancelled
+
+
+def test_spill_exhausted_aborts():
+    # Same overflow, but a zero disk budget: the held results fill RAM and have nowhere to spill,
+    # the one true runtime dead-end. The run aborts loud rather than hanging.
+    cap = 4 * _SMALL
+    producers = [_producer("p1", 1), _producer("p2", 2), _producer("p3", 3)]
+    consumer = Job(key="sum", run=passthrough, inputs={"add": 0},
+                   paths=(_cpu(),), dependencies=("p1", "p2", "p3"))
+    sched = Scheduler(_small_machine(cap), margin=0.0, spill_floor_bytes=_SMALL,
+                      spill_budget_bytes=0)
+    with pytest.raises(TetradromeError, match="stalled"):
+        sched.run(JobGraph(producers + [consumer]))
