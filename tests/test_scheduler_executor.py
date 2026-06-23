@@ -411,3 +411,20 @@ def test_spill_exhausted_aborts():
                       spill_budget_bytes=0)
     with pytest.raises(TetradromeError, match="stalled"):
         sched.run(JobGraph(producers + [consumer]))
+
+
+def consume_big(inputs, deps):
+    return len(inputs["blob"])
+
+
+def test_input_spill_relieves_resident_input_pressure():
+    # Three independent jobs whose heavy inputs (2 MiB each, 6 MiB) overflow a 4 MiB ceiling before
+    # any runs. The scheduler spills the heavy resident inputs to disk to admit the jobs, then
+    # reads each back to feed its job. Outputs are tiny, so the pressure is purely resident input.
+    cap = 4 * _SMALL
+    jobs = [Job(key=f"j{i}", run=consume_big, inputs={"blob": bytes(2 * _SMALL)},
+                paths=(_cpu(),)) for i in range(3)]
+    report = Scheduler(_small_machine(cap), margin=0.0,
+                       spill_floor_bytes=_SMALL).run(JobGraph(jobs))
+    assert all(report.results[f"j{i}"] == 2 * _SMALL for i in range(3))  # restored inputs intact
+    assert report.spill_count >= 1                                       # input spill fired

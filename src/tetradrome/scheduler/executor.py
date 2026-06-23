@@ -401,6 +401,20 @@ class Scheduler:
         cancelled: set = set()
         failures: list = []
 
+        # Take ownership of the jobs' inputs so they are no longer pinned by the (frozen) jobs in
+        # the graph. Each is charged against global RAM and freed when its job is dispatched (an
+        # input is consumed exactly once), so the resident input set shrinks as the run proceeds
+        # instead of every input staying pinned for the whole run. Heavy ones spill like outputs.
+        inputs_store = graph.detach_inputs()
+        input_size: dict = {}           # key -> charged bytes of a RAM-resident input
+        input_spilled: dict = {}        # key -> (path, bytes) for an input written to disk
+        for input_key, input_data in inputs_store.items():
+            size = len(pickle.dumps(input_data))
+            input_size[input_key] = size
+            ledger.add(Allocation(
+                job_key=("__input__", input_key), placement=Placement.CPU_UNPINNED,
+                cores=frozenset(), declared_ram=size, node_index=None))
+
         def is_running(key) -> bool:
             return key in running or key in warm_running
 
@@ -439,8 +453,17 @@ class Scheduler:
                     return pickle.load(f)
             return results[dep]
 
+        def _load_input(key):
+            # The job's input lives in the scheduler-owned store (it was detached from the job), on
+            # disk if it was spilled. Read back transiently to feed the worker.
+            if key in input_spilled:
+                with open(input_spilled[key][0], "rb") as f:
+                    return pickle.load(f)
+            return inputs_store[key]
+
         def launch(job, placed, gpu_execution) -> None:
             deps = {dep: _load_dep(dep) for dep in job.dependencies}
+            job_inputs = _load_input(job.key)
             placement = placed.path.placement
             # placed.path is the admission view: its footprint already includes the per-process
             # overhead for a fresh worker, and is the bare working set for a warm one.
@@ -455,11 +478,11 @@ class Scheduler:
                 # Small GPU job: serialize it through the held context. Not RAM-sampled -- it is
                 # small by the gate, and only one warm job's footprint is ever live in the shared
                 # pid at a time, so a live sample could not be attributed to it cleanly anyway.
-                ensure_warm(placed.gpu_index).dispatch(job.key, job.run, job.inputs, deps)
+                ensure_warm(placed.gpu_index).dispatch(job.key, job.run, job_inputs, deps)
                 warm_running[job.key] = placed.gpu_index
             else:
                 proc = ctx.Process(target=_worker_main, args=(
-                    job.key, job.run, job.inputs, deps,
+                    job.key, job.run, job_inputs, deps,
                     placed.cores, placed.gpu_index, result_queue, platform,
                 ))
                 proc.start()
@@ -468,6 +491,17 @@ class Scheduler:
                     running_pids[job.key] = proc.pid
             if placed.note:
                 logger.info("job %r degraded: %s", job.key, placed.note)
+            # The input has been copied into the worker, so its parent-side copy is no longer
+            # needed -- this job is its only consumer. Release it: a resident input drops its copy
+            # and its global-RAM charge, a spilled one deletes its file.
+            if job.key in input_spilled:
+                path, size = input_spilled.pop(job.key)
+                os.remove(path)
+                spill_state["disk_used"] -= size
+            else:
+                inputs_store.pop(job.key, None)
+                ledger.discard(("__input__", job.key))
+            input_size.pop(job.key, None)
             # The deps have been copied into the worker (started or dispatched), so each producer's
             # held result is no longer needed by this consumer. Drop it once its last consumer has
             # been dispatched: a resident result releases its copy and its global-RAM charge; a
@@ -509,10 +543,17 @@ class Scheduler:
                 elif member in warm_running:
                     forget_warm(member)     # leave the shared worker up for other components
                 ledger.discard(("__output__", member))   # release its held-result charge if any
+                ledger.discard(("__input__", member))    # release its undispatched-input charge
                 held_size.pop(member, None)
+                input_size.pop(member, None)
+                inputs_store.pop(member, None)
                 pending_consumers.pop(member, None)
                 if member in spilled:
                     path, size = spilled.pop(member)
+                    os.remove(path)
+                    spill_state["disk_used"] -= size
+                if member in input_spilled:
+                    path, size = input_spilled.pop(member)
                     os.remove(path)
                     spill_state["disk_used"] -= size
                 results.pop(member, None)
@@ -626,32 +667,41 @@ class Scheduler:
             return spill_state["dir"]
 
         def spill_to_make_room() -> bool:
-            # Free RAM by writing the largest RAM-resident held result above the floor that still
-            # fits the disk budget out to disk, releasing its global-RAM charge. Heavy results only
-            # (the floor) and largest first, so each spill reclaims the most RAM for one write and
-            # small, fast results never thrash through disk. Returns whether one was spilled; False
-            # means nothing is left to spill, the true all-tiers-full dead-end.
-            candidates = sorted(
-                (key for key, size in held_size.items()
-                 if key in results and size >= self.spill_floor_bytes),
-                key=lambda k: held_size[k], reverse=True)
-            for key in candidates:
-                size = held_size[key]
+            # Free RAM by writing the largest RAM-resident blob above the floor that still fits the
+            # disk budget out to disk, releasing its global-RAM charge. Both held results and the
+            # resident inputs of not-yet-dispatched jobs are eligible; heavy blobs only (the floor)
+            # and largest first, so each spill reclaims the most RAM for one write and small, fast
+            # data never thrashes through disk. Returns whether one was spilled; False means
+            # nothing is left to spill, the true all-tiers-full dead-end.
+            candidates = [("output", key, size) for key, size in held_size.items()
+                          if key in results and size >= self.spill_floor_bytes]
+            candidates += [("input", key, size) for key, size in input_size.items()
+                           if key in inputs_store and size >= self.spill_floor_bytes]
+            candidates.sort(key=lambda c: c[2], reverse=True)
+            for kind, key, size in candidates:
                 if spill_state["disk_used"] + size > self.spill_budget_bytes:
-                    continue                     # this heavy result will not fit the disk budget
+                    continue                     # this heavy blob will not fit the disk budget
                 path = os.path.join(_spill_dir(), f"{spill_state['count']:06d}.pkl")
-                with open(path, "wb") as f:
-                    pickle.dump(results[key], f)
-                del results[key]
-                held_size.pop(key, None)
-                ledger.remove(("__output__", key))
-                spilled[key] = (path, size)
+                if kind == "output":
+                    with open(path, "wb") as f:
+                        pickle.dump(results[key], f)
+                    del results[key]
+                    held_size.pop(key, None)
+                    ledger.remove(("__output__", key))
+                    spilled[key] = (path, size)
+                else:
+                    with open(path, "wb") as f:
+                        pickle.dump(inputs_store[key], f)
+                    del inputs_store[key]
+                    input_size.pop(key, None)
+                    ledger.remove(("__input__", key))
+                    input_spilled[key] = (path, size)
                 spill_state["disk_used"] += size
                 spill_state["total_bytes"] += size
                 spill_state["count"] += 1
                 if spill_state["count"] == 1:
-                    logger.warning("memory pressure: spilling held results to disk (degraded "
-                                   "path); first spill %r, %d bytes", key, size)
+                    logger.warning("memory pressure: spilling %s to disk (degraded path); first "
+                                   "spill %r, %d bytes", kind, key, size)
                 return True
             return False
 

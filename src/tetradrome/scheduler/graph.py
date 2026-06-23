@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Hashable, Iterable
+import dataclasses
 
 from .job import Job
 
@@ -59,6 +60,18 @@ class JobGraph:
 
     def jobs(self) -> tuple[Job, ...]:
         return tuple(self._jobs.values())
+
+    def detach_inputs(self) -> dict:
+        """Move every job's inputs out of the graph into a returned dict keyed by job, replacing
+        each job with an input-stripped copy. The caller (the scheduler) becomes the sole owner of
+        the inputs, so it can free each one as its job is dispatched and spill the heavy ones under
+        pressure; the graph keeps only the cheap job structure. Single-use: after this the graph's
+        jobs carry no inputs, so a graph is run once."""
+        store = {}
+        for key, job in self._jobs.items():
+            store[key] = job.inputs
+            self._jobs[key] = dataclasses.replace(job, inputs=None)
+        return store
 
     def dependents(self, key: Hashable) -> tuple:
         """Keys of the jobs that depend directly on ``key``."""
