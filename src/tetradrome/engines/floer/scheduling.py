@@ -20,13 +20,26 @@ CPU does not.
 """
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 
 from ...algebra import available_f2_backends, f2_homology, predict_cost, predict_size
 from ...scheduler import ComputePath, Job, JobGraph, Placement
+from .generation import _build_complexes, _generate_slice
 
 _REDUCE = "reduce"
 _ASSEMBLE = "assemble"
+_SLICE = "gen_slice"
+_MERGE = "gen_merge"
+
+# Generation is not in the cost model (grading_histogram predicts reduction dims, not record
+# bytes), so a slice's working set and the merge's peak are priced by a per-record estimate: a
+# base plus a per-element term, tuned by the scheduler's over-budget warnings the same way every
+# other footprint is. Slice count falls out of n! at this many states per slice, a math
+# granularity, never a worker count.
+_SLICE_STATES = 4096
+_GEN_RECORD_BASE = 256
+_GEN_RECORD_PER_N = 128
 
 
 def _reduce_run(inputs, deps):
@@ -85,3 +98,65 @@ def reduction_graph(complexes: dict, *, backend: str):
     whose result is the ``{(Maslov, Alexander): dimension}`` Poincare count."""
     jobs, assemble_key = reduction_jobs(complexes, backend=backend)
     return JobGraph(jobs), assemble_key
+
+
+def _slice_run(inputs, deps):
+    return _generate_slice(inputs)
+
+
+def _merge_run(inputs, deps):
+    # Fold the slices in slice-index order (the keys are (_SLICE, w)) so positions land in global
+    # lexicographic order and _build_complexes reproduces grid_complexes exactly. Degree = -Maslov,
+    # matching the serial generation.
+    by_alexander: dict = defaultdict(list)
+    for key in sorted(deps, key=lambda k: k[1]):
+        for state, m, a, targets in deps[key]:
+            by_alexander[a].append((state, -m, targets))
+    return _build_complexes(by_alexander)
+
+
+def _record_bytes(n: int) -> int:
+    return _GEN_RECORD_BASE + _GEN_RECORD_PER_N * n
+
+
+def generation_jobs(grid, *, slice_states: int = _SLICE_STATES) -> tuple:
+    """Generation jobs (contiguous lexicographic slices of the n! permutation space) plus the
+    merge that folds them into ``{A: GradedComplex}``, as ``(jobs, merge_key)``. The merge depends
+    on every slice and folds them in slice-index order, so its result equals ``grid_complexes``.
+    The slice *count* falls out of ``n!`` at ``slice_states`` states each -- a math granularity,
+    independent of the machine."""
+    total = math.factorial(grid.n)
+    slice_count = max(1, math.ceil(total / slice_states))
+    record = _record_bytes(grid.n)
+    jobs = []
+    slice_keys = []
+    for w in range(slice_count):
+        start = total * w // slice_count
+        stop = total * (w + 1) // slice_count
+        key = (_SLICE, w)
+        jobs.append(Job(
+            key=key, run=_slice_run,
+            inputs=(grid.O, grid.X, start, stop),
+            paths=(ComputePath(Placement.CPU_PINNED, cores=1,
+                               ram_bytes=max((stop - start) * record, 1)),),
+            cost=float(stop - start),
+        ))
+        slice_keys.append(key)
+    merge_key = (_MERGE,)
+    jobs.append(Job(
+        key=merge_key, run=_merge_run, inputs={},
+        # The merge holds every slice's records and builds the complexes from them; price the peak
+        # at both resident at once.
+        paths=(ComputePath(Placement.CPU_PINNED, cores=1,
+                           ram_bytes=max(2 * total * record, 1)),),
+        dependencies=slice_keys,
+        cost=float(total),
+    ))
+    return jobs, merge_key
+
+
+def generation_graph(grid, *, slice_states: int = _SLICE_STATES):
+    """A JobGraph generating ``{A: GradedComplex}`` from ``grid`` plus the merge key whose result
+    equals the serial ``grid_complexes(grid)``."""
+    jobs, merge_key = generation_jobs(grid, slice_states=slice_states)
+    return JobGraph(jobs), merge_key

@@ -15,7 +15,7 @@ from tetradrome.algebra import available_f2_backends, f2_homology, predict_cost
 from tetradrome.engines.floer.generation import grid_complexes
 from tetradrome.engines.floer.grid import staircase_grid
 from tetradrome.scheduler import Scheduler, detect_machine
-from tetradrome.engines.floer.scheduling import reduction_graph, reduction_jobs
+from tetradrome.engines.floer.scheduling import generation_graph, reduction_graph, reduction_jobs
 
 _BACKENDS = [name for name, ok, _ in available_f2_backends() if ok and name != "packed-gpu"]
 
@@ -58,3 +58,23 @@ def test_reduction_jobs_carry_predicted_cost():
     for alexander, cx in complexes.items():
         assert by_key[("reduce", alexander)].cost == predict_cost(cx)
     assert by_key[assemble_key].cost == 0.0
+
+
+def test_generation_graph_matches_serial():
+    # Generation through the scheduler must reproduce the serial reference complex bit-for-bit, not
+    # merely agree on homology: positions within each (Alexander, degree) block depend on
+    # enumeration order, so this pins that the contiguous lexicographic slices, folded in
+    # slice-index order across spawned workers, reproduce grid_complexes exactly. slice_states is
+    # forced small so a tiny grid still splits into several slices and the merge ordering is tested.
+    grid = staircase_grid(5)                                  # 120 states
+    graph, merge_key = generation_graph(grid, slice_states=32)
+    report = Scheduler(detect_machine()).run(graph)
+    assert report.failures == []
+    produced = report.results[merge_key]
+    serial = grid_complexes(grid)
+    assert produced.keys() == serial.keys()
+    for a_grading in serial:
+        assert produced[a_grading].degrees() == serial[a_grading].degrees()
+        for degree in serial[a_grading].degrees():
+            assert produced[a_grading].dim(degree) == serial[a_grading].dim(degree)
+            assert produced[a_grading].differential(degree) == serial[a_grading].differential(degree)
