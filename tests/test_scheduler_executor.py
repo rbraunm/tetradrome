@@ -476,3 +476,38 @@ def test_partitioned_producer_returning_wrong_shards_fails_loud():
                    dependencies={Shard("src", "a")})
     with pytest.raises(TetradromeError):
         Scheduler(_machine()).run(JobGraph([producer, consumer]))
+
+
+def big_blob(inputs, deps):
+    return bytes(2 * _SMALL)            # a large whole result many consumers will each want
+
+
+def blob_len(inputs, deps):
+    (only,) = deps.values()             # a consumer reads the whole shared result
+    return len(only)
+
+
+def test_shared_residence_materializes_one_segment_for_many_consumers():
+    # A large result with several consumers is materialized once into a shared-memory segment the
+    # consumers map, not pickled into each worker. Every consumer reads it intact, and exactly one
+    # segment is made regardless of fan-out.
+    producer = Job(key="src", run=big_blob, inputs={}, paths=(_cpu(),))
+    consumers = [Job(key=f"c{i}", run=blob_len, inputs={}, paths=(_cpu(),),
+                     dependencies={"src"}) for i in range(3)]
+    report = Scheduler(_machine(), shared_min_consumers=2,
+                       shared_floor_bytes=_SMALL).run(JobGraph([producer, *consumers]))
+    assert report.failures == []
+    assert all(report.results[f"c{i}"] == 2 * _SMALL for i in range(3))   # each read the blob
+    assert report.shared_count == 1                                       # one segment, not 3 copies
+    assert report.shared_bytes >= 2 * _SMALL
+    assert "src" not in report.results
+
+
+def test_low_fanout_result_stays_private():
+    # Below the consumer threshold, a result is a private copy -- no segment.
+    producer = Job(key="src", run=big_blob, inputs={}, paths=(_cpu(),))
+    consumer = Job(key="c0", run=blob_len, inputs={}, paths=(_cpu(),), dependencies={"src"})
+    report = Scheduler(_machine(), shared_min_consumers=2,
+                       shared_floor_bytes=_SMALL).run(JobGraph([producer, consumer]))
+    assert report.results["c0"] == 2 * _SMALL
+    assert report.shared_count == 0

@@ -35,6 +35,8 @@ import tempfile
 import threading
 import time
 import traceback
+from multiprocessing.shared_memory import SharedMemory
+from typing import NamedTuple
 
 from ..errors import TetradromeError
 from .graph import JobGraph
@@ -74,6 +76,45 @@ def _start_context():
     return context
 
 
+class SharedRef(NamedTuple):
+    """A dependency handed to a worker by reference rather than value: its payload lives in a
+    shared-memory segment the parent created and owns. The worker attaches the segment by name,
+    reads ``size`` bytes, unpickles a private copy, and closes -- it never unlinks. Small and
+    picklable, so only this reference rides into each worker, not a private copy of the payload."""
+    name: str
+    size: int
+
+
+def _attach_segment(name):
+    """Attach a shared segment created elsewhere, for reading only. The creating parent owns the
+    segment and is the sole unlinker. Within one multiprocessing program the resource_tracker is
+    shared, so the parent's unlink already unregisters the name -- an attaching worker must not
+    unregister (that would remove the entry first and make the parent's unlink fail) and must not
+    unlink. Python 3.13's ``track=False`` keeps the attach out of the tracker entirely; on 3.12 a
+    plain attach only adds a duplicate the parent's unlink clears, and the worker never unlinks."""
+    try:
+        return SharedMemory(name=name, track=False)          # 3.13+: attach untracked
+    except TypeError:
+        return SharedMemory(name=name)                       # <=3.12: parent's unlink cleans up
+
+
+def _resolve_deps(deps):
+    """Replace any SharedRef in a worker's deps with a private copy read from its segment. Attach,
+    read the exact byte range, unpickle, and close immediately -- the unpickled object is the
+    worker's own; the segment stays owned by the parent."""
+    resolved = {}
+    for dep_key, value in deps.items():
+        if isinstance(value, SharedRef):
+            shm = _attach_segment(value.name)
+            try:
+                resolved[dep_key] = pickle.loads(bytes(shm.buf[:value.size]))
+            finally:
+                shm.close()
+        else:
+            resolved[dep_key] = value
+    return resolved
+
+
 def _worker_main(key, run, inputs, deps, cores, gpu_index, result_queue, platform):
     """Top-level worker entry, picklable for spawn: pin, time the run, report one message.
 
@@ -87,6 +128,7 @@ def _worker_main(key, run, inputs, deps, cores, gpu_index, result_queue, platfor
             os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_index)
         else:
             os.environ["CUDA_VISIBLE_DEVICES"] = ""   # a CPU-placed worker must not grab a GPU
+        deps = _resolve_deps(deps)            # pull any shared-segment deps into private copies
         t0 = time.perf_counter()
         result = run(inputs, deps)
         compute_time = time.perf_counter() - t0
@@ -187,6 +229,7 @@ def _warm_worker_main(cores, gpu_index, job_queue, result_queue, setup, between,
             return
         key, run, inputs, deps = item
         try:
+            deps = _resolve_deps(deps)        # pull any shared-segment deps into private copies
             t0 = time.perf_counter()
             result = run(inputs, deps)
             result_queue.put((key, "ok", result, time.perf_counter() - t0))
@@ -253,13 +296,14 @@ class _Sampler(threading.Thread):
 
 
 class Residence(enum.Enum):
-    """Where a resident blob physically lives. HOST_PRIVATE and DISK are the two the scheduler
-    uses today; HOST_SHARED (one copy in shared host RAM mapped by many consumers, per locality
-    domain) and DEVICE (resident in GPU VRAM) are reserved so adding those strategies fills a slot
+    """Where a resident blob physically lives. HOST_PRIVATE and DISK are the everyday two;
+    HOST_SHARED is one copy in shared host RAM that many consumers map instead of each getting a
+    private pickled copy (the base form is a single segment, and per-NUMA-node replicas layer on
+    for pinned consumers); DEVICE (resident in GPU VRAM) is reserved so adding it fills a slot
     rather than reshaping the table."""
     HOST_PRIVATE = "host_private"   # a private copy in the parent's RAM (the default)
     DISK = "disk"                   # spilled to a file under memory pressure
-    HOST_SHARED = "host_shared"     # reserved: one shared-RAM copy per NUMA node
+    HOST_SHARED = "host_shared"     # one shared-RAM segment many consumers map (per locality domain)
     DEVICE = "device"               # reserved: resident in device VRAM
 
 
@@ -282,6 +326,8 @@ class Resident:
     payload: object = None
     location: str | None = None
     consumers: int = 0
+    shareable: bool = False         # fan-out and size cleared the threshold: share rather than copy
+    handle: object = None           # the SharedMemory segment when HOST_SHARED (reserved for DEVICE)
 
 
 @dataclasses.dataclass
@@ -295,7 +341,9 @@ class RunReport:
     InfeasibleJobError per job the bare machine could serve on no declared path; their lineages are
     abandoned but the rest of the batch runs. ``spill_count``/``spilled_bytes`` record the degraded
     path: how many held results were written to disk under memory pressure, and their total size. A
-    nonzero count means the run completed only by spilling.
+    nonzero count means the run completed only by spilling. ``shared_count``/``shared_bytes`` record
+    how many held results were materialized into a shared-memory segment (high fan-out above the
+    size floor) and their total segment size -- the transmit-once path, not a degraded one.
     """
     results: dict
     failures: list          # (component frozenset, failed_key, error_text)
@@ -303,6 +351,8 @@ class RunReport:
     infeasible: tuple = ()  # InfeasibleJobError per job infeasible on the bare machine
     spilled_bytes: int = 0  # total held-result bytes written to disk under pressure (0 = none)
     spill_count: int = 0    # how many held results were spilled (the degraded path fired if > 0)
+    shared_count: int = 0   # how many results were materialized into a shared-memory segment
+    shared_bytes: int = 0   # total size of those segments
     timings: dict = dataclasses.field(default_factory=dict)
     calibration: "Calibration | None" = None     # final per-placement rates, for inspection
 
@@ -316,7 +366,8 @@ class Scheduler:
                  time_multiple: float = 10.0, context_vram_reserve: int | None = None,
                  warm_setup=None, warm_between=None,
                  spill_dir: str | None = None, spill_floor_bytes: int = 16 * 1024 * 1024,
-                 spill_budget_bytes: int = 4 * 1024 * 1024 * 1024):
+                 spill_budget_bytes: int = 4 * 1024 * 1024 * 1024,
+                 shared_min_consumers: int = 2, shared_floor_bytes: int = 16 * 1024 * 1024):
         self.machine = machine
         self.margin = margin
         self.sample_interval = sample_interval
@@ -341,6 +392,13 @@ class Scheduler:
         self.spill_dir = spill_dir
         self.spill_floor_bytes = spill_floor_bytes
         self.spill_budget_bytes = spill_budget_bytes
+        # Shared residence: a held result with at least this many consumers and at least this many
+        # bytes is materialized once into a shared-memory segment the consumers map, instead of a
+        # private pickled copy per consumer (serialize once, transmit once). The defaults are
+        # conservative -- multi-consumer and large -- so small or low-fan-out results stay private;
+        # both are policy knobs to sweep, not heuristics.
+        self.shared_min_consumers = shared_min_consumers
+        self.shared_floor_bytes = shared_floor_bytes
 
     def _measure_overhead(self, ctx, platform, accelerator, session_setup):
         """The per-process overhead admission must charge: the per-worker RAM baseline (zero where
@@ -427,6 +485,7 @@ class Scheduler:
         # reporting are one uniform mechanism rather than four parallel dicts.
         resident: dict = {}
         spill_state = {"dir": None, "count": 0, "total_bytes": 0, "disk_used": 0}
+        shared_state = {"count": 0, "bytes": 0}     # results materialized into shared segments
         placement_of: dict = {}         # key -> the placement it ran on, for calibration
         calibration = Calibration()
         timings: dict = {}              # key -> measured run seconds, for cost calibration
@@ -479,26 +538,50 @@ class Scheduler:
 
         def release_resident(table_key) -> None:
             # Drop one resident blob: a HOST_PRIVATE one releases its global-RAM charge, a DISK one
-            # deletes its spill file and reclaims the disk budget. No-op if already gone.
+            # deletes its spill file and reclaims the disk budget, a HOST_SHARED one (last consumer
+            # dispatched) closes and unlinks its segment -- the parent is the sole unlinker. No-op if
+            # already gone.
             entry = resident.pop(table_key, None)
             if entry is None:
                 return
+            kind, key = table_key
+            charge = "__input__" if kind is Kind.INPUT else "__output__"
             if entry.residence is Residence.DISK:
                 os.remove(entry.location)
                 spill_state["disk_used"] -= entry.size
+            elif entry.residence is Residence.HOST_SHARED:
+                ledger.discard((charge, key))
+                entry.handle.close()
+                entry.handle.unlink()
             else:
-                kind, key = table_key
-                charge = "__input__" if kind is Kind.INPUT else "__output__"
                 ledger.discard((charge, key))
 
         def _load_dep(dep):
-            # A spilled dep is read back from disk to feed this consumer; a resident one is taken
-            # from memory. The restored object is transient -- it lives only long enough to be
-            # copied into the worker -- and is bounded by the consumer's fan-in, not the whole pile.
+            # A consumer's view of a producer's result. A shareable result is materialized into a
+            # shared-memory segment on the first consumer's dispatch (serialize once into the
+            # segment, drop the private copy) and every consumer thereafter is handed a small
+            # SharedRef; a plain result is copied; a spilled one is read back from disk. The restored
+            # or referenced object is transient -- it lives only long enough to reach the worker.
             entry = resident[(Kind.OUTPUT, dep)]
+            if entry.residence is Residence.HOST_SHARED:
+                return SharedRef(entry.handle.name, entry.size)
             if entry.residence is Residence.DISK:
                 with open(entry.location, "rb") as f:
                     return pickle.load(f)
+            if entry.shareable:
+                data = pickle.dumps(entry.payload)
+                segment = SharedMemory(create=True, size=len(data))
+                segment.buf[:len(data)] = data
+                entry.handle = segment
+                entry.residence = Residence.HOST_SHARED
+                entry.payload = None
+                entry.size = len(data)              # exact segment bytes the readers slice to
+                shared_state["count"] += 1
+                shared_state["bytes"] += len(data)
+                if shared_state["count"] == 1:
+                    logger.info("sharing result %r across %d consumers via a %d-byte segment",
+                                dep, entry.consumers, len(data))
+                return SharedRef(segment.name, len(data))
             return entry.payload
 
         def _load_input(key):
@@ -544,10 +627,14 @@ class Scheduler:
             # needed -- this job is its only consumer. Release it.
             release_resident((Kind.INPUT, job.key))
             # The deps have been copied into the worker (started or dispatched), so each producer's
-            # held result (or shard) is no longer needed by this consumer. Drop it once its last
-            # consumer has been dispatched.
+            # held result (or shard) is no longer needed by this consumer -- except a shared segment,
+            # which the worker reads during its run, not at dispatch, so it is freed at the
+            # consumer's completion instead (see reap_one). Drop a copied dep once its last consumer
+            # has been dispatched.
             for dep in job.dependencies:
                 entry = resident[(Kind.OUTPUT, dep)]
+                if entry.residence is Residence.HOST_SHARED:
+                    continue
                 entry.consumers -= 1
                 if entry.consumers == 0:
                     release_resident((Kind.OUTPUT, dep))
@@ -638,12 +725,15 @@ class Scheduler:
                 if job_shards is None:
                     measured_out = len(pickle.dumps(payload))
                     size = max(declared_out, measured_out)
+                    fanout = len(graph.dependents(key))
                     ledger.add(Allocation(
                         job_key=("__output__", key), placement=Placement.CPU_UNPINNED,
                         cores=frozenset(), declared_ram=size, node_index=None))
                     resident[(Kind.OUTPUT, key)] = Resident(
                         kind=Kind.OUTPUT, residence=Residence.HOST_PRIVATE, size=size,
-                        payload=payload, consumers=len(graph.dependents(key)))
+                        payload=payload, consumers=fanout,
+                        shareable=(fanout >= self.shared_min_consumers
+                                   and size >= self.shared_floor_bytes))
                 else:
                     if not isinstance(payload, dict) or set(payload) != set(job_shards):
                         raise TetradromeError(
@@ -655,18 +745,29 @@ class Scheduler:
                     for shard_key, shard_payload in payload.items():
                         shard_ref = Shard(key, shard_key)
                         shard_size = len(pickle.dumps(shard_payload))
+                        shard_fanout = sum(1 for deps in consumers.values() if shard_ref in deps)
                         measured_out += shard_size
                         ledger.add(Allocation(
                             job_key=("__output__", shard_ref), placement=Placement.CPU_UNPINNED,
                             cores=frozenset(), declared_ram=shard_size, node_index=None))
                         resident[(Kind.OUTPUT, shard_ref)] = Resident(
                             kind=Kind.OUTPUT, residence=Residence.HOST_PRIVATE, size=shard_size,
-                            payload=shard_payload,
-                            consumers=sum(1 for deps in consumers.values() if shard_ref in deps))
+                            payload=shard_payload, consumers=shard_fanout,
+                            shareable=(shard_fanout >= self.shared_min_consumers
+                                       and shard_size >= self.shared_floor_bytes))
                 if declared_out and measured_out > declared_out and key not in output_over_warned:
                     output_over_warned.add(key)
                     logger.warning("job %r output exceeded declared budget: declared %d, actual %d",
                                    key, declared_out, measured_out)
+                # This job has finished, so it has finished reading any shared-segment deps (read at
+                # the start of its run). Decrement those; the segment is unlinked once its last
+                # reader completes. Copied deps were already released at dispatch.
+                for dep in graph.get(key).dependencies:
+                    entry = resident.get((Kind.OUTPUT, dep))
+                    if entry is not None and entry.residence is Residence.HOST_SHARED:
+                        entry.consumers -= 1
+                        if entry.consumers == 0:
+                            release_resident((Kind.OUTPUT, dep))
                 logger.debug("job %r runtime %.4fs vs predicted cost %g",
                              key, compute_time, float(graph.get(key).cost))
             else:
@@ -803,6 +904,13 @@ class Scheduler:
                 worker.shutdown()
             result_queue.close()
             result_queue.join_thread()
+            # Unlink any shared segment still resident: on a clean run every shared result is freed
+            # as its last consumer dispatches, so this catches only the abort path, where leaving
+            # POSIX segments around would leak them.
+            for entry in resident.values():
+                if entry.residence is Residence.HOST_SHARED and entry.handle is not None:
+                    entry.handle.close()
+                    entry.handle.unlink()
             if spill_state["dir"] is not None:
                 shutil.rmtree(spill_state["dir"], ignore_errors=True)
         # Surviving held results: terminals never drained, plus any producer whose poisoned
@@ -815,4 +923,6 @@ class Scheduler:
                          cancelled=frozenset(cancelled), infeasible=tuple(infeasible),
                          spilled_bytes=spill_state["total_bytes"],
                          spill_count=spill_state["count"],
+                         shared_count=shared_state["count"],
+                         shared_bytes=shared_state["bytes"],
                          timings=timings, calibration=calibration)
