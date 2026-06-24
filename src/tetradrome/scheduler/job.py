@@ -54,6 +54,18 @@ class ComputePath:
 
 
 @dataclasses.dataclass(frozen=True)
+class Shard:
+    """A reference to one shard of a partitioned job's output. A job whose ``shards`` is set
+    returns ``{shard_key: payload}`` and the scheduler stores each shard as an independent held
+    result; a consumer that needs only one shard depends on ``Shard(producer_key, shard_key)``
+    instead of the whole producer. For scheduling -- readiness and lineage -- a shard dependency
+    is a dependency on the producing job; for data and memory it addresses just the one shard, so
+    a wide consumer never pulls or re-materializes the producer's whole output."""
+    producer: Hashable
+    key: Hashable
+
+
+@dataclasses.dataclass(frozen=True)
 class Job:
     """A unit of work: identity, the callable + inputs, its compute paths, its dependencies.
 
@@ -70,6 +82,11 @@ class Job:
     over-budget warning when the measured result exceeds the declaration -- so a too-low estimate
     is a tuning signal, not a silent under-charge. Zero means unpredicted: the measured size is
     charged reactively.
+
+    ``shards``, when set, declares the job's output is partitioned: ``run`` returns
+    ``{shard_key: payload}`` for exactly these keys, and the scheduler stores each shard as an
+    independent held result a consumer addresses via ``Shard(key, shard_key)``. None means a single
+    whole result. ``output_bytes`` for a partitioned job is the declared total across shards.
     """
     key: Hashable
     run: Callable
@@ -78,11 +95,16 @@ class Job:
     dependencies: frozenset = dataclasses.field(default_factory=frozenset)
     cost: float = 0.0
     output_bytes: int = 0
+    shards: frozenset | None = None
 
     def __post_init__(self):
         # Accept any iterable for paths/dependencies; store normalized immutables.
         object.__setattr__(self, "paths", tuple(self.paths))
         object.__setattr__(self, "dependencies", frozenset(self.dependencies))
+        if self.shards is not None:
+            object.__setattr__(self, "shards", frozenset(self.shards))
+            if not self.shards:
+                raise ValueError(f"job {self.key!r} declares partitioned output with no shards")
         if not self.paths:
             raise ValueError(f"job {self.key!r} declares no compute paths")
         if not callable(self.run):

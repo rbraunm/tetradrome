@@ -22,6 +22,7 @@ from tetradrome.scheduler import (
     NumaNode,
     Placement,
     Scheduler,
+    Shard,
 )
 
 _GIB = 1 << 30
@@ -428,3 +429,50 @@ def test_input_spill_relieves_resident_input_pressure():
                        spill_floor_bytes=_SMALL).run(JobGraph(jobs))
     assert all(report.results[f"j{i}"] == 2 * _SMALL for i in range(3))  # restored inputs intact
     assert report.spill_count >= 1                                       # input spill fired
+
+
+def split_three(inputs, deps):
+    return {"a": 10, "b": 20, "c": 30}
+
+
+def echo_shard(inputs, deps):
+    (only,) = deps.values()             # a consumer of one shard sees exactly that shard
+    return only * 2
+
+
+def split_wrong(inputs, deps):
+    return {"a": 1}                     # declares a, b but returns only a -- a contract violation
+
+
+def test_partitioned_result_routes_each_shard_to_its_consumer():
+    # A partitioned producer returns one payload per declared shard; each consumer depends on a
+    # single Shard and receives only that shard, never the whole output. The producer holds no
+    # whole result, and every shard is freed as its consumer dispatches.
+    producer = Job(key="src", run=split_three, inputs={}, paths=(_cpu(),),
+                   shards=frozenset({"a", "b", "c"}))
+    consumers = [Job(key=f"use_{s}", run=echo_shard, inputs={}, paths=(_cpu(),),
+                     dependencies={Shard("src", s)}) for s in ("a", "b", "c")]
+    report = Scheduler(_machine()).run(JobGraph([producer, *consumers]))
+    assert report.failures == []
+    assert report.results["use_a"] == 20
+    assert report.results["use_b"] == 40
+    assert report.results["use_c"] == 60
+    assert "src" not in report.results          # partitioned: no whole result, all shards consumed
+
+
+def test_shard_dependency_on_undeclared_shard_is_rejected():
+    producer = Job(key="src", run=split_three, inputs={}, paths=(_cpu(),),
+                   shards=frozenset({"a", "b"}))
+    bad = Job(key="use_z", run=echo_shard, inputs={}, paths=(_cpu(),),
+              dependencies={Shard("src", "z")})         # z is not a declared shard
+    with pytest.raises(ValueError):
+        JobGraph([producer, bad])
+
+
+def test_partitioned_producer_returning_wrong_shards_fails_loud():
+    producer = Job(key="src", run=split_wrong, inputs={}, paths=(_cpu(),),
+                   shards=frozenset({"a", "b"}))
+    consumer = Job(key="use_a", run=echo_shard, inputs={}, paths=(_cpu(),),
+                   dependencies={Shard("src", "a")})
+    with pytest.raises(TetradromeError):
+        Scheduler(_machine()).run(JobGraph([producer, consumer]))

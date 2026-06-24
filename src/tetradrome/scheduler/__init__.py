@@ -11,7 +11,7 @@ parallel + memory-bounded execution. See roadmap for the design.
 from .executor import RunReport, Scheduler
 from .graph import JobGraph
 from .inventory import GPU, Machine, NumaNode, detect_machine
-from .job import ComputePath, Job, Placement
+from .job import ComputePath, Job, Placement, Shard
 from .ledger import Allocation, Ledger
 from .placement import (
     Decision,
@@ -43,6 +43,7 @@ __all__ = [
     "PathGap",
     "Placed",
     "Placement",
+    "Shard",
     "RunReport",
     "Scheduler",
     "detect_machine",

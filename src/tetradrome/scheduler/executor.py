@@ -41,7 +41,7 @@ from .graph import JobGraph
 from .hostplatform import for_host
 from .accelerator import detect_accelerator
 from .inventory import Machine
-from .job import Placement
+from .job import Placement, Shard
 from .ledger import Allocation, Ledger
 from .placement import Outcome, job_feasibility, plan_placement
 from .routing import Calibration, Execution, route_execution
@@ -477,6 +477,20 @@ class Scheduler:
                     gpu_index=gpu_index, declared_vram=context_vram))
             return worker
 
+        def release_resident(table_key) -> None:
+            # Drop one resident blob: a HOST_PRIVATE one releases its global-RAM charge, a DISK one
+            # deletes its spill file and reclaims the disk budget. No-op if already gone.
+            entry = resident.pop(table_key, None)
+            if entry is None:
+                return
+            if entry.residence is Residence.DISK:
+                os.remove(entry.location)
+                spill_state["disk_used"] -= entry.size
+            else:
+                kind, key = table_key
+                charge = "__input__" if kind is Kind.INPUT else "__output__"
+                ledger.discard((charge, key))
+
         def _load_dep(dep):
             # A spilled dep is read back from disk to feed this consumer; a resident one is taken
             # from memory. The restored object is transient -- it lives only long enough to be
@@ -527,29 +541,16 @@ class Scheduler:
             if placed.note:
                 logger.info("job %r degraded: %s", job.key, placed.note)
             # The input has been copied into the worker, so its parent-side copy is no longer
-            # needed -- this job is its only consumer. Release it: a resident input drops its copy
-            # and its global-RAM charge, a spilled one deletes its file.
-            input_entry = resident.pop((Kind.INPUT, job.key), None)
-            if input_entry is not None:
-                if input_entry.residence is Residence.DISK:
-                    os.remove(input_entry.location)
-                    spill_state["disk_used"] -= input_entry.size
-                else:
-                    ledger.discard(("__input__", job.key))
+            # needed -- this job is its only consumer. Release it.
+            release_resident((Kind.INPUT, job.key))
             # The deps have been copied into the worker (started or dispatched), so each producer's
-            # held result is no longer needed by this consumer. Drop it once its last consumer has
-            # been dispatched: a resident result releases its copy and its global-RAM charge; a
-            # spilled one deletes its file and reclaims its disk-budget bytes.
+            # held result (or shard) is no longer needed by this consumer. Drop it once its last
+            # consumer has been dispatched.
             for dep in job.dependencies:
                 entry = resident[(Kind.OUTPUT, dep)]
                 entry.consumers -= 1
                 if entry.consumers == 0:
-                    if entry.residence is Residence.DISK:
-                        os.remove(entry.location)
-                        spill_state["disk_used"] -= entry.size
-                    else:
-                        ledger.remove(("__output__", dep))
-                    del resident[(Kind.OUTPUT, dep)]
+                    release_resident((Kind.OUTPUT, dep))
 
         def forget_warm(key) -> None:
             # Drop a warm job's bookkeeping without touching the shared worker. A stray result
@@ -575,13 +576,12 @@ class Scheduler:
                     stop_worker(member)
                 elif member in warm_running:
                     forget_warm(member)     # leave the shared worker up for other components
-                ledger.discard(("__output__", member))   # release its held-result charge if any
-                ledger.discard(("__input__", member))    # release its undispatched-input charge
-                for kind in (Kind.OUTPUT, Kind.INPUT):
-                    entry = resident.pop((kind, member), None)
-                    if entry is not None and entry.residence is Residence.DISK:
-                        os.remove(entry.location)
-                        spill_state["disk_used"] -= entry.size
+                release_resident((Kind.OUTPUT, member))   # whole result, if it produced one
+                release_resident((Kind.INPUT, member))    # its undispatched input, if any
+                member_shards = graph.get(member).shards
+                if member_shards is not None:             # a partitioned producer's shards
+                    for shard_key in member_shards:
+                        release_resident((Kind.OUTPUT, Shard(member, shard_key)))
                 completed.discard(member)
                 cancelled.add(member)
             failures.append((component, failed_key, error_text))
@@ -626,19 +626,43 @@ class Scheduler:
                 completed.add(key)
                 timings[key] = compute_time
                 calibration.observe(float(graph.get(key).cost), placement_of[key], compute_time)
-                # The result persists in the parent until its last consumer drains it, so charge it
-                # against global RAM like a working-set footprint: declared budget, measured actual,
-                # max of the two, and an over-budget warning when the result outgrows its
-                # declaration so the estimate is a tuning signal rather than a silent under-charge.
+                # The result persists in the parent until its consumers drain it, so charge it
+                # against global RAM like a working-set footprint. A whole result is one held entry;
+                # a partitioned one fans into a held entry per shard, each charged by its own
+                # measured size and ref-counted by the consumers depending on that shard, so a wide
+                # consumer never holds the producer's whole output. The over-budget warning compares
+                # the declared output_bytes (a total, for a partitioned job) against the measured
+                # total, so a too-low estimate tunes rather than under-charges silently.
                 declared_out = graph.get(key).output_bytes
-                measured_out = len(pickle.dumps(payload))
-                size = max(declared_out, measured_out)
-                ledger.add(Allocation(
-                    job_key=("__output__", key), placement=Placement.CPU_UNPINNED,
-                    cores=frozenset(), declared_ram=size, node_index=None))
-                resident[(Kind.OUTPUT, key)] = Resident(
-                    kind=Kind.OUTPUT, residence=Residence.HOST_PRIVATE, size=size, payload=payload,
-                    consumers=len(graph.dependents(key)))
+                job_shards = graph.get(key).shards
+                if job_shards is None:
+                    measured_out = len(pickle.dumps(payload))
+                    size = max(declared_out, measured_out)
+                    ledger.add(Allocation(
+                        job_key=("__output__", key), placement=Placement.CPU_UNPINNED,
+                        cores=frozenset(), declared_ram=size, node_index=None))
+                    resident[(Kind.OUTPUT, key)] = Resident(
+                        kind=Kind.OUTPUT, residence=Residence.HOST_PRIVATE, size=size,
+                        payload=payload, consumers=len(graph.dependents(key)))
+                else:
+                    if not isinstance(payload, dict) or set(payload) != set(job_shards):
+                        raise TetradromeError(
+                            f"partitioned job {key!r} must return exactly its declared shards "
+                            f"{set(job_shards)}; got "
+                            f"{set(payload) if isinstance(payload, dict) else type(payload).__name__}")
+                    consumers = {c: graph.get(c).dependencies for c in graph.dependents(key)}
+                    measured_out = 0
+                    for shard_key, shard_payload in payload.items():
+                        shard_ref = Shard(key, shard_key)
+                        shard_size = len(pickle.dumps(shard_payload))
+                        measured_out += shard_size
+                        ledger.add(Allocation(
+                            job_key=("__output__", shard_ref), placement=Placement.CPU_UNPINNED,
+                            cores=frozenset(), declared_ram=shard_size, node_index=None))
+                        resident[(Kind.OUTPUT, shard_ref)] = Resident(
+                            kind=Kind.OUTPUT, residence=Residence.HOST_PRIVATE, size=shard_size,
+                            payload=shard_payload,
+                            consumers=sum(1 for deps in consumers.values() if shard_ref in deps))
                 if declared_out and measured_out > declared_out and key not in output_over_warned:
                     output_over_warned.add(key)
                     logger.warning("job %r output exceeded declared budget: declared %d, actual %d",

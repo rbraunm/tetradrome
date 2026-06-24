@@ -14,7 +14,14 @@ from collections import deque
 from collections.abc import Hashable, Iterable
 import dataclasses
 
-from .job import Job
+from .job import Job, Shard
+
+
+def _producer_of(dep):
+    """The producing job a dependency points at: a shard dependency points at its producer, a
+    plain dependency is the job key itself. Topology (readiness, lineage, cycles) is in terms of
+    producers; the shard distinction matters only to the executor, for which data to hand over."""
+    return dep.producer if isinstance(dep, Shard) else dep
 
 
 class JobGraph:
@@ -26,17 +33,37 @@ class JobGraph:
             if job.key in self._jobs:
                 raise ValueError(f"duplicate job key {job.key!r}")
             self._jobs[job.key] = job
-        self._dependents: dict = {key: [] for key in self._jobs}
+        # The distinct producing jobs each job depends on -- shard dependencies collapsed to their
+        # producer. This is the topology; job.dependencies (which may name shards) is the executor's
+        # data spec. A shard dependency must point at a declared shard of a partitioned producer.
+        self._producers: dict = {}
         for job in self._jobs.values():
+            producers: set = set()
             for dep in job.dependencies:
-                if dep not in self._jobs:
-                    raise ValueError(f"job {job.key!r} depends on unknown job {dep!r}")
-                self._dependents[dep].append(job.key)
+                producer = _producer_of(dep)
+                if producer not in self._jobs:
+                    raise ValueError(f"job {job.key!r} depends on unknown job {producer!r}")
+                if isinstance(dep, Shard):
+                    target = self._jobs[producer]
+                    if target.shards is None:
+                        raise ValueError(
+                            f"job {job.key!r} depends on shard {dep.key!r} of {producer!r}, "
+                            f"which is not a partitioned job")
+                    if dep.key not in target.shards:
+                        raise ValueError(
+                            f"job {job.key!r} depends on shard {dep.key!r} of {producer!r}, whose "
+                            f"shards are {set(target.shards)}")
+                producers.add(producer)
+            self._producers[job.key] = frozenset(producers)
+        self._dependents: dict = {key: [] for key in self._jobs}
+        for key, producers in self._producers.items():
+            for producer in producers:
+                self._dependents[producer].append(key)
         self._check_acyclic()
 
     def _check_acyclic(self) -> None:
         # Kahn's algorithm: if a topological order can't cover every node, there is a cycle.
-        indegree = {key: len(job.dependencies) for key, job in self._jobs.items()}
+        indegree = {key: len(self._producers[key]) for key in self._jobs}
         queue = deque(key for key, deg in indegree.items() if deg == 0)
         seen = 0
         while queue:
@@ -91,7 +118,7 @@ class JobGraph:
             if current in seen:
                 continue
             seen.add(current)
-            stack.extend(self._jobs[current].dependencies)   # parents
+            stack.extend(self._producers[current])            # parents
             stack.extend(self._dependents[current])           # children
         return frozenset(seen)
 
@@ -100,4 +127,4 @@ class JobGraph:
         The scheduler additionally filters out jobs already running."""
         done = set(completed)
         return [job for job in self._jobs.values()
-                if job.key not in done and job.dependencies <= done]
+                if job.key not in done and self._producers[job.key] <= done]
