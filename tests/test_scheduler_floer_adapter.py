@@ -15,7 +15,12 @@ from tetradrome.algebra import available_f2_backends, f2_homology, predict_cost
 from tetradrome.engines.floer.generation import grid_complexes
 from tetradrome.engines.floer.grid import staircase_grid
 from tetradrome.scheduler import Scheduler, detect_machine
-from tetradrome.engines.floer.scheduling import generation_graph, reduction_graph, reduction_jobs
+from tetradrome.engines.floer.scheduling import (
+    generation_graph,
+    reduction_graph,
+    reduction_jobs,
+    whole_knot_graph,
+)
 
 _BACKENDS = [name for name, ok, _ in available_f2_backends() if ok and name != "packed-gpu"]
 
@@ -78,3 +83,16 @@ def test_generation_graph_matches_serial():
         for degree in serial[a_grading].degrees():
             assert produced[a_grading].dim(degree) == serial[a_grading].dim(degree)
             assert produced[a_grading].differential(degree) == serial[a_grading].differential(degree)
+
+
+@pytest.mark.parametrize("backend", _BACKENDS)
+def test_whole_knot_graph_matches_in_process(backend):
+    # The end-to-end graph -- generation slices, a merge partitioned by Alexander grading, a reduce
+    # per grading reading only its shard, and the assembly -- must equal the in-process Poincare
+    # count: the same per-grading f2_homology folded the same way, now through the scheduler's
+    # spawn, partitioned merge, shard routing, and assembly.
+    grid = staircase_grid(5)
+    graph, assemble_key = whole_knot_graph(grid, backend=backend)
+    report = Scheduler(detect_machine()).run(graph)
+    assert report.failures == []
+    assert report.results[assemble_key] == _inprocess(grid_complexes(grid), backend)

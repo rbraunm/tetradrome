@@ -23,9 +23,16 @@ from __future__ import annotations
 import math
 from collections import defaultdict
 
-from ...algebra import available_f2_backends, f2_homology, predict_cost, predict_size
-from ...scheduler import ComputePath, Job, JobGraph, Placement
-from .generation import _build_complexes, _generate_slice
+from ...algebra import (
+    available_f2_backends,
+    f2_homology,
+    grading_cost_ops,
+    grading_peak_bytes,
+    predict_cost,
+    predict_size,
+)
+from ...scheduler import ComputePath, Job, JobGraph, Placement, Shard
+from .generation import _build_complexes, _generate_slice, grading_histogram
 
 _REDUCE = "reduce"
 _ASSEMBLE = "assemble"
@@ -55,8 +62,7 @@ def _assemble_run(inputs, deps):
     return {key: value for key, value in poincare.items() if value}
 
 
-def _reduction_paths(cx, backend: str) -> tuple:
-    peak = predict_size(cx).packed_peak_bytes
+def _reduction_paths(peak: int, backend: str) -> tuple:
     if backend == "packed-gpu":
         return (ComputePath(Placement.GPU, cores=1, ram_bytes=peak, vram_bytes=max(peak, 1)),)
     if backend != "auto":
@@ -80,7 +86,7 @@ def reduction_jobs(complexes: dict, *, backend: str) -> tuple:
         jobs.append(Job(
             key=key, run=_reduce_run,
             inputs={"complex": cx, "backend": backend},
-            paths=_reduction_paths(cx, backend),
+            paths=_reduction_paths(predict_size(cx).packed_peak_bytes, backend),
             cost=predict_cost(cx),
         ))
         reduce_keys.append(key)
@@ -119,12 +125,14 @@ def _record_bytes(n: int) -> int:
     return _GEN_RECORD_BASE + _GEN_RECORD_PER_N * n
 
 
-def generation_jobs(grid, *, slice_states: int = _SLICE_STATES) -> tuple:
+def generation_jobs(grid, *, slice_states: int = _SLICE_STATES, merge_shards=None) -> tuple:
     """Generation jobs (contiguous lexicographic slices of the n! permutation space) plus the
     merge that folds them into ``{A: GradedComplex}``, as ``(jobs, merge_key)``. The merge depends
     on every slice and folds them in slice-index order, so its result equals ``grid_complexes``.
     The slice *count* falls out of ``n!`` at ``slice_states`` states each -- a math granularity,
-    independent of the machine."""
+    independent of the machine. ``merge_shards``, when given, declares the merge's output
+    partitioned over exactly those Alexander gradings, so each is stored and consumed independently
+    (the merge already returns ``{A: GradedComplex}``, the shard shape)."""
     total = math.factorial(grid.n)
     slice_count = max(1, math.ceil(total / slice_states))
     record = _record_bytes(grid.n)
@@ -151,6 +159,7 @@ def generation_jobs(grid, *, slice_states: int = _SLICE_STATES) -> tuple:
                            ram_bytes=max(2 * total * record, 1)),),
         dependencies=slice_keys,
         cost=float(total),
+        shards=merge_shards,
     ))
     return jobs, merge_key
 
@@ -160,3 +169,43 @@ def generation_graph(grid, *, slice_states: int = _SLICE_STATES):
     equals the serial ``grid_complexes(grid)``."""
     jobs, merge_key = generation_jobs(grid, slice_states=slice_states)
     return JobGraph(jobs), merge_key
+
+
+def _wired_reduce_run(inputs, deps):
+    # The single dep is this grading's complex -- the merge shard addressed by Shard(merge_key, A).
+    (complex_for_grading,) = deps.values()
+    return f2_homology(complex_for_grading, inputs["backend"])
+
+
+def whole_knot_graph(grid, *, backend: str = "bitint"):
+    """One graph from a grid to its Poincare count: generation slices feed a merge partitioned by
+    Alexander grading, each grading is reduced from its own shard (reading only that grading's
+    complex, never the whole output), and an assembly folds the per-grading homologies into the
+    ``{(Maslov, Alexander): dimension}`` count. Returned as ``(JobGraph, assemble_key)``.
+
+    The shard set and the per-grading reduction footprints come from the build-time grading
+    histogram: ``grading_peak_bytes`` and ``grading_cost_ops`` over a grading's ``{degree: dim}``
+    equal the materialized complex's predicted peak and cost, so the graph is fully priced before
+    any complex exists. The merge returns exactly those gradings, so the partition matches."""
+    by_grading: dict = defaultdict(dict)
+    for (alexander, degree), count in grading_histogram(grid).items():
+        by_grading[alexander][degree] = count
+    gradings = frozenset(by_grading)
+    jobs, merge_key = generation_jobs(grid, merge_shards=gradings)
+    reduce_keys = []
+    for alexander, degree_dims in by_grading.items():
+        key = (_REDUCE, alexander)
+        jobs.append(Job(
+            key=key, run=_wired_reduce_run, inputs={"backend": backend},
+            paths=_reduction_paths(grading_peak_bytes(degree_dims), backend),
+            cost=grading_cost_ops(degree_dims),
+            dependencies={Shard(merge_key, alexander)},
+        ))
+        reduce_keys.append(key)
+    assemble_key = (_ASSEMBLE,)
+    jobs.append(Job(
+        key=assemble_key, run=_assemble_run, inputs={},
+        paths=(ComputePath(Placement.CPU_PINNED, cores=1, ram_bytes=0),),
+        dependencies=reduce_keys,
+    ))
+    return JobGraph(jobs), assemble_key

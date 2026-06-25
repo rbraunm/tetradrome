@@ -10,7 +10,7 @@ roadmap/design/homology-engine.md.
 """
 from .complex import GradedComplex
 from .gpu import detect_gpu, enablement_instructions, gpu_config
-from .memory import ComplexSize, Routing, dense_block_bytes, dense_block_ops, dense_reduction_bytes, grading_peak_bytes, max_grading_bytes, predict_cost, predict_size, route_backend
+from .memory import ComplexSize, Routing, dense_block_bytes, dense_block_ops, dense_reduction_bytes, grading_cost_ops, grading_peak_bytes, max_grading_bytes, predict_cost, predict_size, route_backend
 from .multimodular import rational_homology_multimodular, rational_rank_multimodular
 from .parallel import parallel_f2_homology
 from .rational_complex import RationalComplex
@@ -42,6 +42,7 @@ __all__ = [
     "f2_rank_words",
     "gaussian_homology",
     "gpu_config",
+    "grading_cost_ops",
     "grading_peak_bytes",
     "homology",
     "max_grading_bytes",
