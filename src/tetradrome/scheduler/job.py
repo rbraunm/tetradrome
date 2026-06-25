@@ -87,6 +87,13 @@ class Job:
     ``{shard_key: payload}`` for exactly these keys, and the scheduler stores each shard as an
     independent held result a consumer addresses via ``Shard(key, shard_key)``. None means a single
     whole result. ``output_bytes`` for a partitioned job is the declared total across shards.
+
+    ``device_resident`` declares the job runs on the GPU and returns a device buffer to keep
+    resident in VRAM rather than copy back to the host: the result stays in the warm worker's CUDA
+    context and a GPU consumer reads it on-device, avoiding the round trip. It requires every path
+    to be a GPU path (the producer always runs on the device) and is incompatible with ``shards``
+    (a device-resident result is whole). Consumers of such a result must themselves run warm on the
+    same device; a fresh-routed consumer cannot see the buffer and is rejected.
     """
     key: Hashable
     run: Callable
@@ -96,6 +103,8 @@ class Job:
     cost: float = 0.0
     output_bytes: int = 0
     shards: frozenset | None = None
+    device_resident: bool = False
+    device_resident: bool = False
 
     def __post_init__(self):
         # Accept any iterable for paths/dependencies; store normalized immutables.
@@ -109,3 +118,10 @@ class Job:
             raise ValueError(f"job {self.key!r} declares no compute paths")
         if not callable(self.run):
             raise ValueError(f"job {self.key!r} run is not callable")
+        if self.device_resident:
+            if self.shards is not None:
+                raise ValueError(f"job {self.key!r} cannot be both device-resident and partitioned")
+            if any(path.placement is not Placement.GPU for path in self.paths):
+                raise ValueError(
+                    f"job {self.key!r} is device-resident but has a non-GPU path; a device-resident "
+                    f"result is produced on the device, so every path must be a GPU path")

@@ -558,3 +558,60 @@ def test_no_stall_warning_without_waiting_work(caplog):
         Scheduler(_machine(), shared_min_consumers=2,
                   shared_floor_bytes=_SMALL).run(JobGraph([producer, consumer]))
     assert not any("stalled dispatch" in r.message for r in caplog.records)
+
+
+# -- device-resident results (fabricated device buffer, plain warm worker stands in for CUDA) --
+
+class FakeDeviceBuffer:
+    """Stands in for a cupy array held in the warm worker's context: it has nbytes and carries the
+    payload. It is created inside the warm worker and never crosses a process boundary."""
+    def __init__(self, data):
+        self.data = data
+        self.nbytes = len(data)
+
+
+def make_device_buffer(inputs, deps):
+    return FakeDeviceBuffer(b"resident-payload")
+
+
+def read_device_buffer(inputs, deps):
+    (buf,) = deps.values()                  # resolved from the worker's device registry
+    return buf.data
+
+
+def test_device_resident_result_stays_in_worker_and_consumer_reads_it():
+    # The producer's buffer stays in the warm worker's VRAM (only a handle returns), and a warm
+    # consumer reads it in place -- the result never comes to host, and it is counted and sized.
+    producer = Job(key="src", run=make_device_buffer, inputs={}, paths=(_gpu(_GIB // 10),),
+                   cost=1000, device_resident=True)
+    consumer = Job(key="c", run=read_device_buffer, inputs={}, paths=(_gpu(_GIB // 10),),
+                   cost=1000, dependencies={"src"})
+    report = Scheduler(_gpu_machine(), warm_setup=warm_setup, warm_between=warm_between,
+                       context_vram_reserve=0).run(JobGraph([producer, consumer]))
+    assert report.failures == []
+    assert report.results["c"] == b"resident-payload"   # consumer read the resident buffer
+    assert "src" not in report.results                  # the buffer never came back to host
+    assert report.device_count == 1
+    assert report.device_bytes == len(b"resident-payload")
+
+
+def test_device_resident_producer_routed_fresh_fails_loud():
+    # A big-vram device-resident job trips the fresh trigger; a fresh process cannot hold the
+    # buffer, so admission rejects it rather than silently copying to host.
+    big = Job(key="src", run=make_device_buffer, inputs={}, paths=(_gpu(int(_GIB * 0.6)),),
+              device_resident=True)
+    with pytest.raises(TetradromeError, match="must run warm"):
+        Scheduler(_gpu_machine(), warm_setup=warm_setup, warm_between=warm_between,
+                  context_vram_reserve=0).run(JobGraph([big]))
+
+
+def test_fresh_consumer_of_device_resident_result_fails_loud():
+    # The producer keeps its result on-device; a consumer that routes fresh cannot see that buffer,
+    # so it is rejected loudly.
+    producer = Job(key="src", run=make_device_buffer, inputs={}, paths=(_gpu(_GIB // 10),),
+                   cost=1000, device_resident=True)
+    fresh_consumer = Job(key="c", run=read_device_buffer, inputs={},
+                         paths=(_gpu(int(_GIB * 0.6)),), dependencies={"src"})
+    with pytest.raises(TetradromeError, match="device-resident result"):
+        Scheduler(_gpu_machine(), warm_setup=warm_setup, warm_between=warm_between,
+                  context_vram_reserve=0).run(JobGraph([producer, fresh_consumer]))

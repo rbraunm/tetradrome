@@ -85,6 +85,22 @@ class SharedRef(NamedTuple):
     size: int
 
 
+class DeviceRef(NamedTuple):
+    """A dependency that lives in the warm worker's device memory under ``key``. Handed to a warm
+    consumer in place of the value; the warm worker resolves it from its device registry and passes
+    the resident buffer straight to ``run`` -- no host round trip. Only the warm worker can resolve
+    it, since the buffer lives in its CUDA context."""
+    key: object
+
+
+class DeviceHandle(NamedTuple):
+    """Posted by the warm worker as a device-resident producer's result: the buffer stayed in the
+    worker's registry under ``key`` and only this handle (with its ``nbytes`` for the VRAM charge)
+    travels to the parent."""
+    key: object
+    nbytes: int
+
+
 def _attach_segment(name):
     """Attach a shared segment created elsewhere, for reading only. The creating parent owns the
     segment and is the sole unlinker. Within one multiprocessing program the resource_tracker is
@@ -223,16 +239,27 @@ def _warm_worker_main(cores, gpu_index, job_queue, result_queue, setup, between,
         os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_index)
     if setup is not None:
         setup()
+    device_resident: dict = {}             # key -> buffer kept on the device across jobs
     while True:
         item = job_queue.get()
         if item is None:
             return
-        key, run, inputs, deps = item
+        if item[0] == "free":              # parent says a device-resident result's last reader is done
+            device_resident.pop(item[1], None)
+            continue
+        _, key, run, inputs, deps, keep = item
         try:
             deps = _resolve_deps(deps)        # pull any shared-segment deps into private copies
+            deps = {dep_key: (device_resident[value.key] if isinstance(value, DeviceRef) else value)
+                    for dep_key, value in deps.items()}
             t0 = time.perf_counter()
             result = run(inputs, deps)
-            result_queue.put((key, "ok", result, time.perf_counter() - t0))
+            elapsed = time.perf_counter() - t0
+            if keep:                          # device-resident output: keep the buffer, post a handle
+                device_resident[key] = result
+                result_queue.put((key, "ok", DeviceHandle(key, result.nbytes), elapsed))
+            else:
+                result_queue.put((key, "ok", result, elapsed))
         except Exception:
             result_queue.put((key, "error", traceback.format_exc(), 0.0))
         finally:
@@ -262,8 +289,14 @@ class WarmWorker:
     def pid(self):
         return self._proc.pid
 
-    def dispatch(self, key, run, inputs, deps) -> None:
-        self._job_queue.put((key, run, inputs, deps))
+    def dispatch(self, key, run, inputs, deps, keep_on_device=False) -> None:
+        self._job_queue.put(("job", key, run, inputs, deps, keep_on_device))
+
+    def free_device(self, key) -> None:
+        # Tell the worker a device-resident result's last reader has finished, so it can drop the
+        # buffer. Queued after that reader's job, and the queue is serial, so the read completes
+        # before the free runs.
+        self._job_queue.put(("free", key))
 
     def shutdown(self) -> None:
         self._job_queue.put(None)               # let the worker finish the current job and exit
@@ -304,7 +337,7 @@ class Residence(enum.Enum):
     HOST_PRIVATE = "host_private"   # a private copy in the parent's RAM (the default)
     DISK = "disk"                   # spilled to a file under memory pressure
     HOST_SHARED = "host_shared"     # one shared-RAM segment many consumers map (per locality domain)
-    DEVICE = "device"               # reserved: resident in device VRAM
+    DEVICE = "device"               # resident in a warm worker's GPU VRAM, read on-device
 
 
 class Kind(enum.Enum):
@@ -329,6 +362,7 @@ class Resident:
     shareable: bool = False         # fan-out and size cleared the threshold: share rather than copy
     handle: object = None           # HOST_SHARED: {domain: SharedMemory}, one segment per locality
                                     # domain (None = base, or a NUMA node index); reserved for DEVICE
+    gpu_index: int | None = None    # DEVICE: which GPU's warm worker holds the resident buffer
 
 
 @dataclasses.dataclass
@@ -354,6 +388,8 @@ class RunReport:
     spill_count: int = 0    # how many held results were spilled (the degraded path fired if > 0)
     shared_count: int = 0   # how many results were materialized into a shared-memory segment
     shared_bytes: int = 0   # total size of those segments
+    device_count: int = 0   # how many results were kept resident in GPU VRAM
+    device_bytes: int = 0   # total VRAM bytes of those device-resident results
     timings: dict = dataclasses.field(default_factory=dict)
     calibration: "Calibration | None" = None     # final per-placement rates, for inspection
 
@@ -487,6 +523,7 @@ class Scheduler:
         resident: dict = {}
         spill_state = {"dir": None, "count": 0, "total_bytes": 0, "disk_used": 0}
         shared_state = {"count": 0, "bytes": 0}     # results materialized into shared segments
+        device_state = {"count": 0, "bytes": 0}     # results kept resident in GPU VRAM
         nodes_by_index = {node.index: node for node in self.machine.nodes}
         replica_stall_warned: set = set()           # result keys already warned for stalling dispatch
         placement_of: dict = {}         # key -> the placement it ran on, for calibration
@@ -557,6 +594,11 @@ class Scheduler:
                     ledger.discard(("__output__", (key, domain)))
                     segment.close()
                     segment.unlink()
+            elif entry.residence is Residence.DEVICE:
+                ledger.discard(("__output__", key))
+                worker = warm_workers.get(entry.gpu_index)
+                if worker is not None:
+                    worker.free_device(key)         # drop the buffer from the worker's registry
             else:
                 ledger.discard((charge, key))
 
@@ -614,6 +656,8 @@ class Scheduler:
             # from an existing one if new), or any existing replica for an unpinned one, which has
             # no locality to honor. A plain result is copied; a spilled one is read from disk.
             entry = resident[(Kind.OUTPUT, dep)]
+            if entry.residence is Residence.DEVICE:
+                return DeviceRef(dep)               # warm consumer resolves it from the worker registry
             if entry.residence is Residence.HOST_SHARED:
                 if domain in entry.handle:
                     segment = entry.handle[domain]
@@ -652,10 +696,24 @@ class Scheduler:
         def launch(job, placed, gpu_execution) -> None:
             # A pinned consumer maps a replica local to its node; everyone else (unpinned, GPU) maps
             # the base segment, which has no node to honor.
-            domain = placed.node_index if placed.path.placement is Placement.CPU_PINNED else None
+            placement = placed.path.placement
+            warm = placement is Placement.GPU and gpu_execution is Execution.WARM
+            # A device-resident buffer lives in the warm worker's context: its producer must run
+            # there, and so must every consumer, or the buffer is invisible. Reject the mis-routed
+            # cases loudly rather than silently falling back to a host copy.
+            if job.device_resident and not warm:
+                raise TetradromeError(
+                    f"device-resident job {job.key!r} must run warm on the GPU, but it was routed "
+                    f"{'fresh' if placement is Placement.GPU else placement.value}")
+            if not warm and any(resident[(Kind.OUTPUT, dep)].residence is Residence.DEVICE
+                                for dep in job.dependencies):
+                raise TetradromeError(
+                    f"job {job.key!r} reads a device-resident result but is not running warm on the "
+                    f"GPU; a device buffer cannot be handed to a "
+                    f"{'fresh' if placement is Placement.GPU else placement.value} worker")
+            domain = placed.node_index if placement is Placement.CPU_PINNED else None
             deps = {dep: _load_dep(dep, domain) for dep in job.dependencies}
             job_inputs = _load_input(job.key)
-            placement = placed.path.placement
             # placed.path is the admission view: its footprint already includes the per-process
             # overhead for a fresh worker, and is the bare working set for a warm one.
             ledger.add(Allocation(
@@ -665,11 +723,13 @@ class Scheduler:
             ))
             declared_ram[job.key] = placed.path.ram_bytes
             placement_of[job.key] = placement
-            if placement is Placement.GPU and gpu_execution is Execution.WARM:
+            if warm:
                 # Small GPU job: serialize it through the held context. Not RAM-sampled -- it is
                 # small by the gate, and only one warm job's footprint is ever live in the shared
-                # pid at a time, so a live sample could not be attributed to it cleanly anyway.
-                ensure_warm(placed.gpu_index).dispatch(job.key, job.run, job_inputs, deps)
+                # pid at a time, so a live sample could not be attributed to it cleanly anyway. A
+                # device-resident job keeps its result in the worker's VRAM rather than returning it.
+                ensure_warm(placed.gpu_index).dispatch(
+                    job.key, job.run, job_inputs, deps, keep_on_device=job.device_resident)
                 warm_running[job.key] = placed.gpu_index
             else:
                 proc = ctx.Process(target=_worker_main, args=(
@@ -686,13 +746,13 @@ class Scheduler:
             # needed -- this job is its only consumer. Release it.
             release_resident((Kind.INPUT, job.key))
             # The deps have been copied into the worker (started or dispatched), so each producer's
-            # held result (or shard) is no longer needed by this consumer -- except a shared segment,
-            # which the worker reads during its run, not at dispatch, so it is freed at the
-            # consumer's completion instead (see reap_one). Drop a copied dep once its last consumer
-            # has been dispatched.
+            # held result (or shard) is no longer needed by this consumer -- except a by-reference
+            # dep (a shared segment, or a device-resident buffer), which the worker reads during its
+            # run, not at dispatch, so it is freed at the consumer's completion instead (see
+            # reap_one). Drop a copied dep once its last consumer has been dispatched.
             for dep in job.dependencies:
                 entry = resident[(Kind.OUTPUT, dep)]
-                if entry.residence is Residence.HOST_SHARED:
+                if entry.residence in (Residence.HOST_SHARED, Residence.DEVICE):
                     continue
                 entry.consumers -= 1
                 if entry.consumers == 0:
@@ -756,6 +816,7 @@ class Scheduler:
             key, status, payload, compute_time = item
             if not is_running(key):
                 return                  # stale message from a job already reaped or killed
+            gpu_completed = None        # the GPU a warm job ran on, kept for a device-resident result
             if key in running:          # fresh: its own process to reap
                 proc = running.pop(key)
                 with pids_lock:
@@ -765,7 +826,7 @@ class Scheduler:
                 logger.debug("job %r done: predicted %d, peak private %d",
                              key, declared_ram[key], peak_actual.get(key, 0))
             else:                       # warm: the worker persists, only the allocation clears
-                warm_running.pop(key)
+                gpu_completed = warm_running.pop(key)
                 ledger.remove(key)
                 logger.debug("job %r done (warm)", key)
             if status == "ok":
@@ -781,7 +842,23 @@ class Scheduler:
                 # total, so a too-low estimate tunes rather than under-charges silently.
                 declared_out = graph.get(key).output_bytes
                 job_shards = graph.get(key).shards
-                if job_shards is None:
+                if isinstance(payload, DeviceHandle):
+                    # A device-resident result: the buffer stayed in the warm worker's VRAM and only
+                    # the handle came back. Track it as DEVICE, charged against that GPU's VRAM and
+                    # ref-counted by its consumers; the warm worker frees the buffer when the parent
+                    # signals the last reader is done (release_resident).
+                    fanout = len(graph.dependents(key))
+                    ledger.add(Allocation(
+                        job_key=("__output__", key), placement=Placement.GPU, cores=frozenset(),
+                        declared_ram=0, gpu_index=gpu_completed, declared_vram=payload.nbytes))
+                    resident[(Kind.OUTPUT, key)] = Resident(
+                        kind=Kind.OUTPUT, residence=Residence.DEVICE, size=payload.nbytes,
+                        consumers=fanout, gpu_index=gpu_completed)
+                    device_state["count"] += 1
+                    device_state["bytes"] += payload.nbytes
+                    logger.info("result %r resident in VRAM on gpu %s (%d bytes), %d consumer(s)",
+                                key, gpu_completed, payload.nbytes, fanout)
+                elif job_shards is None:
                     measured_out = len(pickle.dumps(payload))
                     size = max(declared_out, measured_out)
                     fanout = len(graph.dependents(key))
@@ -818,12 +895,13 @@ class Scheduler:
                     output_over_warned.add(key)
                     logger.warning("job %r output exceeded declared budget: declared %d, actual %d",
                                    key, declared_out, measured_out)
-                # This job has finished, so it has finished reading any shared-segment deps (read at
-                # the start of its run). Decrement those; the segment is unlinked once its last
-                # reader completes. Copied deps were already released at dispatch.
+                # This job has finished, so it has finished reading any by-reference deps (read at
+                # the start of its run): shared segments and device-resident buffers. Decrement
+                # those; the segment or buffer is released once its last reader completes. Copied
+                # deps were already released at dispatch.
                 for dep in graph.get(key).dependencies:
                     entry = resident.get((Kind.OUTPUT, dep))
-                    if entry is not None and entry.residence is Residence.HOST_SHARED:
+                    if entry is not None and entry.residence in (Residence.HOST_SHARED, Residence.DEVICE):
                         entry.consumers -= 1
                         if entry.consumers == 0:
                             release_resident((Kind.OUTPUT, dep))
@@ -985,4 +1063,6 @@ class Scheduler:
                          spill_count=spill_state["count"],
                          shared_count=shared_state["count"],
                          shared_bytes=shared_state["bytes"],
+                         device_count=device_state["count"],
+                         device_bytes=device_state["bytes"],
                          timings=timings, calibration=calibration)
