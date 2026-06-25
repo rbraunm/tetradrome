@@ -698,19 +698,28 @@ class Scheduler:
             # the base segment, which has no node to honor.
             placement = placed.path.placement
             warm = placement is Placement.GPU and gpu_execution is Execution.WARM
-            # A device-resident buffer lives in the warm worker's context: its producer must run
-            # there, and so must every consumer, or the buffer is invisible. Reject the mis-routed
-            # cases loudly rather than silently falling back to a host copy.
-            if job.device_resident and not warm:
-                raise TetradromeError(
-                    f"device-resident job {job.key!r} must run warm on the GPU, but it was routed "
-                    f"{'fresh' if placement is Placement.GPU else placement.value}")
-            if not warm and any(resident[(Kind.OUTPUT, dep)].residence is Residence.DEVICE
-                                for dep in job.dependencies):
-                raise TetradromeError(
-                    f"job {job.key!r} reads a device-resident result but is not running warm on the "
-                    f"GPU; a device buffer cannot be handed to a "
-                    f"{'fresh' if placement is Placement.GPU else placement.value} worker")
+            # Device residence is a performance optimization, not a correctness requirement: a buffer
+            # lives in the warm worker's context, so it is only useful when producer and consumers
+            # all run there. When routing defeats that, warn about the degradation and keep computing
+            # rather than aborting -- the result is still produced, just on the host or via a
+            # serialized warm run. The producer keeps its result resident only when it runs warm and
+            # every consumer is GPU-only (a consumer that can fall to the CPU could not read a device
+            # buffer, so the result goes to host instead).
+            consumers_all_gpu = all(path.placement is Placement.GPU
+                                    for consumer in graph.dependents(job.key)
+                                    for path in graph.get(consumer).paths)
+            keep_on_device = job.device_resident and warm and consumers_all_gpu
+            if job.device_resident and not keep_on_device:
+                why = "it routed fresh rather than warm" if not warm else "a consumer is not GPU-only"
+                logger.warning("device-resident job %r: %s, so its result is host-resident this run "
+                               "(device residency skipped)", job.key, why)
+            if not warm and placement is Placement.GPU and any(
+                    resident[(Kind.OUTPUT, dep)].residence is Residence.DEVICE
+                    for dep in job.dependencies):
+                logger.warning("job %r reads a device-resident result but routed fresh; running it "
+                               "warm to read the buffer in-context, which serializes it on the GPU",
+                               job.key)
+                warm = True
             domain = placed.node_index if placement is Placement.CPU_PINNED else None
             deps = {dep: _load_dep(dep, domain) for dep in job.dependencies}
             job_inputs = _load_input(job.key)
@@ -729,7 +738,7 @@ class Scheduler:
                 # pid at a time, so a live sample could not be attributed to it cleanly anyway. A
                 # device-resident job keeps its result in the worker's VRAM rather than returning it.
                 ensure_warm(placed.gpu_index).dispatch(
-                    job.key, job.run, job_inputs, deps, keep_on_device=job.device_resident)
+                    job.key, job.run, job_inputs, deps, keep_on_device=keep_on_device)
                 warm_running[job.key] = placed.gpu_index
             else:
                 proc = ctx.Process(target=_worker_main, args=(

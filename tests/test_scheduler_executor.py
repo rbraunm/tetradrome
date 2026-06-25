@@ -595,23 +595,49 @@ def test_device_resident_result_stays_in_worker_and_consumer_reads_it():
     assert report.device_bytes == len(b"resident-payload")
 
 
-def test_device_resident_producer_routed_fresh_fails_loud():
-    # A big-vram device-resident job trips the fresh trigger; a fresh process cannot hold the
-    # buffer, so admission rejects it rather than silently copying to host.
+def test_device_resident_producer_routed_fresh_degrades_to_host(caplog):
+    # A big-vram device-resident job trips the fresh trigger. A fresh process cannot hold the
+    # buffer, so the scheduler warns and produces a host-resident result instead of aborting.
     big = Job(key="src", run=make_device_buffer, inputs={}, paths=(_gpu(int(_GIB * 0.6)),),
               device_resident=True)
-    with pytest.raises(TetradromeError, match="must run warm"):
-        Scheduler(_gpu_machine(), warm_setup=warm_setup, warm_between=warm_between,
-                  context_vram_reserve=0).run(JobGraph([big]))
+    with caplog.at_level("WARNING"):
+        report = Scheduler(_gpu_machine(), warm_setup=warm_setup, warm_between=warm_between,
+                           context_vram_reserve=0).run(JobGraph([big]))
+    assert report.failures == []
+    assert report.device_count == 0                         # never made it onto the device
+    assert report.results["src"].data == b"resident-payload"   # came back to the host instead
+    assert any("device residency skipped" in r.message for r in caplog.records)
 
 
-def test_fresh_consumer_of_device_resident_result_fails_loud():
-    # The producer keeps its result on-device; a consumer that routes fresh cannot see that buffer,
-    # so it is rejected loudly.
+def test_fresh_gpu_consumer_of_device_resident_result_is_run_warm(caplog):
+    # The producer keeps its result on-device; a GPU consumer that would route fresh is run warm
+    # instead so it can read the buffer in-context. It still reads the resident result, with a
+    # warning that it was serialized.
     producer = Job(key="src", run=make_device_buffer, inputs={}, paths=(_gpu(_GIB // 10),),
                    cost=1000, device_resident=True)
     fresh_consumer = Job(key="c", run=read_device_buffer, inputs={},
                          paths=(_gpu(int(_GIB * 0.6)),), dependencies={"src"})
-    with pytest.raises(TetradromeError, match="device-resident result"):
-        Scheduler(_gpu_machine(), warm_setup=warm_setup, warm_between=warm_between,
-                  context_vram_reserve=0).run(JobGraph([producer, fresh_consumer]))
+    with caplog.at_level("WARNING"):
+        report = Scheduler(_gpu_machine(), warm_setup=warm_setup, warm_between=warm_between,
+                           context_vram_reserve=0).run(JobGraph([producer, fresh_consumer]))
+    assert report.failures == []
+    assert report.device_count == 1                         # producer's buffer stayed resident
+    assert report.results["c"] == b"resident-payload"       # consumer read it after being run warm
+    assert any("running it warm" in r.message for r in caplog.records)
+
+
+def test_cpu_consumer_downgrades_device_resident_result_to_host(caplog):
+    # A device-resident producer with a consumer that can run on the CPU cannot keep its result on
+    # the device (the CPU consumer could not read it), so it warns and produces a host result the
+    # consumer reads normally.
+    producer = Job(key="src", run=make_device_buffer, inputs={}, paths=(_gpu(_GIB // 10),),
+                   cost=1000, device_resident=True)
+    cpu_consumer = Job(key="c", run=read_device_buffer, inputs={}, paths=(_cpu(),),
+                       dependencies={"src"})
+    with caplog.at_level("WARNING"):
+        report = Scheduler(_gpu_machine(), warm_setup=warm_setup, warm_between=warm_between,
+                           context_vram_reserve=0).run(JobGraph([producer, cpu_consumer]))
+    assert report.failures == []
+    assert report.device_count == 0
+    assert report.results["c"] == b"resident-payload"       # CPU consumer read the host result
+    assert any("not GPU-only" in r.message for r in caplog.records)

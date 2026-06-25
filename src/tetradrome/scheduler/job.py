@@ -92,8 +92,10 @@ class Job:
     resident in VRAM rather than copy back to the host: the result stays in the warm worker's CUDA
     context and a GPU consumer reads it on-device, avoiding the round trip. It requires every path
     to be a GPU path (the producer always runs on the device) and is incompatible with ``shards``
-    (a device-resident result is whole). Consumers of such a result must themselves run warm on the
-    same device; a fresh-routed consumer cannot see the buffer and is rejected.
+    (a device-resident result is whole). It is an optimization, not a guarantee: when routing
+    defeats it -- the producer routes fresh, or a consumer is not GPU-only -- the scheduler warns
+    and falls back (the result becomes host-resident, or a fresh GPU consumer is run warm to read
+    the buffer) rather than failing.
     """
     key: Hashable
     run: Callable
