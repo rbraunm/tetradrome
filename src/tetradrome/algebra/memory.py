@@ -174,9 +174,9 @@ def _grading_peaks(histogram: Mapping) -> list:
 def dense_reduction_bytes(histogram: Mapping) -> int:
     """Worst-case co-resident reduction memory (bytes) for a batch given as a histogram keyed
     by ``(grading, degree) -> count``: the sum over gradings of each grading's peak block, i.e.
-    every grading reduced at once. This is the unbounded-concurrency figure; the bounded-memory
-    scheduler (``algebra.parallel``) holds the actual peak below a budget by running gradings in
-    waves, so it is an upper bound, not the feasibility criterion (see ``max_grading_bytes``).
+    every grading reduced at once. This is the unbounded-concurrency figure; the compute scheduler
+    holds the actual peak below the budget by ordering reductions and spilling held results, so it
+    is an upper bound, not the feasibility criterion (see ``max_grading_bytes``).
     """
     return sum(_grading_peaks(histogram))
 
