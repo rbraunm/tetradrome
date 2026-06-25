@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from multiprocessing import Pool
 
 from ...algebra import GradedComplex
 from .differential import differential
@@ -112,24 +111,13 @@ def _grading_slice(args):
     return dict(hist)
 
 
-def grading_histogram(grid, workers: int = 1) -> dict:
+def grading_histogram(grid) -> dict:
     """Generator count per ``(Alexander, degree)`` grading over all n! states, gradings only.
 
     Builds no differentials and no matrices, so it is memory-safe at any n (it stores only the
     O(n^2) grading counts). The dimensions it returns are what set the reducer's dense-matrix
     sizes, so this is the input to ``dense_reduction_bytes`` -- a memory projection that can be
-    computed for sizes far too large to actually generate or reduce.
+    computed for sizes far too large to actually generate or reduce. Walking n! states is itself
+    cheap (gradings only), so it runs serially; the scheduler parallelizes the work that follows.
     """
-    total = math.factorial(grid.n)
-    if workers <= 1 or total < 2 * workers:
-        return _grading_slice((grid.O, grid.X, 0, total))
-    slices = [
-        (grid.O, grid.X, total * w // workers, total * (w + 1) // workers)
-        for w in range(workers)
-    ]
-    merged: dict = defaultdict(int)
-    with Pool(processes=workers) as pool:
-        for part in pool.imap_unordered(_grading_slice, slices, chunksize=1):
-            for key, count in part.items():
-                merged[key] += count
-    return dict(merged)
+    return _grading_slice((grid.O, grid.X, 0, math.factorial(grid.n)))
