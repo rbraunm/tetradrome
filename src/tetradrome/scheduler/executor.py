@@ -327,7 +327,8 @@ class Resident:
     location: str | None = None
     consumers: int = 0
     shareable: bool = False         # fan-out and size cleared the threshold: share rather than copy
-    handle: object = None           # the SharedMemory segment when HOST_SHARED (reserved for DEVICE)
+    handle: object = None           # HOST_SHARED: {domain: SharedMemory}, one segment per locality
+                                    # domain (None = base, or a NUMA node index); reserved for DEVICE
 
 
 @dataclasses.dataclass
@@ -486,6 +487,8 @@ class Scheduler:
         resident: dict = {}
         spill_state = {"dir": None, "count": 0, "total_bytes": 0, "disk_used": 0}
         shared_state = {"count": 0, "bytes": 0}     # results materialized into shared segments
+        nodes_by_index = {node.index: node for node in self.machine.nodes}
+        replica_stall_warned: set = set()           # result keys already warned for stalling dispatch
         placement_of: dict = {}         # key -> the placement it ran on, for calibration
         calibration = Calibration()
         timings: dict = {}              # key -> measured run seconds, for cost calibration
@@ -550,38 +553,91 @@ class Scheduler:
                 os.remove(entry.location)
                 spill_state["disk_used"] -= entry.size
             elif entry.residence is Residence.HOST_SHARED:
-                ledger.discard((charge, key))
-                entry.handle.close()
-                entry.handle.unlink()
+                for domain, segment in entry.handle.items():
+                    ledger.discard(("__output__", (key, domain)))
+                    segment.close()
+                    segment.unlink()
             else:
                 ledger.discard((charge, key))
 
-        def _load_dep(dep):
+        def _warn_if_stalling(key, domain) -> None:
+            # Materializing a replica is a synchronous write in the main loop, so it delays
+            # dispatch of everything else. Warn (once per result) when that write coincides with
+            # work that could be running: a ready job not yet started and a node with both free
+            # cores and free RAM. It can fire when the specific waiting job would not fit the
+            # specific free node; that is the deliberate loud-erring side, to surface on labradorite.
+            if key in replica_stall_warned:
+                return
+            has_waiting = any(
+                not is_running(job.key) and job.key not in cancelled and job.key != key
+                for job in graph.ready(completed))
+            if not has_waiting:
+                return
+            has_free = any(ledger.free_cores(node.index) and ledger.free_ram_node(node.index) > 0
+                           for node in self.machine.nodes)
+            if not has_free:
+                return
+            replica_stall_warned.add(key)
+            where = "the base segment" if domain is None else f"node {domain}"
+            logger.warning("replicating shared result %r to %s stalled dispatch while ready jobs "
+                           "and free NUMA capacity were available", key, where)
+
+        def _make_replica(entry, key, domain, source):
+            # Create one locality domain's segment for a shared result and charge it. A node domain
+            # writes inside local_to so its pages first-touch on that node and is charged against
+            # that node's RAM; the base domain (None) writes unbound and is charged globally. source
+            # is the bytes (first replica) or an existing replica's buffer (a node-local copy of one
+            # already made). Each replica is real RAM, charged at full size -- locality is not free.
+            _warn_if_stalling(key, domain)
+            segment = SharedMemory(create=True, size=entry.size)
+            if domain is None:
+                segment.buf[:entry.size] = source
+                node_index = None
+            else:
+                with platform.local_to(nodes_by_index[domain].cores):
+                    segment.buf[:entry.size] = source
+                node_index = domain
+            ledger.add(Allocation(
+                job_key=("__output__", (key, domain)), placement=Placement.CPU_UNPINNED,
+                cores=frozenset(), declared_ram=entry.size, node_index=node_index))
+            entry.handle[domain] = segment
+            shared_state["count"] += 1
+            shared_state["bytes"] += entry.size
+            assert len(entry.handle) <= len(self.machine.nodes) + 1, "more replicas than locality domains"
+            return segment
+
+        def _load_dep(dep, domain):
             # A consumer's view of a producer's result. A shareable result is materialized into a
-            # shared-memory segment on the first consumer's dispatch (serialize once into the
-            # segment, drop the private copy) and every consumer thereafter is handed a small
-            # SharedRef; a plain result is copied; a spilled one is read back from disk. The restored
-            # or referenced object is transient -- it lives only long enough to reach the worker.
+            # shared-memory segment on the first consumer's dispatch (serialize once, drop the
+            # private copy); thereafter each consumer is handed a small SharedRef to a segment in
+            # its locality domain -- its NUMA node for a pinned consumer (a local replica, copied
+            # from an existing one if new), or any existing replica for an unpinned one, which has
+            # no locality to honor. A plain result is copied; a spilled one is read from disk.
             entry = resident[(Kind.OUTPUT, dep)]
             if entry.residence is Residence.HOST_SHARED:
-                return SharedRef(entry.handle.name, entry.size)
+                if domain in entry.handle:
+                    segment = entry.handle[domain]
+                elif domain is None:
+                    segment = next(iter(entry.handle.values()))     # unpinned: reuse any replica
+                else:
+                    segment = _make_replica(entry, dep, domain,
+                                            next(iter(entry.handle.values())).buf[:entry.size])
+                return SharedRef(segment.name, entry.size)
             if entry.residence is Residence.DISK:
                 with open(entry.location, "rb") as f:
                     return pickle.load(f)
             if entry.shareable:
                 data = pickle.dumps(entry.payload)
-                segment = SharedMemory(create=True, size=len(data))
-                segment.buf[:len(data)] = data
-                entry.handle = segment
                 entry.residence = Residence.HOST_SHARED
                 entry.payload = None
-                entry.size = len(data)              # exact segment bytes the readers slice to
-                shared_state["count"] += 1
-                shared_state["bytes"] += len(data)
+                entry.size = len(data)                  # exact segment bytes the readers slice to
+                entry.handle = {}
+                ledger.discard(("__output__", dep))     # recharge per replica, not as one whole copy
+                segment = _make_replica(entry, dep, domain, data)
                 if shared_state["count"] == 1:
-                    logger.info("sharing result %r across %d consumers via a %d-byte segment",
+                    logger.info("sharing result %r across %d consumers via %d-byte segment(s)",
                                 dep, entry.consumers, len(data))
-                return SharedRef(segment.name, len(data))
+                return SharedRef(segment.name, entry.size)
             return entry.payload
 
         def _load_input(key):
@@ -594,7 +650,10 @@ class Scheduler:
             return entry.payload
 
         def launch(job, placed, gpu_execution) -> None:
-            deps = {dep: _load_dep(dep) for dep in job.dependencies}
+            # A pinned consumer maps a replica local to its node; everyone else (unpinned, GPU) maps
+            # the base segment, which has no node to honor.
+            domain = placed.node_index if placed.path.placement is Placement.CPU_PINNED else None
+            deps = {dep: _load_dep(dep, domain) for dep in job.dependencies}
             job_inputs = _load_input(job.key)
             placement = placed.path.placement
             # placed.path is the admission view: its footprint already includes the per-process
@@ -908,9 +967,10 @@ class Scheduler:
             # as its last consumer dispatches, so this catches only the abort path, where leaving
             # POSIX segments around would leak them.
             for entry in resident.values():
-                if entry.residence is Residence.HOST_SHARED and entry.handle is not None:
-                    entry.handle.close()
-                    entry.handle.unlink()
+                if entry.residence is Residence.HOST_SHARED and entry.handle:
+                    for segment in entry.handle.values():
+                        segment.close()
+                        segment.unlink()
             if spill_state["dir"] is not None:
                 shutil.rmtree(spill_state["dir"], ignore_errors=True)
         # Surviving held results: terminals never drained, plus any producer whose poisoned

@@ -16,6 +16,7 @@ ceiling via the Machine that ``inventory.detect_machine`` assembles.
 from __future__ import annotations
 
 import abc
+import contextlib
 import logging
 import os
 import sys
@@ -173,6 +174,14 @@ class HostPlatform(abc.ABC):
     def pin(self, cores) -> None:
         """Bind the calling process to ``cores``."""
 
+    @contextlib.contextmanager
+    def local_to(self, cores):
+        """Run the body with the calling thread bound to ``cores`` so memory it first-touches
+        lands on that node's RAM, then restore the prior affinity. This is a locality hint, not a
+        correctness requirement: the default does nothing, so a platform that cannot localize (or
+        a single-node box, where there is nowhere else to land) simply runs the body unbound."""
+        yield
+
     @abc.abstractmethod
     def private_bytes(self, pid: int) -> int | None:
         """The private resident bytes of a process, or None if it is gone or unreadable."""
@@ -204,6 +213,19 @@ class UbuntuHostPlatform(HostPlatform):
 
     def pin(self, cores) -> None:
         os.sched_setaffinity(0, set(cores))
+
+    @contextlib.contextmanager
+    def local_to(self, cores):
+        # Bind this thread to the node's cores for the duration so a write inside the body faults
+        # its pages in on that node (first-touch), then restore. sched_setaffinity with pid 0 is
+        # thread-scoped on Linux, so only the calling thread is moved; the sampler thread is
+        # untouched. The restore runs even if the body raises.
+        saved = os.sched_getaffinity(0)
+        os.sched_setaffinity(0, set(cores))
+        try:
+            yield
+        finally:
+            os.sched_setaffinity(0, saved)
 
     def private_bytes(self, pid: int) -> int | None:
         # USS = Private_Clean + Private_Dirty from smaps_rollup. Under forkserver every worker

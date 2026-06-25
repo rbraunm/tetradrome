@@ -7,6 +7,7 @@ The job callables are module-level so they pickle to spawned workers. DAG orderi
 dependencies, so these are deterministic regardless of how many cores the host actually has.
 """
 import os
+import pickle
 import time
 
 import pytest
@@ -511,3 +512,49 @@ def test_low_fanout_result_stays_private():
                        shared_floor_bytes=_SMALL).run(JobGraph([producer, consumer]))
     assert report.results["c0"] == 2 * _SMALL
     assert report.shared_count == 0
+
+
+def test_shared_result_gets_one_replica_per_node():
+    # A result shared by pinned consumers on different nodes is replicated per node. Two nodes share
+    # the one real core (the sandbox has one), so they run in sequence, and node sizing forces the
+    # second consumer onto node 1: c0 (small) lands on node 0, c1 (large) fits only node 1, so the
+    # result is materialized once per node -- two segments, each charged on its own node.
+    node0 = NumaNode(0, frozenset({0}), 5 * _SMALL)
+    node1 = NumaNode(1, frozenset({0}), 20 * _SMALL)
+    m = Machine(nodes=(node0, node1), gpus=(), mem_cap_bytes=25 * _SMALL)
+    small = ComputePath(Placement.CPU_PINNED, cores=1, ram_bytes=_SMALL)
+    large = ComputePath(Placement.CPU_PINNED, cores=1, ram_bytes=10 * _SMALL)
+    g = JobGraph([
+        Job(key="src", run=big_blob, inputs={}, paths=(small,)),
+        Job(key="c0", run=blob_len, inputs={}, paths=(small,), dependencies={"src"}),
+        Job(key="c1", run=blob_len, inputs={}, paths=(large,), dependencies={"src"}),
+    ])
+    report = Scheduler(m, shared_min_consumers=2, shared_floor_bytes=_SMALL).run(g)
+    assert report.failures == []
+    assert report.results["c0"] == 2 * _SMALL and report.results["c1"] == 2 * _SMALL
+    assert report.shared_count == 2                      # one segment per node
+    one_replica = len(pickle.dumps(bytes(2 * _SMALL)))   # the segment holds the pickled blob
+    assert report.shared_bytes == 2 * one_replica
+
+
+def test_replica_creation_warns_when_dispatch_stalls(caplog):
+    # Building a replica is synchronous in the main loop; with several ready consumers and free
+    # capacity, it stalls dispatch, which must surface a warning (once).
+    producer = Job(key="src", run=big_blob, inputs={}, paths=(_cpu(),))
+    consumers = [Job(key=f"c{i}", run=blob_len, inputs={}, paths=(_cpu(),),
+                     dependencies={"src"}) for i in range(3)]
+    with caplog.at_level("WARNING"):
+        report = Scheduler(_machine(), shared_min_consumers=2,
+                           shared_floor_bytes=_SMALL).run(JobGraph([producer, *consumers]))
+    assert report.shared_count == 1
+    assert sum("stalled dispatch" in r.message for r in caplog.records) == 1
+
+
+def test_no_stall_warning_without_waiting_work(caplog):
+    # One consumer: nothing else is queued, so replicating it stalls nothing and must not warn.
+    producer = Job(key="src", run=big_blob, inputs={}, paths=(_cpu(),))
+    consumer = Job(key="c0", run=blob_len, inputs={}, paths=(_cpu(),), dependencies={"src"})
+    with caplog.at_level("WARNING"):
+        Scheduler(_machine(), shared_min_consumers=2,
+                  shared_floor_bytes=_SMALL).run(JobGraph([producer, consumer]))
+    assert not any("stalled dispatch" in r.message for r in caplog.records)
