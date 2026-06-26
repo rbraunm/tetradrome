@@ -6,12 +6,12 @@
 Grid homology is bounded by its n! generators, and generation -- enumerating the permutations
 and computing each one's gradings and differential -- is the dominant cost at large n, separate
 from the reduction linear algebra. Generation is embarrassingly parallel: every generator is
-independent, so this module hands contiguous slices of the permutation space to worker
-processes, each unranking its own slice (no input IPC) and returning per-state data the parent
-merges. Because the slices are contiguous in lexicographic order, the merged positions match
-the serial enumeration exactly, so ``parallel_grid_complexes`` assembles complexes -- and
-therefore homology -- identical to ``grid_complexes`` (the agreement discipline, across
-processes; locked by test_parallel_generation_matches_serial).
+independent. ``grid_complexes`` builds the complexes serially; ``_generate_slice`` does the same
+for one contiguous lexicographic slice of the permutation space (unranking its own slice, no input
+IPC), which is the primitive the compute scheduler fans out across processes and folds back in
+slice order. Because the slices are contiguous, the merged positions match the serial enumeration
+exactly, so the scheduled generation reproduces ``grid_complexes`` bit for bit (the agreement
+discipline, across processes).
 
 ``grading_histogram`` walks the same permutation space but keeps only the per-grading counts
 (no differential, no matrices), so it predicts the reducer's dense-matrix dimensions at sizes
@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from multiprocessing import Pool
 
 from ...algebra import GradedComplex
 from .differential import differential
@@ -100,31 +99,6 @@ def _build_complexes(by_alexander: dict) -> dict:
     return complexes
 
 
-def parallel_grid_complexes(grid, workers: int) -> dict:
-    """Generate ``{A: GradedComplex}`` across ``workers`` processes; identical to the serial
-    ``grid_complexes``. Falls back to serial generation for one worker or a tiny grid.
-
-    Results are consumed in submission order (ordered ``imap``) and folded into per-grading
-    groups as each slice arrives, so no full list of raw records is ever held alongside the
-    finished complexes -- the parent's peak is the complexes plus one in-flight slice, not
-    twice the generator data. Positions stay in global lexicographic order, so the assembled
-    complexes match ``grid_complexes`` exactly.
-    """
-    total = math.factorial(grid.n)
-    if workers <= 1 or total < 2 * workers:
-        return grid_complexes(grid)
-    slices = [
-        (grid.O, grid.X, total * w // workers, total * (w + 1) // workers)
-        for w in range(workers)
-    ]
-    by_alexander: dict = defaultdict(list)
-    with Pool(processes=workers) as pool:
-        for chunk in pool.imap(_generate_slice, slices, chunksize=1):
-            for state, m, a, targets in chunk:
-                by_alexander[a].append((state, -m, targets))   # degree = -Maslov
-    return _build_complexes(by_alexander)
-
-
 def _grading_slice(args):
     """Count generators per (Alexander, degree=-Maslov) over a slice -- gradings only, no
     differential, so this is O(slice) time and O(gradings) memory."""
@@ -137,24 +111,13 @@ def _grading_slice(args):
     return dict(hist)
 
 
-def grading_histogram(grid, workers: int = 1) -> dict:
+def grading_histogram(grid) -> dict:
     """Generator count per ``(Alexander, degree)`` grading over all n! states, gradings only.
 
     Builds no differentials and no matrices, so it is memory-safe at any n (it stores only the
     O(n^2) grading counts). The dimensions it returns are what set the reducer's dense-matrix
     sizes, so this is the input to ``dense_reduction_bytes`` -- a memory projection that can be
-    computed for sizes far too large to actually generate or reduce.
+    computed for sizes far too large to actually generate or reduce. Walking n! states is itself
+    cheap (gradings only), so it runs serially; the scheduler parallelizes the work that follows.
     """
-    total = math.factorial(grid.n)
-    if workers <= 1 or total < 2 * workers:
-        return _grading_slice((grid.O, grid.X, 0, total))
-    slices = [
-        (grid.O, grid.X, total * w // workers, total * (w + 1) // workers)
-        for w in range(workers)
-    ]
-    merged: dict = defaultdict(int)
-    with Pool(processes=workers) as pool:
-        for part in pool.imap_unordered(_grading_slice, slices, chunksize=1):
-            for key, count in part.items():
-                merged[key] += count
-    return dict(merged)
+    return _grading_slice((grid.O, grid.X, 0, math.factorial(grid.n)))

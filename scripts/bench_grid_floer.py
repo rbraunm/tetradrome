@@ -4,18 +4,25 @@
 
 """Scaling study for the grid (knot Floer) engine.
 
-Measures, per grid, the two costs that the n! generator count splits into -- *generation*
-(enumerating permutations and computing gradings + differentials) and *reduction* (the F2
-linear algebra) -- plus peak traced memory, so the wall (time vs memory, generation vs
-reduction) is located empirically rather than guessed. Run it on real hardware and read the
-curve.
+Runs the whole grid->Poincare graph through the one compute scheduler and reports, per grid, where
+the n! generator count's cost lands: the summed worker CPU of each phase -- *generation* (slices
+enumerating permutations and computing gradings + differentials), the *merge* (one job folding
+every slice into the per-grading complexes), and *reduction* (the F2 linear algebra) -- against the
+end-to-end wall, plus a parent-versus-worker-children peak memory split. Wall far above the summed
+worker CPU is parent overhead (scheduling and pickling results through the parent, which this graph
+does not share via shared memory); a large merge is the single-core fold; a large reduction is the
+linear algebra. So the wall (which phase, compute versus parent overhead, time versus memory) is
+located empirically rather than guessed. Run it on real hardware and read the curve.
 
 Examples:
-    # tabulated knots, increasing grid size, default bitint reducer, serial
+    # tabulated knots, increasing grid size, default bitint reducer
     python scripts/bench_grid_floer.py --knots 3_1 4_1 5_1 5_2 8_19
 
-    # synthetic grids to push the generator count, with parallel generation + reduction
-    python scripts/bench_grid_floer.py --sizes 5 6 7 8 9 --gen-workers 16 --workers 16
+    # synthetic grids to push the generator count
+    python scripts/bench_grid_floer.py --sizes 8 9 10
+
+    # study spilling/feasibility under a tighter system-RAM ceiling
+    python scripts/bench_grid_floer.py --sizes 9 10 --mem-cap-gib 8
 
     # compare reducer backends on one knot
     python scripts/bench_grid_floer.py --knots 8_19 --backend reference
@@ -24,21 +31,16 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import math
 import os
 import threading
 import time
 from collections import defaultdict
 
-from tetradrome.algebra import max_grading_bytes
-from tetradrome.engines.floer import (
-    GridDiagram,
-    grading_histogram,
-    grid_complexes,
-    parallel_grid_complexes,
-    reduce_complexes,
-    staircase_grid,
-)
+from tetradrome.engines.floer import GridDiagram, staircase_grid
+from tetradrome.engines.floer.scheduling import whole_knot_graph
+from tetradrome.scheduler import Scheduler, detect_machine
 
 
 def _time(fn):
@@ -164,35 +166,43 @@ class _TreeSampler:
             self._stop.wait(self._interval)
 
 
-def measure(grid, *, backend, workers, pin, gen_workers, ram_budget_bytes=None, interval=0.1):
-    """Run generation then reduction; return timings, homology support size, and a per-phase
-    memory breakdown (parent PSS vs worker-children PSS vs cgroup peak), in MiB."""
+_PHASE = {"gen_slice": "generation", "gen_merge": "merge", "reduce": "reduction",
+          "assemble": "assemble"}
+
+
+def _capped(machine, mem_cap_bytes):
+    # Lower the scheduler's system-RAM ceiling for the run; never above the detected hardware.
+    if mem_cap_bytes is None:
+        return machine
+    return dataclasses.replace(machine, mem_cap_bytes=min(machine.mem_cap_bytes, mem_cap_bytes))
+
+
+def measure(grid, *, backend, mem_cap_bytes=None, interval=0.1):
+    """Run the whole grid->Poincare graph through the scheduler; return the end-to-end wall, the
+    summed worker CPU per phase (generation / merge / reduction) from the RunReport, homology
+    support size, the residence + spill counters, and a parent-vs-worker-children peak PSS
+    breakdown (MiB). Fails loud on an infeasible or failed run rather than reporting a partial."""
     sampler = _TreeSampler(os.getpid(), interval) if _proc_metrics_available() else None
     if sampler:
         sampler.start()
-    try:
-        if sampler:
-            sampler.reset()
-        if gen_workers > 1:
-            complexes, gen_s = _time(lambda: parallel_grid_complexes(grid, gen_workers))
-        else:
-            complexes, gen_s = _time(lambda: grid_complexes(grid))
-        gen_mem = sampler.snapshot() if sampler else None
-
-        if sampler:
-            sampler.reset()
-        poincare, red_s = _time(
-            lambda: reduce_complexes(complexes, backend=backend, workers=workers, pin=pin,
-                                     ram_budget_bytes=ram_budget_bytes)
-        )
-        red_mem = sampler.snapshot() if sampler else None
-    finally:
-        if sampler:
-            sampler.stop()
-
-    mem = None if sampler is None else {"gen": gen_mem, "red": red_mem}
-    return {"gen_s": gen_s, "red_s": red_s, "count": math.factorial(grid.n),
-            "support": len(poincare), "mem": mem}
+        sampler.reset()
+    machine = _capped(detect_machine(), mem_cap_bytes)
+    graph, key = whole_knot_graph(grid, backend=backend)
+    report, wall = _time(lambda: Scheduler(machine).run(graph))
+    mem = sampler.snapshot() if sampler else None
+    if sampler:
+        sampler.stop()
+    if report.infeasible:
+        raise RuntimeError(f"infeasible on this machine: {report.infeasible[0]}")
+    if report.failures:
+        raise RuntimeError(f"scheduler failed: {report.failures[0][2]}")
+    cpu = defaultdict(float)
+    for job_key, seconds in report.timings.items():
+        cpu[_PHASE.get(job_key[0], job_key[0])] += seconds
+    return {"wall": wall, "count": math.factorial(grid.n), "support": len(report.results[key]),
+            "gen_s": cpu.get("generation", 0.0), "merge_s": cpu.get("merge", 0.0),
+            "red_s": cpu.get("reduction", 0.0),
+            "shared": report.shared_count, "spilled": report.spill_count, "mem": mem}
 
 
 def main():
@@ -201,72 +211,55 @@ def main():
     parser.add_argument("--knots", nargs="*", default=[],
                         help="KnotInfo names (representative reduction cost)")
     parser.add_argument("--sizes", nargs="*", type=int, default=[],
-                        help="synthetic grid sizes (isolates generation scaling)")
+                        help="synthetic grid sizes (pushes the generator count)")
     parser.add_argument("--backend", default="bitint",
                         help="reduction backend: reference|bitint|jit|packed-cpu|packed-gpu")
-    parser.add_argument("--workers", type=int, default=1, help="reduction worker processes")
-    parser.add_argument("--gen-workers", type=int, default=1, help="generation worker processes")
-    parser.add_argument("--pin", action="store_true", help="NUMA-pin reduction workers (Linux)")
-    parser.add_argument("--mem-budget-gib", type=float, default=0.0,
-                        help="reduce under this many GiB of co-resident memory, in deterministic "
-                             "waves (0 = unbounded). Skips a target only if its largest single "
-                             "grading exceeds the budget (not reducible even one grading at a "
-                             "time); the rest run wave-bounded so the sweep stays under budget "
-                             "instead of OOMing mid-run. The bound is the exact dense-matrix size "
-                             "from the grading dimensions (gradings-only histogram, memory-safe).")
+    parser.add_argument("--mem-cap-gib", type=float, default=0.0,
+                        help="cap the scheduler's system-RAM ceiling at this many GiB (0 = the "
+                             "detected machine). Lower it to study spilling and feasibility; a grid "
+                             "whose smallest unavoidable working set exceeds the cap is reported "
+                             "infeasible rather than OOMing.")
     args = parser.parse_args()
-
-    if args.pin and not hasattr(os, "sched_setaffinity"):
-        parser.error(
-            "--pin is Linux-only (NUMA affinity via os.sched_setaffinity); this OS lacks it. "
-            "Drop --pin here, or run the parallel/pinned sweep on the Linux cluster (where "
-            "fork also avoids Windows' spawn overhead). The GPU-backend comparison is fine here."
-        )
 
     targets = ([(name, GridDiagram.from_knotinfo(name)) for name in args.knots] +
                [(f"staircase-{n}", staircase_grid(n)) for n in args.sizes])
     if not targets:
         parser.error("give --knots and/or --sizes")
 
-    print(f"backend={args.backend}  reduction-workers={args.workers}  "
-          f"gen-workers={args.gen_workers}  pin={args.pin}")
+    mem_cap_bytes = int(args.mem_cap_gib * 2**30) if args.mem_cap_gib else None
+    cap_label = f"{args.mem_cap_gib:.0f} GiB" if mem_cap_bytes else "machine"
+    print(f"backend={args.backend}  mem-cap={cap_label}  "
+          f"(gen/merge/reduce are summed worker CPU; wall is end-to-end)")
     if _proc_metrics_available():
-        print("memory (MiB): PSS per phase -- Par=parent process, Chd=summed worker children; "
+        print("memory (MiB): peak PSS -- Par=parent process, Chd=summed worker children; "
               "cgPk=peak cgroup memory.current")
     else:
         print("memory: UNAVAILABLE on this OS (needs Linux /proc + cgroup) -- shown as n/a")
     print()
-    header = (f"{'target':<13}{'n':>3}{'n!':>13}{'gen(s)':>9}{'red(s)':>9}"
-              f"{'genPar':>8}{'genChd':>8}{'redPar':>8}{'redChd':>8}{'cgPk':>9}{'(M,A)':>7}")
+    header = (f"{'target':<13}{'n':>3}{'n!':>13}{'wall':>9}{'gen':>8}{'merge':>8}{'reduce':>8}"
+              f"{'shr':>4}{'spl':>4}{'parPk':>9}{'chdPk':>9}{'cgPk':>9}{'(M,A)':>7}")
     print(header)
     print("-" * len(header))
 
     def _c(value):
-        return f"{value:>8.1f}" if value is not None else f"{'n/a':>8}"
+        return f"{value:>9.1f}" if value is not None else f"{'n/a':>9}"
 
     for name, grid in targets:
-        budget_bytes = int(args.mem_budget_gib * 2**30) if args.mem_budget_gib else None
-        if budget_bytes is not None:
-            floor_gib = max_grading_bytes(
-                grading_histogram(grid, args.gen_workers)) / 2**30
-            if floor_gib > args.mem_budget_gib:
-                print(f"{name:<13}{grid.n:>3}{math.factorial(grid.n):>13,}"
-                      f"   skipped: largest single grading ~{floor_gib:.1f} GiB > "
-                      f"{args.mem_budget_gib:.1f} GiB budget (not reducible even in waves)")
-                continue
-        r = measure(grid, backend=args.backend, workers=args.workers, pin=args.pin,
-                    gen_workers=args.gen_workers, ram_budget_bytes=budget_bytes)
+        try:
+            r = measure(grid, backend=args.backend, mem_cap_bytes=mem_cap_bytes)
+        except RuntimeError as exc:
+            print(f"{name:<13}{grid.n:>3}{math.factorial(grid.n):>13,}   {exc}")
+            continue
         m = r["mem"]
         if m is None:
-            mem_cells = _c(None) * 4 + f"{'n/a':>9}"
+            mem_cells = _c(None) + _c(None) + f"{'n/a':>9}"
         else:
-            cg = max((p for p in (m["gen"]["cgroup"], m["red"]["cgroup"]) if p is not None),
-                     default=None)
-            mem_cells = (_c(m["gen"]["parent"]) + _c(m["gen"]["children"])
-                         + _c(m["red"]["parent"]) + _c(m["red"]["children"])
+            cg = m["cgroup"]
+            mem_cells = (_c(m["parent"]) + _c(m["children"])
                          + (f"{cg:>9.1f}" if cg is not None else f"{'n/a':>9}"))
-        print(f"{name:<13}{grid.n:>3}{r['count']:>13,}{r['gen_s']:>9.3f}{r['red_s']:>9.3f}"
-              f"{mem_cells}{r['support']:>7}")
+        print(f"{name:<13}{grid.n:>3}{r['count']:>13,}{r['wall']:>9.3f}"
+              f"{r['gen_s']:>8.2f}{r['merge_s']:>8.2f}{r['red_s']:>8.2f}"
+              f"{r['shared']:>4}{r['spilled']:>4}{mem_cells}{r['support']:>7}")
 
 
 if __name__ == "__main__":

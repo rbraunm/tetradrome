@@ -14,51 +14,74 @@ The flat KnotInfo marker list does not record which markers are O and which are 
 diagram fixes a chirality only up to the global O<->X swap; HFK-hat is therefore determined
 up to mirror, (M, A) <-> (-M, -A). The tau invariant (later) pins chirality. The Seifert
 genus is the top Alexander grading carrying nonzero HFK-hat (the genus-detection theorem).
+
+Generation and reduction both run through the one scheduler: it spawns the work, holds the
+memory model, and reproduces the serial reference exactly. ``mem_cap_bytes`` and ``vram_cap_bytes``
+lower the system-RAM and VRAM ceilings the scheduler runs under, never above the detected
+hardware, so a computation can be held to a tighter budget than the machine.
 """
 from __future__ import annotations
 
+import dataclasses
 from collections import defaultdict
 
-from ...algebra import f2_homology, parallel_f2_homology
-from ...errors import UnvalidatedResult
-from .generation import parallel_grid_complexes
+from ...errors import TetradromeError, UnvalidatedResult
+from ...scheduler import Scheduler, detect_machine
+from .scheduling import reduction_graph, whole_knot_graph
+
+
+def _capped_machine(mem_cap_bytes: int | None, vram_cap_bytes: int | None):
+    # The detected machine, optionally lowered to a tighter system-RAM and/or per-GPU VRAM ceiling.
+    # A cap only ever lowers a limit; it never promises more than the hardware has.
+    machine = detect_machine()
+    if mem_cap_bytes is None and vram_cap_bytes is None:
+        return machine
+    capped_ram = (machine.mem_cap_bytes if mem_cap_bytes is None
+                  else min(machine.mem_cap_bytes, mem_cap_bytes))
+    gpus = machine.gpus
+    if vram_cap_bytes is not None:
+        gpus = tuple(dataclasses.replace(gpu, vram_bytes=min(gpu.vram_bytes, vram_cap_bytes))
+                     for gpu in machine.gpus)
+    return dataclasses.replace(machine, mem_cap_bytes=capped_ram, gpus=gpus)
+
+
+def _run_to_result(graph, key, *, mem_cap_bytes, vram_cap_bytes):
+    # Run a graph on the (optionally capped) machine and return its single result, failing loud:
+    # an infeasible job, a failed component, or a missing result all raise rather than hand back a
+    # partial or silently-empty answer.
+    report = Scheduler(_capped_machine(mem_cap_bytes, vram_cap_bytes)).run(graph)
+    if report.infeasible:
+        raise report.infeasible[0]
+    if report.failures:
+        _, failed, text = report.failures[0]
+        raise TetradromeError(f"computation failed at {failed!r}: {text}")
+    if key not in report.results:
+        raise TetradromeError(f"scheduler returned no result for {key!r}")
+    return report.results[key]
 
 
 def reduce_complexes(complexes: dict, *, backend: str = "bitint",
-                     workers: int = 1, pin: bool = False,
-                     ram_budget_bytes: int | None = None) -> dict:
-    """Reduce ``{A: GradedComplex}`` to ``{(Maslov, Alexander): dimension}``.
+                     mem_cap_bytes: int | None = None, vram_cap_bytes: int | None = None) -> dict:
+    """Reduce ``{A: GradedComplex}`` to ``{(Maslov, Alexander): dimension}`` through the scheduler.
 
-    The per-grading complexes are independent, so with ``workers > 1`` they reduce across
-    processes (``parallel_f2_homology``, CPU backends only, optional NUMA ``pin``). Every
-    backend returns the identical answer as the reference (Phase 5 agreement discipline).
-    ``ram_budget_bytes`` caps co-resident reduction memory (deterministic waves, fail loud on
-    a single grading that cannot fit); it applies on the serial path too.
+    The per-grading complexes are independent, so the scheduler reduces them concurrently within
+    the machine's budget (spilling rather than failing under memory pressure). Every backend
+    returns the identical answer as the reference (the agreement discipline).
     """
-    if workers > 1 or ram_budget_bytes is not None:
-        homologies = parallel_f2_homology(complexes, backend=backend, workers=workers,
-                                          pin=pin, ram_budget_bytes=ram_budget_bytes)
-    else:
-        homologies = {a: f2_homology(cx, backend=backend) for a, cx in complexes.items()}
-
-    poincare: dict = defaultdict(int)
-    for a_grading, homology in homologies.items():
-        for degree, dim in homology.items():
-            poincare[(-degree, a_grading)] += dim
-    return {key: value for key, value in poincare.items() if value}
+    graph, assemble_key = reduction_graph(complexes, backend=backend)
+    return _run_to_result(graph, assemble_key,
+                          mem_cap_bytes=mem_cap_bytes, vram_cap_bytes=vram_cap_bytes)
 
 
-def grid_poincare(grid, *, backend: str = "bitint", workers: int = 1, pin: bool = False) -> dict:
-    """Grid (hat) homology as ``{(Maslov, Alexander): dimension}`` over F2.
-
-    ``workers`` drives both phases: generation across the permutation space (the n! step) and
-    reduction across the independent gradings. Both reproduce the serial reference exactly --
-    generation bit-for-bit (locked by test_parallel_generation_matches_serial), reduction by the
-    backend-agreement tier. With ``workers == 1`` both fall back to the serial path unchanged.
+def grid_poincare(grid, *, backend: str = "bitint",
+                  mem_cap_bytes: int | None = None, vram_cap_bytes: int | None = None) -> dict:
+    """Grid (hat) homology as ``{(Maslov, Alexander): dimension}`` over F2, computed end to end
+    through the scheduler: generation, a merge partitioned by Alexander grading, a reduction per
+    grading, and assembly into the Poincare count.
     """
-    return reduce_complexes(
-        parallel_grid_complexes(grid, workers), backend=backend, workers=workers, pin=pin
-    )
+    graph, assemble_key = whole_knot_graph(grid, backend=backend)
+    return _run_to_result(graph, assemble_key,
+                          mem_cap_bytes=mem_cap_bytes, vram_cap_bytes=vram_cap_bytes)
 
 
 def _divide_by_V_once(p: dict) -> dict:
@@ -87,14 +110,16 @@ def _tensor_V(h: dict, power: int) -> dict:
     return p
 
 
-def hfk_hat(grid, *, backend: str = "bitint", workers: int = 1, pin: bool = False) -> dict:
+def hfk_hat(grid, *, backend: str = "bitint",
+            mem_cap_bytes: int | None = None, vram_cap_bytes: int | None = None) -> dict:
     """HFK-hat as ``{(Maslov, Alexander): rank}``.
 
     Divides the grid Poincare polynomial by (1 + q^{-1} t^{-1})^{n-1} and verifies the
     quotient by reconstruction. With the grid in the standard chirality this matches
     KnotInfo directly.
     """
-    grid_homology = grid_poincare(grid, backend=backend, workers=workers, pin=pin)
+    grid_homology = grid_poincare(grid, backend=backend,
+                                  mem_cap_bytes=mem_cap_bytes, vram_cap_bytes=vram_cap_bytes)
     quotient = grid_homology
     for _ in range(grid.n - 1):
         quotient = _divide_by_V_once(quotient)
@@ -106,6 +131,8 @@ def hfk_hat(grid, *, backend: str = "bitint", workers: int = 1, pin: bool = Fals
     return quotient
 
 
-def seifert_genus(grid, *, backend: str = "bitint", workers: int = 1, pin: bool = False) -> int:
+def seifert_genus(grid, *, backend: str = "bitint",
+                  mem_cap_bytes: int | None = None, vram_cap_bytes: int | None = None) -> int:
     """Seifert genus: the top Alexander grading carrying nonzero HFK-hat (genus detection)."""
-    return max(a for _, a in hfk_hat(grid, backend=backend, workers=workers, pin=pin))
+    return max(a for _, a in hfk_hat(grid, backend=backend,
+                                     mem_cap_bytes=mem_cap_bytes, vram_cap_bytes=vram_cap_bytes))

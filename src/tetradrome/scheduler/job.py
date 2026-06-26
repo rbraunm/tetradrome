@@ -54,6 +54,18 @@ class ComputePath:
 
 
 @dataclasses.dataclass(frozen=True)
+class Shard:
+    """A reference to one shard of a partitioned job's output. A job whose ``shards`` is set
+    returns ``{shard_key: payload}`` and the scheduler stores each shard as an independent held
+    result; a consumer that needs only one shard depends on ``Shard(producer_key, shard_key)``
+    instead of the whole producer. For scheduling -- readiness and lineage -- a shard dependency
+    is a dependency on the producing job; for data and memory it addresses just the one shard, so
+    a wide consumer never pulls or re-materializes the producer's whole output."""
+    producer: Hashable
+    key: Hashable
+
+
+@dataclasses.dataclass(frozen=True)
 class Job:
     """A unit of work: identity, the callable + inputs, its compute paths, its dependencies.
 
@@ -63,6 +75,27 @@ class Job:
     ``cost`` is the predicted work in abstract units (the builder sets it, e.g. from
     ``predict_cost``); the scheduler compares it to measured runtime to calibrate and to decide
     whether a job is substantial enough to warrant its own process. Zero means unpredicted.
+
+    ``output_bytes`` is the declared size of the job's result, the portion of its working set that
+    persists in the parent after the job exits and is held until the last consumer drains it. It is
+    charged against global RAM like a working-set footprint -- ``max(declared, measured)``, with an
+    over-budget warning when the measured result exceeds the declaration -- so a too-low estimate
+    is a tuning signal, not a silent under-charge. Zero means unpredicted: the measured size is
+    charged reactively.
+
+    ``shards``, when set, declares the job's output is partitioned: ``run`` returns
+    ``{shard_key: payload}`` for exactly these keys, and the scheduler stores each shard as an
+    independent held result a consumer addresses via ``Shard(key, shard_key)``. None means a single
+    whole result. ``output_bytes`` for a partitioned job is the declared total across shards.
+
+    ``device_resident`` declares the job runs on the GPU and returns a device buffer to keep
+    resident in VRAM rather than copy back to the host: the result stays in the warm worker's CUDA
+    context and a GPU consumer reads it on-device, avoiding the round trip. It requires every path
+    to be a GPU path (the producer always runs on the device) and is incompatible with ``shards``
+    (a device-resident result is whole). It is an optimization, not a guarantee: when routing
+    defeats it -- the producer routes fresh, or a consumer is not GPU-only -- the scheduler warns
+    and falls back (the result becomes host-resident, or a fresh GPU consumer is run warm to read
+    the buffer) rather than failing.
     """
     key: Hashable
     run: Callable
@@ -70,12 +103,27 @@ class Job:
     paths: tuple[ComputePath, ...]
     dependencies: frozenset = dataclasses.field(default_factory=frozenset)
     cost: float = 0.0
+    output_bytes: int = 0
+    shards: frozenset | None = None
+    device_resident: bool = False
+    device_resident: bool = False
 
     def __post_init__(self):
         # Accept any iterable for paths/dependencies; store normalized immutables.
         object.__setattr__(self, "paths", tuple(self.paths))
         object.__setattr__(self, "dependencies", frozenset(self.dependencies))
+        if self.shards is not None:
+            object.__setattr__(self, "shards", frozenset(self.shards))
+            if not self.shards:
+                raise ValueError(f"job {self.key!r} declares partitioned output with no shards")
         if not self.paths:
             raise ValueError(f"job {self.key!r} declares no compute paths")
         if not callable(self.run):
             raise ValueError(f"job {self.key!r} run is not callable")
+        if self.device_resident:
+            if self.shards is not None:
+                raise ValueError(f"job {self.key!r} cannot be both device-resident and partitioned")
+            if any(path.placement is not Placement.GPU for path in self.paths):
+                raise ValueError(
+                    f"job {self.key!r} is device-resident but has a non-GPU path; a device-resident "
+                    f"result is produced on the device, so every path must be a GPU path")

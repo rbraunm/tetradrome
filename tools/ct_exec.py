@@ -10,7 +10,7 @@ remote command's status, so it composes and fails loud.
 
     python tools/ct_exec.py -- nproc
     python tools/ct_exec.py --ctid 250 -- numactl --hardware
-    python tools/ct_exec.py -- "cd /opt/tetradrome/src && venv/bin/python -m pytest -q"
+    python tools/ct_exec.py -- "cd /opt/tetradrome/src && /opt/tetradrome/venv/bin/python -m pytest -q"
     python tools/ct_exec.py --host 10.0.0.5 --user tetradrome -- uptime
 
 Put the command after `--` (so argparse does not eat its dashes) or pass it as one quoted

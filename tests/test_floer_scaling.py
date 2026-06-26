@@ -18,8 +18,6 @@ from tetradrome.engines.floer import (
     grid_complexes,
     grid_poincare,
     hfk_hat,
-    parallel_grid_complexes,
-    reduce_complexes,
     staircase_grid,
 )
 from tetradrome.engines.floer.generation import grading_histogram
@@ -32,31 +30,6 @@ def test_backends_agree_with_reference(name):
     grid = GridDiagram.from_knotinfo(name)
     reference = grid_poincare(grid, backend="reference")
     assert grid_poincare(grid, backend="bitint") == reference
-
-
-@pytest.mark.parametrize("name", AGREEMENT_KNOTS)
-def test_parallel_reduction_agrees(name):
-    grid = GridDiagram.from_knotinfo(name)
-    reference = grid_poincare(grid, backend="reference", workers=1)
-    assert grid_poincare(grid, backend="bitint", workers=3) == reference
-
-
-@pytest.mark.parametrize("name", AGREEMENT_KNOTS)
-def test_parallel_generation_matches_serial(name):
-    # Stronger than answer-equality: parallel generation must reproduce the serial reference
-    # complex bit-for-bit. Position assignments within each (Alexander, degree) block depend on
-    # enumeration order, so this pins that contiguous lexicographic slicing reproduces
-    # itertools.permutations exactly -- what makes parallel generation an answer-preserving
-    # acceleration (ADR 0011 type B, the reference run in parallel), not a separate path.
-    grid = GridDiagram.from_knotinfo(name)
-    serial = grid_complexes(grid)
-    parallel = parallel_grid_complexes(grid, workers=3)
-    assert parallel.keys() == serial.keys()
-    for a_grading in serial:
-        assert parallel[a_grading].degrees() == serial[a_grading].degrees()
-        for degree in serial[a_grading].degrees():
-            assert parallel[a_grading].dim(degree) == serial[a_grading].dim(degree)
-            assert parallel[a_grading].differential(degree) == serial[a_grading].differential(degree)
 
 
 def test_staircase_grid_is_valid_and_trivial():

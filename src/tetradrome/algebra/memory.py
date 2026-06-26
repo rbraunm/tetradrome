@@ -109,6 +109,16 @@ def predict_cost(cx) -> int:
     return sum(dense_block_ops(cx.dim(n), cx.dim(n + 1)) for n in cx.degrees())
 
 
+def grading_cost_ops(degree_dims: Mapping[int, int]) -> int:
+    """Total word-XOR operations to reduce a single grading whose chain dimensions are
+    ``degree_dims`` (``{degree: dim}``), summed over its boundary blocks. The op-count analog of
+    ``predict_cost`` taken from a dimension histogram rather than a built complex, so a reduction
+    can be priced before its complex exists. For a grading A it equals ``predict_cost`` of that
+    grading's complex, since both sum ``dense_block_ops(dim(n), dim(n + 1))`` over the same degrees.
+    """
+    return sum(dense_block_ops(cols, degree_dims.get(n + 1, 0)) for n, cols in degree_dims.items())
+
+
 def route_backend(
     cx_or_size,
     available,
@@ -164,9 +174,9 @@ def _grading_peaks(histogram: Mapping) -> list:
 def dense_reduction_bytes(histogram: Mapping) -> int:
     """Worst-case co-resident reduction memory (bytes) for a batch given as a histogram keyed
     by ``(grading, degree) -> count``: the sum over gradings of each grading's peak block, i.e.
-    every grading reduced at once. This is the unbounded-concurrency figure; the bounded-memory
-    scheduler (``algebra.parallel``) holds the actual peak below a budget by running gradings in
-    waves, so it is an upper bound, not the feasibility criterion (see ``max_grading_bytes``).
+    every grading reduced at once. This is the unbounded-concurrency figure; the compute scheduler
+    holds the actual peak below the budget by ordering reductions and spilling held results, so it
+    is an upper bound, not the feasibility criterion (see ``max_grading_bytes``).
     """
     return sum(_grading_peaks(histogram))
 

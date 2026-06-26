@@ -11,9 +11,18 @@ parallel + memory-bounded execution. See roadmap for the design.
 from .executor import RunReport, Scheduler
 from .graph import JobGraph
 from .inventory import GPU, Machine, NumaNode, detect_machine
-from .job import ComputePath, Job, Placement
+from .job import ComputePath, Job, Placement, Shard
 from .ledger import Allocation, Ledger
-from .placement import Decision, Outcome, Placed, plan_placement
+from .placement import (
+    Decision,
+    InfeasibilityAxis,
+    InfeasibleJobError,
+    Outcome,
+    PathGap,
+    Placed,
+    job_feasibility,
+    plan_placement,
+)
 from .routing import Calibration, Execution, route_execution
 
 __all__ = [
@@ -23,17 +32,22 @@ __all__ = [
     "ComputePath",
     "Decision",
     "Execution",
+    "InfeasibilityAxis",
+    "InfeasibleJobError",
     "Job",
     "JobGraph",
     "Ledger",
     "Machine",
     "NumaNode",
     "Outcome",
+    "PathGap",
     "Placed",
     "Placement",
+    "Shard",
     "RunReport",
     "Scheduler",
     "detect_machine",
+    "job_feasibility",
     "plan_placement",
     "route_execution",
 ]

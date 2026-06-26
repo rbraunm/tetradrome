@@ -75,13 +75,6 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip)
 
 
-@pytest.fixture
-def floer_workers(request) -> int:
-    """Reduction workers for an HFK computation: all available cores under --heavy, serial
-    otherwise. tau has no parallel path and is cheap, so only HFK consumes this."""
-    return _core_count() if _heavy(request.config) else 1
-
-
 # --- shared validation rosters (derived from KnotInfo, never hardcoded) ---------------
 # floer_roster lives in the package (tetradrome.engines.floer) so the sweep script shares it;
 # imported lazily in pytest_generate_tests to keep collection independent of the optional

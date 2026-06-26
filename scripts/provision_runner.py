@@ -440,9 +440,11 @@ def report(ctid: int, args, name: str, ip: str, creds_path: str, key_path: str,
     print(f"  Advertised over mDNS as {mdns_name}.local (link-local; an mDNS reflector is needed to cross VLANs).")
     print(f"\n  Connect with the key:  ssh -i {key_path} {args.ssh_user}@{host}")
     print(f"  Or with the password:  ssh {args.ssh_user}@{ip or '<container-ip>'}   (or  ssh {args.ssh_user}@{mdns_name}.local)")
-    print("  Then, e.g. the scaling sweep (synthetic sizes isolate generation; --pin needs Linux):")
+    print("  Then, e.g. the scaling sweep (synthetic sizes push the generator count; the scheduler"
+          " uses the container's cores):")
     print(f"    {python} {bench} \\")
-    print(f"        --sizes 8 9 10 11 --gen-workers {args.cores} --workers {args.cores} --pin")
+    print("        --sizes 8 9 10 11")
+    print("  Tighten the RAM ceiling to study spilling/feasibility:  add  --mem-cap-gib <GiB>")
     print("  Or the full validation sweep (--heavy is the only opt-in):")
     print(f"        cd {base}/src && {python} -m pytest --heavy -v")
     print(f"\n  Update the code later:  git -C {base}/src pull")

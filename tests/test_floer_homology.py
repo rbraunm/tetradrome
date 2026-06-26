@@ -38,10 +38,10 @@ def test_differential_grades_and_squares_to_zero(name):
         assert all(count % 2 == 0 for count in composite.values())
 
 
-def test_hfk_and_genus_match_knotinfo(floer_knot, floer_workers):
+def test_hfk_and_genus_match_knotinfo(floer_knot):
     name, _ = floer_knot
     grid = GridDiagram.from_knotinfo(name)
-    ranks = hfk_hat(grid, workers=floer_workers)        # one computation; genus reads its top grading
+    ranks = hfk_hat(grid)        # one computation; genus reads its top grading
     assert ranks == ki.hfk_ranks(name)
     assert max(a for _m, a in ranks) == int(ki.lookup(name)["three_genus"])
 

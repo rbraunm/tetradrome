@@ -65,6 +65,11 @@ class Ledger:
     def remove(self, job_key) -> Allocation:
         return self._allocs.pop(job_key)
 
+    def discard(self, job_key) -> None:
+        """Remove an allocation if present, no error if it is not. For held outputs, whose charge
+        may or may not exist when a component is abandoned."""
+        self._allocs.pop(job_key, None)
+
     def set_actual(self, job_key, ram_bytes: int, vram_bytes: int = 0) -> None:
         alloc = self._allocs[job_key]
         alloc.actual_ram = ram_bytes

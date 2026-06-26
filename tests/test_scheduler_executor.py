@@ -7,17 +7,23 @@ The job callables are module-level so they pickle to spawned workers. DAG orderi
 dependencies, so these are deterministic regardless of how many cores the host actually has.
 """
 import os
+import pickle
 import time
 
+import pytest
+
+from tetradrome.errors import TetradromeError
 from tetradrome.scheduler import (
     ComputePath,
     GPU,
+    InfeasibilityAxis,
     Job,
     JobGraph,
     Machine,
     NumaNode,
     Placement,
     Scheduler,
+    Shard,
 )
 
 _GIB = 1 << 30
@@ -105,13 +111,15 @@ def test_failure_abandons_its_component_only():
     assert component == {"genX", "boom", "endX"}
 
 
-def test_job_too_big_for_machine_fails_its_component():
+def test_job_too_big_for_machine_is_infeasible():
     big = Job(key="big", run=produce, inputs={"value": 1},
               paths=(ComputePath(Placement.CPU_PINNED, cores=1, ram_bytes=1 << 40),))
     report = Scheduler(_machine()).run(JobGraph([big]))
     assert "big" not in report.results
-    assert len(report.failures) == 1
-    assert report.failures[0][1] == "big"
+    assert not report.failures                       # not a runtime failure; caught up front
+    assert [e.job_key for e in report.infeasible] == ["big"]
+    assert report.infeasible[0].gaps[0].axis is InfeasibilityAxis.EXCEEDS_RAM
+    assert "big" in report.cancelled
 
 
 def test_report_records_run_time():
@@ -131,8 +139,10 @@ def test_failed_job_carries_no_timing():
 
 # -- warm worker: persistent, serial, frees between jobs --
 
-from tetradrome.scheduler.executor import WarmWorker, _start_context   # noqa: E402
-from tetradrome.scheduler.inventory import for_host                    # noqa: E402
+from tetradrome.scheduler.executor import (                            # noqa: E402
+    WarmWorker, _augment_for_admission, _overhead_probe_main, _start_context)
+from tetradrome.scheduler.routing import Execution                     # noqa: E402
+from tetradrome.scheduler.hostplatform import for_host                    # noqa: E402
 
 # State lives in the worker process. setup flips it once; between increments after each job. A
 # fresh process per job would reset it, so an accumulating count is proof of process reuse.
@@ -211,8 +221,8 @@ def test_small_gpu_jobs_route_warm_and_serialize_in_one_worker():
     # would have reset to 0, so distinct climbing counts prove warm + serial + single process.
     jobs = [Job(key=k, run=report_warm_state, inputs={}, paths=(_gpu(_GIB // 10),), cost=1000)
             for k in ("a", "b", "c")]
-    report = Scheduler(_gpu_machine(), warm_setup=warm_setup,
-                       warm_between=warm_between).run(JobGraph(jobs))
+    report = Scheduler(_gpu_machine(), warm_setup=warm_setup, warm_between=warm_between,
+                       context_vram_reserve=0).run(JobGraph(jobs))
     setups = {report.results[k][0] for k in ("a", "b", "c")}
     counts = sorted(report.results[k][1] for k in ("a", "b", "c"))
     assert setups == {True}             # every job ran in the worker that ran setup once
@@ -224,8 +234,8 @@ def test_big_gpu_job_routes_fresh():
     # the state it reports is the module default rather than the hooked-worker's True.
     job = Job(key="big", run=report_warm_state, inputs={},
               paths=(_gpu(6 * _GIB // 10),), cost=1000)
-    report = Scheduler(_gpu_machine(), warm_setup=warm_setup,
-                       warm_between=warm_between).run(JobGraph([job]))
+    report = Scheduler(_gpu_machine(), warm_setup=warm_setup, warm_between=warm_between,
+                       context_vram_reserve=0).run(JobGraph([job]))
     assert report.results["big"] == (False, 0)
 
 
@@ -243,8 +253,391 @@ def test_failing_warm_job_does_not_kill_the_shared_worker():
     # must still complete the other, proving one component's failure stays isolated.
     bad = Job(key="bad", run=boom, inputs={}, paths=(_gpu(_GIB // 10),), cost=1000)
     good = Job(key="good", run=produce, inputs={"value": 42}, paths=(_gpu(_GIB // 10),), cost=1000)
-    report = Scheduler(_gpu_machine(), warm_setup=warm_setup,
-                       warm_between=warm_between).run(JobGraph([bad, good]))
+    report = Scheduler(_gpu_machine(), warm_setup=warm_setup, warm_between=warm_between,
+                       context_vram_reserve=0).run(JobGraph([bad, good]))
     assert report.results.get("good") == 42
     assert "bad" in report.cancelled
     assert any(failed == "bad" for _component, failed, _err in report.failures)
+
+
+# -- per-process overhead in the admission view (pure, no processes spawned) --
+
+_CTX = 100 * _SMALL          # 100 MiB: what a CUDA context costs in VRAM
+_BASE = 500 * _SMALL         # 500 MiB: what a spawned worker's cold imports cost in RAM
+
+
+def _aug(paths, *, shared, gpu_budget=_GIB, predicted=None):
+    return _augment_for_admission(
+        paths, worker_shared=shared, ram_baseline=_BASE, context_vram=_CTX,
+        gpu_budget=gpu_budget, predicted_gpu_time=predicted,
+        context_overhead=float("inf"), vram_fraction=0.5, time_multiple=10.0)
+
+
+def test_spawn_charges_baseline_to_a_fresh_cpu_path():
+    cpu = ComputePath(Placement.CPU_PINNED, cores=2, ram_bytes=_SMALL)
+    (aug,), gpu_exec = _aug((cpu,), shared=False)
+    assert aug.ram_bytes == _SMALL + _BASE      # the cold-import baseline a spawned worker pays
+    assert aug.vram_bytes == 0
+    assert gpu_exec is None                     # no GPU path present
+
+
+def test_fork_charges_no_cpu_baseline():
+    cpu = ComputePath(Placement.CPU_PINNED, cores=2, ram_bytes=_SMALL)
+    (aug,), _ = _aug((cpu,), shared=True)
+    assert aug.ram_bytes == _SMALL              # forked workers share the imports; nothing added
+
+
+def test_fresh_gpu_path_charges_context_and_baseline():
+    big = _gpu(6 * _GIB // 10)                  # 60% of the 1 GiB budget -> routes fresh
+    (aug,), gpu_exec = _aug((big,), shared=False)
+    assert gpu_exec is Execution.FRESH
+    assert aug.vram_bytes == big.vram_bytes + _CTX     # its own CUDA context
+    assert aug.ram_bytes == big.ram_bytes + _BASE      # plus the spawn baseline
+
+
+def test_warm_gpu_path_adds_no_overhead():
+    small = _gpu(_GIB // 10)                     # 10% of budget -> routes warm
+    (aug,), gpu_exec = _aug((small,), shared=False)
+    assert gpu_exec is Execution.WARM
+    assert aug.vram_bytes == small.vram_bytes    # shares the standing warm worker's context
+    assert aug.ram_bytes == small.ram_bytes      # and its baseline
+
+
+def test_fresh_gpu_under_fork_charges_context_only():
+    big = _gpu(6 * _GIB // 10)
+    (aug,), gpu_exec = _aug((big,), shared=True)
+    assert gpu_exec is Execution.FRESH
+    assert aug.vram_bytes == big.vram_bytes + _CTX
+    assert aug.ram_bytes == big.ram_bytes        # fork shares imports; no RAM baseline
+
+
+def test_no_device_leaves_gpu_path_untouched():
+    small = _gpu(_GIB // 10)
+    (aug,), gpu_exec = _aug((small,), shared=False, gpu_budget=None)
+    assert gpu_exec is None
+    assert aug.vram_bytes == small.vram_bytes and aug.ram_bytes == small.ram_bytes
+
+
+def test_overhead_probe_reports_real_private_memory():
+    # The probe runs a real worker process and reads back a positive private footprint; with no
+    # accelerator it reports zero context VRAM. That round-trip is what the per-process charge
+    # depends on. (The charge itself is zero under fork, where imports are shared.)
+    ctx = _start_context()
+    q = ctx.Queue()
+    proc = ctx.Process(target=_overhead_probe_main, args=(q, for_host(), None, None))
+    proc.start()
+    try:
+        measured = q.get(timeout=120)
+    finally:
+        proc.join()
+    assert measured is not None
+    ram, context_vram = measured
+    assert isinstance(ram, int) and ram > 0
+    assert context_vram == 0
+
+
+def test_infeasible_job_does_not_sink_the_batch():
+    # One feasible component (a -> b) and one independent job whose only path needs more RAM than
+    # the whole machine. Pre-flight abandons only the infeasible job's lineage; the feasible
+    # component still completes, and the infeasible job is reported, not raised.
+    m = _machine()                                       # 8 GiB ceiling
+    feasible_a = _job("a", produce, {"value": 7})
+    feasible_b = _job("b", passthrough, {"add": 3}, deps=("a",))
+    huge = ComputePath(Placement.CPU_PINNED, cores=1, ram_bytes=64 * _GIB)
+    bad = Job(key="bad", run=produce, inputs={"value": 1}, paths=(huge,))
+    report = Scheduler(m).run(JobGraph([feasible_a, feasible_b, bad]))
+
+    assert report.results["b"] == 10                     # feasible component ran to its terminal
+    assert "bad" in report.cancelled                     # the infeasible job's lineage abandoned
+    assert [e.job_key for e in report.infeasible] == ["bad"]
+    assert report.infeasible[0].gaps[0].axis is InfeasibilityAxis.EXCEEDS_RAM
+
+
+def test_intermediate_results_freed_terminals_kept():
+    # A producer consumed by one terminal. After the run, the terminal's result remains but the
+    # intermediate's is dropped, freed when its last consumer was dispatched.
+    a = _job("a", produce, {"value": 5})
+    b = _job("b", passthrough, {"add": 1}, deps=("a",))
+    report = Scheduler(_machine()).run(JobGraph([a, b]))
+    assert report.results["b"] == 6                  # terminal kept
+    assert "a" not in report.results                 # intermediate freed on b's dispatch
+
+
+def test_output_over_budget_warns(caplog):
+    import logging
+    # declares a 1-byte output but returns a list that pickles far larger: the measured result
+    # exceeds the declaration, so the same kind of warning the working set throws fires for tuning.
+    big_output = Job(key="x", run=produce, inputs={"value": list(range(1000))},
+                     paths=(_cpu(),), output_bytes=1)
+    with caplog.at_level(logging.WARNING):
+        Scheduler(_machine()).run(JobGraph([big_output]))
+    assert any("output exceeded declared budget" in r.message for r in caplog.records)
+
+
+def _small_machine(cap):
+    cores = frozenset(os.sched_getaffinity(0))
+    return Machine(nodes=(NumaNode(0, cores, cap),), gpus=(), mem_cap_bytes=cap)
+
+
+def _producer(key, value):
+    # 1 MiB working set, but a declared 2 MiB held result -- the result is what builds up.
+    return Job(key=key, run=produce, inputs={"value": value},
+               paths=(ComputePath(Placement.CPU_PINNED, cores=1, ram_bytes=_SMALL),),
+               output_bytes=2 * _SMALL)
+
+
+def test_spill_relieves_output_pressure_and_restores():
+    # Three producers whose held 2 MiB results (6 MiB) overflow a 4 MiB ceiling, feeding one
+    # consumer. Without spill the run stalls once all three complete; with it, the heavy held
+    # results are written to disk to make room, then read back to feed the consumer correctly.
+    cap = 4 * _SMALL
+    producers = [_producer("p1", 100), _producer("p2", 20), _producer("p3", 3)]
+    consumer = Job(key="sum", run=passthrough, inputs={"add": 0},
+                   paths=(_cpu(),), dependencies=("p1", "p2", "p3"))
+    report = Scheduler(_small_machine(cap), margin=0.0,
+                       spill_floor_bytes=_SMALL).run(JobGraph(producers + [consumer]))
+    assert report.results["sum"] == 123          # restored deps fed the consumer correctly
+    assert report.spill_count >= 1               # the degraded path fired
+    assert report.spilled_bytes >= 2 * _SMALL
+    assert "sum" not in report.cancelled
+
+
+def test_spill_exhausted_aborts():
+    # Same overflow, but a zero disk budget: the held results fill RAM and have nowhere to spill,
+    # the one true runtime dead-end. The run aborts loud rather than hanging.
+    cap = 4 * _SMALL
+    producers = [_producer("p1", 1), _producer("p2", 2), _producer("p3", 3)]
+    consumer = Job(key="sum", run=passthrough, inputs={"add": 0},
+                   paths=(_cpu(),), dependencies=("p1", "p2", "p3"))
+    sched = Scheduler(_small_machine(cap), margin=0.0, spill_floor_bytes=_SMALL,
+                      spill_budget_bytes=0)
+    with pytest.raises(TetradromeError, match="stalled"):
+        sched.run(JobGraph(producers + [consumer]))
+
+
+def consume_big(inputs, deps):
+    return len(inputs["blob"])
+
+
+def test_input_spill_relieves_resident_input_pressure():
+    # Three independent jobs whose heavy inputs (2 MiB each, 6 MiB) overflow a 4 MiB ceiling before
+    # any runs. The scheduler spills the heavy resident inputs to disk to admit the jobs, then
+    # reads each back to feed its job. Outputs are tiny, so the pressure is purely resident input.
+    cap = 4 * _SMALL
+    jobs = [Job(key=f"j{i}", run=consume_big, inputs={"blob": bytes(2 * _SMALL)},
+                paths=(_cpu(),)) for i in range(3)]
+    report = Scheduler(_small_machine(cap), margin=0.0,
+                       spill_floor_bytes=_SMALL).run(JobGraph(jobs))
+    assert all(report.results[f"j{i}"] == 2 * _SMALL for i in range(3))  # restored inputs intact
+    assert report.spill_count >= 1                                       # input spill fired
+
+
+def split_three(inputs, deps):
+    return {"a": 10, "b": 20, "c": 30}
+
+
+def echo_shard(inputs, deps):
+    (only,) = deps.values()             # a consumer of one shard sees exactly that shard
+    return only * 2
+
+
+def split_wrong(inputs, deps):
+    return {"a": 1}                     # declares a, b but returns only a -- a contract violation
+
+
+def test_partitioned_result_routes_each_shard_to_its_consumer():
+    # A partitioned producer returns one payload per declared shard; each consumer depends on a
+    # single Shard and receives only that shard, never the whole output. The producer holds no
+    # whole result, and every shard is freed as its consumer dispatches.
+    producer = Job(key="src", run=split_three, inputs={}, paths=(_cpu(),),
+                   shards=frozenset({"a", "b", "c"}))
+    consumers = [Job(key=f"use_{s}", run=echo_shard, inputs={}, paths=(_cpu(),),
+                     dependencies={Shard("src", s)}) for s in ("a", "b", "c")]
+    report = Scheduler(_machine()).run(JobGraph([producer, *consumers]))
+    assert report.failures == []
+    assert report.results["use_a"] == 20
+    assert report.results["use_b"] == 40
+    assert report.results["use_c"] == 60
+    assert "src" not in report.results          # partitioned: no whole result, all shards consumed
+
+
+def test_shard_dependency_on_undeclared_shard_is_rejected():
+    producer = Job(key="src", run=split_three, inputs={}, paths=(_cpu(),),
+                   shards=frozenset({"a", "b"}))
+    bad = Job(key="use_z", run=echo_shard, inputs={}, paths=(_cpu(),),
+              dependencies={Shard("src", "z")})         # z is not a declared shard
+    with pytest.raises(ValueError):
+        JobGraph([producer, bad])
+
+
+def test_partitioned_producer_returning_wrong_shards_fails_loud():
+    producer = Job(key="src", run=split_wrong, inputs={}, paths=(_cpu(),),
+                   shards=frozenset({"a", "b"}))
+    consumer = Job(key="use_a", run=echo_shard, inputs={}, paths=(_cpu(),),
+                   dependencies={Shard("src", "a")})
+    with pytest.raises(TetradromeError):
+        Scheduler(_machine()).run(JobGraph([producer, consumer]))
+
+
+def big_blob(inputs, deps):
+    return bytes(2 * _SMALL)            # a large whole result many consumers will each want
+
+
+def blob_len(inputs, deps):
+    (only,) = deps.values()             # a consumer reads the whole shared result
+    return len(only)
+
+
+def test_shared_residence_materializes_one_segment_for_many_consumers():
+    # A large result with several consumers is materialized once into a shared-memory segment the
+    # consumers map, not pickled into each worker. Every consumer reads it intact, and exactly one
+    # segment is made regardless of fan-out.
+    producer = Job(key="src", run=big_blob, inputs={}, paths=(_cpu(),))
+    consumers = [Job(key=f"c{i}", run=blob_len, inputs={}, paths=(_cpu(),),
+                     dependencies={"src"}) for i in range(3)]
+    report = Scheduler(_machine(), shared_min_consumers=2,
+                       shared_floor_bytes=_SMALL).run(JobGraph([producer, *consumers]))
+    assert report.failures == []
+    assert all(report.results[f"c{i}"] == 2 * _SMALL for i in range(3))   # each read the blob
+    assert report.shared_count == 1                                       # one segment, not 3 copies
+    assert report.shared_bytes >= 2 * _SMALL
+    assert "src" not in report.results
+
+
+def test_low_fanout_result_stays_private():
+    # Below the consumer threshold, a result is a private copy -- no segment.
+    producer = Job(key="src", run=big_blob, inputs={}, paths=(_cpu(),))
+    consumer = Job(key="c0", run=blob_len, inputs={}, paths=(_cpu(),), dependencies={"src"})
+    report = Scheduler(_machine(), shared_min_consumers=2,
+                       shared_floor_bytes=_SMALL).run(JobGraph([producer, consumer]))
+    assert report.results["c0"] == 2 * _SMALL
+    assert report.shared_count == 0
+
+
+def test_shared_result_gets_one_replica_per_node():
+    # A result shared by pinned consumers on different nodes is replicated per node. Two nodes share
+    # the one real core (the sandbox has one), so they run in sequence, and node sizing forces the
+    # second consumer onto node 1: c0 (small) lands on node 0, c1 (large) fits only node 1, so the
+    # result is materialized once per node -- two segments, each charged on its own node.
+    node0 = NumaNode(0, frozenset({0}), 5 * _SMALL)
+    node1 = NumaNode(1, frozenset({0}), 20 * _SMALL)
+    m = Machine(nodes=(node0, node1), gpus=(), mem_cap_bytes=25 * _SMALL)
+    small = ComputePath(Placement.CPU_PINNED, cores=1, ram_bytes=_SMALL)
+    large = ComputePath(Placement.CPU_PINNED, cores=1, ram_bytes=10 * _SMALL)
+    g = JobGraph([
+        Job(key="src", run=big_blob, inputs={}, paths=(small,)),
+        Job(key="c0", run=blob_len, inputs={}, paths=(small,), dependencies={"src"}),
+        Job(key="c1", run=blob_len, inputs={}, paths=(large,), dependencies={"src"}),
+    ])
+    report = Scheduler(m, shared_min_consumers=2, shared_floor_bytes=_SMALL).run(g)
+    assert report.failures == []
+    assert report.results["c0"] == 2 * _SMALL and report.results["c1"] == 2 * _SMALL
+    assert report.shared_count == 2                      # one segment per node
+    one_replica = len(pickle.dumps(bytes(2 * _SMALL)))   # the segment holds the pickled blob
+    assert report.shared_bytes == 2 * one_replica
+
+
+def test_replica_creation_warns_when_dispatch_stalls(caplog):
+    # Building a replica is synchronous in the main loop; with several ready consumers and free
+    # capacity, it stalls dispatch, which must surface a warning (once).
+    producer = Job(key="src", run=big_blob, inputs={}, paths=(_cpu(),))
+    consumers = [Job(key=f"c{i}", run=blob_len, inputs={}, paths=(_cpu(),),
+                     dependencies={"src"}) for i in range(3)]
+    with caplog.at_level("WARNING"):
+        report = Scheduler(_machine(), shared_min_consumers=2,
+                           shared_floor_bytes=_SMALL).run(JobGraph([producer, *consumers]))
+    assert report.shared_count == 1
+    assert sum("stalled dispatch" in r.message for r in caplog.records) == 1
+
+
+def test_no_stall_warning_without_waiting_work(caplog):
+    # One consumer: nothing else is queued, so replicating it stalls nothing and must not warn.
+    producer = Job(key="src", run=big_blob, inputs={}, paths=(_cpu(),))
+    consumer = Job(key="c0", run=blob_len, inputs={}, paths=(_cpu(),), dependencies={"src"})
+    with caplog.at_level("WARNING"):
+        Scheduler(_machine(), shared_min_consumers=2,
+                  shared_floor_bytes=_SMALL).run(JobGraph([producer, consumer]))
+    assert not any("stalled dispatch" in r.message for r in caplog.records)
+
+
+# -- device-resident results (fabricated device buffer, plain warm worker stands in for CUDA) --
+
+class FakeDeviceBuffer:
+    """Stands in for a cupy array held in the warm worker's context: it has nbytes and carries the
+    payload. It is created inside the warm worker and never crosses a process boundary."""
+    def __init__(self, data):
+        self.data = data
+        self.nbytes = len(data)
+
+
+def make_device_buffer(inputs, deps):
+    return FakeDeviceBuffer(b"resident-payload")
+
+
+def read_device_buffer(inputs, deps):
+    (buf,) = deps.values()                  # resolved from the worker's device registry
+    return buf.data
+
+
+def test_device_resident_result_stays_in_worker_and_consumer_reads_it():
+    # The producer's buffer stays in the warm worker's VRAM (only a handle returns), and a warm
+    # consumer reads it in place -- the result never comes to host, and it is counted and sized.
+    producer = Job(key="src", run=make_device_buffer, inputs={}, paths=(_gpu(_GIB // 10),),
+                   cost=1000, device_resident=True)
+    consumer = Job(key="c", run=read_device_buffer, inputs={}, paths=(_gpu(_GIB // 10),),
+                   cost=1000, dependencies={"src"})
+    report = Scheduler(_gpu_machine(), warm_setup=warm_setup, warm_between=warm_between,
+                       context_vram_reserve=0).run(JobGraph([producer, consumer]))
+    assert report.failures == []
+    assert report.results["c"] == b"resident-payload"   # consumer read the resident buffer
+    assert "src" not in report.results                  # the buffer never came back to host
+    assert report.device_count == 1
+    assert report.device_bytes == len(b"resident-payload")
+
+
+def test_device_resident_producer_routed_fresh_degrades_to_host(caplog):
+    # A big-vram device-resident job trips the fresh trigger. A fresh process cannot hold the
+    # buffer, so the scheduler warns and produces a host-resident result instead of aborting.
+    big = Job(key="src", run=make_device_buffer, inputs={}, paths=(_gpu(int(_GIB * 0.6)),),
+              device_resident=True)
+    with caplog.at_level("WARNING"):
+        report = Scheduler(_gpu_machine(), warm_setup=warm_setup, warm_between=warm_between,
+                           context_vram_reserve=0).run(JobGraph([big]))
+    assert report.failures == []
+    assert report.device_count == 0                         # never made it onto the device
+    assert report.results["src"].data == b"resident-payload"   # came back to the host instead
+    assert any("device residency skipped" in r.message for r in caplog.records)
+
+
+def test_fresh_gpu_consumer_of_device_resident_result_is_run_warm(caplog):
+    # The producer keeps its result on-device; a GPU consumer that would route fresh is run warm
+    # instead so it can read the buffer in-context. It still reads the resident result, with a
+    # warning that it was serialized.
+    producer = Job(key="src", run=make_device_buffer, inputs={}, paths=(_gpu(_GIB // 10),),
+                   cost=1000, device_resident=True)
+    fresh_consumer = Job(key="c", run=read_device_buffer, inputs={},
+                         paths=(_gpu(int(_GIB * 0.6)),), dependencies={"src"})
+    with caplog.at_level("WARNING"):
+        report = Scheduler(_gpu_machine(), warm_setup=warm_setup, warm_between=warm_between,
+                           context_vram_reserve=0).run(JobGraph([producer, fresh_consumer]))
+    assert report.failures == []
+    assert report.device_count == 1                         # producer's buffer stayed resident
+    assert report.results["c"] == b"resident-payload"       # consumer read it after being run warm
+    assert any("running it warm" in r.message for r in caplog.records)
+
+
+def test_cpu_consumer_downgrades_device_resident_result_to_host(caplog):
+    # A device-resident producer with a consumer that can run on the CPU cannot keep its result on
+    # the device (the CPU consumer could not read it), so it warns and produces a host result the
+    # consumer reads normally.
+    producer = Job(key="src", run=make_device_buffer, inputs={}, paths=(_gpu(_GIB // 10),),
+                   cost=1000, device_resident=True)
+    cpu_consumer = Job(key="c", run=read_device_buffer, inputs={}, paths=(_cpu(),),
+                       dependencies={"src"})
+    with caplog.at_level("WARNING"):
+        report = Scheduler(_gpu_machine(), warm_setup=warm_setup, warm_between=warm_between,
+                           context_vram_reserve=0).run(JobGraph([producer, cpu_consumer]))
+    assert report.failures == []
+    assert report.device_count == 0
+    assert report.results["c"] == b"resident-payload"       # CPU consumer read the host result
+    assert any("not GPU-only" in r.message for r in caplog.records)
