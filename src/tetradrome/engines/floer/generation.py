@@ -20,12 +20,12 @@ far too large to build -- the input to the reduction-memory model.
 from __future__ import annotations
 
 import math
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 
 from ...algebra import GradedComplex
+from ...errors import BackendUnavailable
 from .differential import differential
 from .differential_jit import (
-    HAVE_NUMBA,
     HAVE_NUMPY,
     differential_block,
     target_ranks_block,
@@ -34,13 +34,14 @@ from .gradings import alexander, maslov
 from .gradings_jit import maslov_alexander_block
 from .grid import GridDiagram
 
-# Generation tier: the numba kernels when both numpy and numba are present (the fast path the
-# scheduler fans out across processes), else the pure-Python reference below. grid_complexes,
-# _grading_slice, and grading_histogram stay on the reference unconditionally -- grid_complexes
-# as the canonical, auditable oracle, the grading walk because it must stay memory-safe at sizes
-# too large to materialize. Capability is fixed per process, so this is selected up front, not a
-# fallback that engages on failure (a selected jit path that errors surfaces, it does not retry).
-_USE_JIT = HAVE_NUMBA and HAVE_NUMPY
+# A generation slice's result: columnar arrays indexed by slice offset (so generator
+# ``start + offset``), carrying the slice's global ``start`` so the merge places each block at its
+# rank range. Arrays rather than a list of per-generator records, so the parent's result transport
+# is a near-contiguous copy instead of one tuple per generator. The scheduled path requires numpy
+# (the kernels do); grid_complexes, _grading_slice, and grading_histogram stay pure Python --
+# grid_complexes as the canonical, auditable oracle and the numpy-free escape hatch, the grading
+# walk because it must stay memory-safe at sizes too large to materialize.
+_GenerationSlice = namedtuple("_GenerationSlice", "start maslov alexander targetRanks counts")
 
 
 def _unrank(index: int, n: int) -> tuple:
@@ -99,74 +100,86 @@ def grid_complexes(grid) -> dict:
 
 
 def _generate_slice(args):
-    """One contiguous lexicographic slice of the generation step, as per-generator records
-    ``(rank, maslov, alexander, target ranks)`` -- each generator and its differential targets
-    identified by lexicographic rank (ints), not permutation tuples, so the merge keys on ints and
-    no target permutation is materialized. Uses the numba kernels when available (``_USE_JIT``),
-    else the pure-Python reference; both produce identical records (target order is irrelevant --
-    consumed as a frozenset)."""
+    """One contiguous lexicographic slice of the generation step as columnar arrays:
+    ``_GenerationSlice(start, maslov, alexander, targetRanks, counts)`` indexed by slice offset (so
+    generator ``start + offset``). The numba kernels compute the block gradings, the differential's
+    surviving transposition pairs, and those targets' lexicographic ranks over the whole slice, and
+    the result is those arrays -- no per-generator Python on the output side, so the parent's result
+    transport is a near-contiguous copy rather than one tuple per generator. Requires numpy (the
+    kernels do); for a pure-Python complex without numpy use ``grid_complexes``. Folded by
+    ``_merge_run``, which ``test_generation_graph_matches_serial`` pins against ``grid_complexes``."""
     o_markers, x_markers, start, stop = args
-    grid = GridDiagram(o_markers, x_markers)
-    if _USE_JIT:
-        return _generate_slice_jit(grid, start, stop)
-    return [
-        (start + offset, maslov(grid, state), alexander(grid, state),
-         tuple(_rank(target) for target in differential(grid, state)))
-        for offset, state in enumerate(_unrank(k, grid.n) for k in range(start, stop))
-    ]
-
-
-def _generate_slice_jit(grid, start, stop):
-    """``_generate_slice`` via the numba kernels: block gradings, the differential's surviving
-    transposition pairs, and those targets' ranks -- three kernel calls over the whole slice, then
-    integer records with no permutation materialized. A generator's own rank is its slice offset
-    from ``start``. Equal to the reference path bit-for-bit -- the per-tier agreement tests and the
-    scheduler's ``test_generation_graph_matches_serial`` (which folds these slices and compares to
-    ``grid_complexes``) pin it."""
-    if start >= stop:
-        return []
+    if not HAVE_NUMPY:
+        raise BackendUnavailable(
+            "the scheduled generation path requires numpy (pip install the 'jit' or 'accel' "
+            "extra); for a pure-Python complex without numpy use grid_complexes."
+        )
     import numpy as np
 
-    states = [_unrank(k, grid.n) for k in range(start, stop)]
-    states_array = np.array(states, dtype=np.int64)
-    maslov_values, alexander_values = maslov_alexander_block(states_array, grid.O, grid.X)
-    out_pairs, out_counts = differential_block(states_array, grid.O, grid.X)
-    target_ranks = target_ranks_block(states_array, out_pairs, out_counts)
-    maslov_list = maslov_values.tolist()
-    alexander_list = alexander_values.tolist()
-    counts_list = out_counts.tolist()
-    records = []
-    for offset in range(len(states)):
-        count = counts_list[offset]
-        records.append((
-            start + offset,
-            maslov_list[offset],
-            alexander_list[offset],
-            tuple(target_ranks[offset, :count].tolist()),
-        ))
-    return records
+    grid = GridDiagram(o_markers, x_markers)
+    if start >= stop:
+        empty = np.empty(0, dtype=np.int64)
+        return _GenerationSlice(start, empty, empty, np.empty((0, 0), dtype=np.int64), empty)
+    states = np.array([_unrank(k, grid.n) for k in range(start, stop)], dtype=np.int64)
+    maslov_values, alexander_values = maslov_alexander_block(states, grid.O, grid.X)
+    out_pairs, out_counts = differential_block(states, grid.O, grid.X)
+    target_ranks = target_ranks_block(states, out_pairs, out_counts)
+    return _GenerationSlice(start, maslov_values, alexander_values, target_ranks, out_counts)
 
 
-def _build_complexes(by_alexander: dict) -> dict:
-    """Build {A: GradedComplex} from records grouped by Alexander grading. Generators are
-    identified by lexicographic rank (an int); positions are assigned in group order, which the
-    callers keep equal to global lexicographic (= rank) order, so this reproduces grid_complexes
-    exactly. A differential column maps a generator's position to the positions of its targets one
-    degree up."""
+def _build_complexes(maslov_values, alexander_values, targets_flat, offsets):
+    """Build ``{A: GradedComplex}`` from rank-indexed global arrays: generator ``r`` has gradings
+    ``maslov_values[r]`` / ``alexander_values[r]`` and differential targets
+    ``targets_flat[offsets[r]:offsets[r + 1]]`` (target ranks). Generators are identified by
+    lexicographic rank = array index; positions are assigned per (Alexander, degree) in rank order,
+    reproducing grid_complexes. The differential is degree-raising and Alexander-preserving, so the
+    target filter and the target-to-position mapping are done in bulk over the whole flat target
+    array; the per-generator loop then only assembles a frozenset of already-resolved positions."""
+    import numpy as np
+
+    total = maslov_values.shape[0]
+    degree = -maslov_values
+
+    # Pass 1: each generator's position within its (grading, degree) block, in rank order. One global
+    # array, filled per grading -- the blocks are disjoint, so every entry is written exactly once.
+    position = np.empty(total, dtype=np.int64)
+    gradings = np.unique(alexander_values)
+    members_of = {}
+    dims_of = {}
+    for a_value in gradings:
+        members = np.nonzero(alexander_values == a_value)[0]      # ranks in grading, ascending
+        members_of[int(a_value)] = members
+        member_degrees = degree[members]
+        dims: dict = {}
+        for d in np.unique(member_degrees):
+            in_degree = members[member_degrees == d]
+            position[in_degree] = np.arange(in_degree.shape[0], dtype=np.int64)
+            dims[int(d)] = int(in_degree.shape[0])
+        dims_of[int(a_value)] = dims
+
+    # Bulk: keep only targets one degree above their source (the rest are not in the column), then
+    # resolve every surviving target to its position -- all vectorized over the flat target array.
+    counts = np.diff(offsets)
+    source_degree = np.repeat(degree, counts)                    # the source's degree, per target
+    raised = degree[targets_flat] == source_degree + 1
+    raised_positions = position[targets_flat[raised]]
+    raised_cumulative = np.empty(targets_flat.shape[0] + 1, dtype=np.int64)
+    raised_cumulative[0] = 0
+    np.cumsum(raised, out=raised_cumulative[1:])
+    raised_start = raised_cumulative[offsets]                    # per-generator span in raised_positions
+
+    # Pass 2: assemble the columns from resolved positions -- one frozenset per generator, no
+    # per-generator numpy work beyond the slice.
     complexes: dict = {}
-    for a_grading, group in by_alexander.items():
-        degree = {rank: d for rank, d, _ in group}
-        position: dict = {}
-        dims: dict = defaultdict(int)
-        for rank, d, _ in group:
-            position[rank] = dims[d]
-            dims[d] += 1
+    for a_value in gradings:
+        a_grading = int(a_value)
+        dims = dims_of[a_grading]
         columns = {d: [None] * dims[d] for d in dims}
-        for rank, d, targets in group:
-            columns[d][position[rank]] = frozenset(
-                position[target] for target in targets if degree.get(target) == d + 1
-            )
-        complexes[a_grading] = GradedComplex(dict(dims), columns)
+        for r in members_of[a_grading].tolist():
+            lo = raised_start[r]
+            hi = raised_start[r + 1]
+            columns[int(degree[r])][int(position[r])] = frozenset(raised_positions[lo:hi].tolist())
+        complexes[a_grading] = GradedComplex(dims, columns)
     return complexes
 
 

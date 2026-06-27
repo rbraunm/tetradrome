@@ -111,14 +111,37 @@ def _slice_run(inputs, deps):
 
 
 def _merge_run(inputs, deps):
-    # Fold the slices in slice-index order (the keys are (_SLICE, w)) so positions land in global
-    # lexicographic (= rank) order and _build_complexes reproduces grid_complexes exactly. Records
-    # are (rank, maslov, alexander, target ranks); degree = -Maslov, matching the serial generation.
-    by_alexander: dict = defaultdict(list)
-    for key in sorted(deps, key=lambda k: k[1]):
-        for rank, m, a, targets in deps[key]:
-            by_alexander[a].append((rank, -m, targets))
-    return _build_complexes(by_alexander)
+    # Assemble the slices (each a _GenerationSlice of arrays carrying its global start) into global
+    # rank-indexed arrays -- rank is the array index, since the slices tile [0, n!) contiguously --
+    # plus a CSR of the differential targets (a flat target-rank array with per-generator offsets),
+    # then build the complexes. No per-generator Python on the fold; positions still land in
+    # lexicographic (= rank) order, so the result equals grid_complexes.
+    import numpy as np
+
+    slices = list(deps.values())
+    total = sum(int(s.maslov.shape[0]) for s in slices)
+    maslov = np.empty(total, dtype=np.int64)
+    alexander = np.empty(total, dtype=np.int64)
+    counts = np.empty(total, dtype=np.int64)
+    blocks = []
+    for s in slices:
+        size = int(s.maslov.shape[0])
+        if size == 0:
+            continue
+        lo = s.start
+        hi = lo + size
+        maslov[lo:hi] = s.maslov
+        alexander[lo:hi] = s.alexander
+        counts[lo:hi] = s.counts
+        keep = np.arange(s.targetRanks.shape[1]) < s.counts[:, None]
+        blocks.append((lo, s.targetRanks[keep]))         # this slice's valid targets, in rank order
+    blocks.sort(key=lambda block: block[0])              # by start, so all targets are in rank order
+    targets_flat = (np.concatenate([targets for _, targets in blocks])
+                    if blocks else np.empty(0, dtype=np.int64))
+    offsets = np.empty(total + 1, dtype=np.int64)
+    offsets[0] = 0
+    np.cumsum(counts, out=offsets[1:])
+    return _build_complexes(maslov, alexander, targets_flat, offsets)
 
 
 def _record_bytes(n: int) -> int:
