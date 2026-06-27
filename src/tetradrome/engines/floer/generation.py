@@ -24,8 +24,18 @@ from collections import defaultdict
 
 from ...algebra import GradedComplex
 from .differential import differential
+from .differential_jit import HAVE_NUMBA, HAVE_NUMPY, differential_block
 from .gradings import alexander, maslov
+from .gradings_jit import maslov_alexander_block
 from .grid import GridDiagram
+
+# Generation tier: the numba kernels when both numpy and numba are present (the fast path the
+# scheduler fans out across processes), else the pure-Python reference below. grid_complexes,
+# _grading_slice, and grading_histogram stay on the reference unconditionally -- grid_complexes
+# as the canonical, auditable oracle, the grading walk because it must stay memory-safe at sizes
+# too large to materialize. Capability is fixed per process, so this is selected up front, not a
+# fallback that engages on failure (a selected jit path that errors surfaces, it does not retry).
+_USE_JIT = HAVE_NUMBA and HAVE_NUMPY
 
 
 def _unrank(index: int, n: int) -> tuple:
@@ -70,13 +80,50 @@ def grid_complexes(grid) -> dict:
 
 
 def _generate_slice(args):
+    """One contiguous lexicographic slice of the generation step, as per-state records
+    ``(state, maslov, alexander, target states)``. Uses the numba kernels when available
+    (``_USE_JIT``), else the pure-Python reference; both produce identical records (target
+    order within a record is irrelevant -- consumed as a frozenset)."""
     o_markers, x_markers, start, stop = args
     grid = GridDiagram(o_markers, x_markers)
+    states = [_unrank(k, grid.n) for k in range(start, stop)]
+    if _USE_JIT:
+        return _generate_slice_jit(grid, states)
     return [
         (state, maslov(grid, state), alexander(grid, state),
          tuple(differential(grid, state)))
-        for state in (_unrank(k, grid.n) for k in range(start, stop))
+        for state in states
     ]
+
+
+def _generate_slice_jit(grid, states):
+    """``_generate_slice`` via the numba kernels: the block gradings and the differential's
+    surviving transposition pairs over the whole slice in two kernel calls, then the same
+    per-state records with target permutations reconstructed from the pairs. Equal to the
+    reference path bit-for-bit -- the per-tier agreement tests and the scheduler's
+    ``test_generation_graph_matches_serial`` (which folds these slices and compares to
+    ``grid_complexes``) pin it."""
+    if not states:
+        return []
+    import numpy as np
+
+    n = grid.n
+    states_array = np.array(states, dtype=np.int64)
+    maslov_values, alexander_values = maslov_alexander_block(states_array, grid.O, grid.X)
+    out_pairs, out_counts = differential_block(states_array, grid.O, grid.X)
+    records = []
+    for index, state in enumerate(states):
+        targets = []
+        for slot in range(int(out_counts[index])):
+            code = int(out_pairs[index, slot])
+            i, j = divmod(code, n)
+            target = list(state)
+            target[i], target[j] = state[j], state[i]
+            targets.append(tuple(target))
+        records.append(
+            (state, int(maslov_values[index]), int(alexander_values[index]), tuple(targets))
+        )
+    return records
 
 
 def _build_complexes(by_alexander: dict) -> dict:
