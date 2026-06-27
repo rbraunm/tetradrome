@@ -168,3 +168,82 @@ def differential_jit(grid, sigma) -> dict:
         target[i], target[j] = base[j], base[i]
         result[tuple(target)] = 1
     return result
+
+
+# --- target ranking ------------------------------------------------------------------------
+# Labelling each differential target by its lexicographic rank (a single int) -- the inverse of
+# generation._unrank -- so the merge keys generators on ints instead of permutation tuples. This
+# is a relabelling of the same targets the differential produces, not a change to the differential.
+
+_rank_kernel = None
+
+
+def _target_ranks_impl(states, out_pairs, out_counts, n, factorial, out_ranks):
+    """For each generator and each surviving transposition pair, the lexicographic rank of the
+    transposed permutation, by its Lehmer code -- matching ``generation._rank`` / ``_unrank``.
+    ``factorial[m] = m!``; ``out_ranks`` is filled in place, same shape as ``out_pairs``."""
+    count = states.shape[0]
+    permutation = np.empty(n, dtype=np.int64)
+    used = np.empty(n, dtype=np.int64)
+    for s in range(count):
+        written = out_counts[s]
+        for slot in range(written):
+            code = out_pairs[s, slot]
+            i = code // n
+            j = code % n
+            for t in range(n):
+                permutation[t] = states[s, t]
+            swapped = permutation[i]
+            permutation[i] = permutation[j]
+            permutation[j] = swapped
+            for t in range(n):
+                used[t] = 0
+            rank = 0
+            for t in range(n):
+                value = permutation[t]
+                smaller_unused = 0
+                for u in range(value):
+                    if used[u] == 0:
+                        smaller_unused += 1
+                rank += smaller_unused * factorial[n - 1 - t]
+                used[value] = 1
+            out_ranks[s, slot] = rank
+
+
+def _get_rank_kernel():
+    """Bind the ranking kernel once: numba-compiled if numba is present, else the plain impl."""
+    global _rank_kernel
+    if _rank_kernel is None:
+        if HAVE_NUMBA:
+            import numba
+
+            _rank_kernel = numba.njit(cache=True)(_target_ranks_impl)
+        else:
+            _rank_kernel = _target_ranks_impl
+    return _rank_kernel
+
+
+def target_ranks_block(states, out_pairs, out_counts):
+    """Lexicographic ranks of the differential targets: ``out[s, :out_counts[s]]`` are the ranks of
+    the permutations reached by the surviving transpositions of generator ``s`` (same shape as
+    ``out_pairs``), matching ``generation._rank`` / ``_unrank``. ``states``/``out_pairs``/
+    ``out_counts`` are the arrays from ``differential_block``."""
+    global np
+    if np is None:
+        if not HAVE_NUMPY:
+            raise BackendUnavailable(
+                "the jit differential tier needs numpy (pip install the 'jit' or 'accel' "
+                "extra); the pure-Python differential in differential.py needs no numpy."
+            )
+        import numpy as np
+
+    states_arr = np.ascontiguousarray(states, dtype=np.int64)
+    n = states_arr.shape[1]
+    factorial = np.empty(n, dtype=np.int64)
+    accumulator = 1
+    for m in range(n):
+        factorial[m] = accumulator
+        accumulator *= m + 1
+    out_ranks = np.empty_like(out_pairs)
+    _get_rank_kernel()(states_arr, out_pairs, out_counts, n, factorial, out_ranks)
+    return out_ranks

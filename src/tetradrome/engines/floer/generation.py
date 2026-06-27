@@ -24,7 +24,12 @@ from collections import defaultdict
 
 from ...algebra import GradedComplex
 from .differential import differential
-from .differential_jit import HAVE_NUMBA, HAVE_NUMPY, differential_block
+from .differential_jit import (
+    HAVE_NUMBA,
+    HAVE_NUMPY,
+    differential_block,
+    target_ranks_block,
+)
 from .gradings import alexander, maslov
 from .gradings_jit import maslov_alexander_block
 from .grid import GridDiagram
@@ -47,6 +52,20 @@ def _unrank(index: int, n: int) -> tuple:
         choice, index = divmod(index, factorial)
         perm.append(available.pop(choice))
     return tuple(perm)
+
+
+def _rank(perm) -> int:
+    """The lexicographic rank of permutation ``perm`` -- the inverse of ``_unrank`` (so
+    ``_rank(_unrank(k, n)) == k``). The rank labels a generator by a single int, which is the
+    generator identity the scheduled merge keys on."""
+    n = len(perm)
+    available = list(range(n))
+    index = 0
+    for position in range(n):
+        choice = available.index(perm[position])
+        index += choice * math.factorial(n - 1 - position)
+        available.pop(choice)
+    return index
 
 
 def grid_complexes(grid) -> dict:
@@ -80,67 +99,72 @@ def grid_complexes(grid) -> dict:
 
 
 def _generate_slice(args):
-    """One contiguous lexicographic slice of the generation step, as per-state records
-    ``(state, maslov, alexander, target states)``. Uses the numba kernels when available
-    (``_USE_JIT``), else the pure-Python reference; both produce identical records (target
-    order within a record is irrelevant -- consumed as a frozenset)."""
+    """One contiguous lexicographic slice of the generation step, as per-generator records
+    ``(rank, maslov, alexander, target ranks)`` -- each generator and its differential targets
+    identified by lexicographic rank (ints), not permutation tuples, so the merge keys on ints and
+    no target permutation is materialized. Uses the numba kernels when available (``_USE_JIT``),
+    else the pure-Python reference; both produce identical records (target order is irrelevant --
+    consumed as a frozenset)."""
     o_markers, x_markers, start, stop = args
     grid = GridDiagram(o_markers, x_markers)
-    states = [_unrank(k, grid.n) for k in range(start, stop)]
     if _USE_JIT:
-        return _generate_slice_jit(grid, states)
+        return _generate_slice_jit(grid, start, stop)
     return [
-        (state, maslov(grid, state), alexander(grid, state),
-         tuple(differential(grid, state)))
-        for state in states
+        (start + offset, maslov(grid, state), alexander(grid, state),
+         tuple(_rank(target) for target in differential(grid, state)))
+        for offset, state in enumerate(_unrank(k, grid.n) for k in range(start, stop))
     ]
 
 
-def _generate_slice_jit(grid, states):
-    """``_generate_slice`` via the numba kernels: the block gradings and the differential's
-    surviving transposition pairs over the whole slice in two kernel calls, then the same
-    per-state records with target permutations reconstructed from the pairs. Equal to the
-    reference path bit-for-bit -- the per-tier agreement tests and the scheduler's
-    ``test_generation_graph_matches_serial`` (which folds these slices and compares to
+def _generate_slice_jit(grid, start, stop):
+    """``_generate_slice`` via the numba kernels: block gradings, the differential's surviving
+    transposition pairs, and those targets' ranks -- three kernel calls over the whole slice, then
+    integer records with no permutation materialized. A generator's own rank is its slice offset
+    from ``start``. Equal to the reference path bit-for-bit -- the per-tier agreement tests and the
+    scheduler's ``test_generation_graph_matches_serial`` (which folds these slices and compares to
     ``grid_complexes``) pin it."""
-    if not states:
+    if start >= stop:
         return []
     import numpy as np
 
-    n = grid.n
+    states = [_unrank(k, grid.n) for k in range(start, stop)]
     states_array = np.array(states, dtype=np.int64)
     maslov_values, alexander_values = maslov_alexander_block(states_array, grid.O, grid.X)
     out_pairs, out_counts = differential_block(states_array, grid.O, grid.X)
+    target_ranks = target_ranks_block(states_array, out_pairs, out_counts)
+    maslov_list = maslov_values.tolist()
+    alexander_list = alexander_values.tolist()
+    counts_list = out_counts.tolist()
     records = []
-    for index, state in enumerate(states):
-        targets = []
-        for slot in range(int(out_counts[index])):
-            code = int(out_pairs[index, slot])
-            i, j = divmod(code, n)
-            target = list(state)
-            target[i], target[j] = state[j], state[i]
-            targets.append(tuple(target))
-        records.append(
-            (state, int(maslov_values[index]), int(alexander_values[index]), tuple(targets))
-        )
+    for offset in range(len(states)):
+        count = counts_list[offset]
+        records.append((
+            start + offset,
+            maslov_list[offset],
+            alexander_list[offset],
+            tuple(target_ranks[offset, :count].tolist()),
+        ))
     return records
 
 
 def _build_complexes(by_alexander: dict) -> dict:
-    """Build {A: GradedComplex} from states already grouped by Alexander grading, assigning
-    positions in group order (which the callers keep equal to global lexicographic order)."""
+    """Build {A: GradedComplex} from records grouped by Alexander grading. Generators are
+    identified by lexicographic rank (an int); positions are assigned in group order, which the
+    callers keep equal to global lexicographic (= rank) order, so this reproduces grid_complexes
+    exactly. A differential column maps a generator's position to the positions of its targets one
+    degree up."""
     complexes: dict = {}
     for a_grading, group in by_alexander.items():
-        degree = {state: d for state, d, _ in group}
+        degree = {rank: d for rank, d, _ in group}
         position: dict = {}
         dims: dict = defaultdict(int)
-        for state, d, _ in group:
-            position[state] = dims[d]
+        for rank, d, _ in group:
+            position[rank] = dims[d]
             dims[d] += 1
         columns = {d: [None] * dims[d] for d in dims}
-        for state, d, targets in group:
-            columns[d][position[state]] = frozenset(
-                position[y] for y in targets if degree.get(y) == d + 1
+        for rank, d, targets in group:
+            columns[d][position[rank]] = frozenset(
+                position[target] for target in targets if degree.get(target) == d + 1
             )
         complexes[a_grading] = GradedComplex(dict(dims), columns)
     return complexes

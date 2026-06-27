@@ -112,12 +112,12 @@ def _slice_run(inputs, deps):
 
 def _merge_run(inputs, deps):
     # Fold the slices in slice-index order (the keys are (_SLICE, w)) so positions land in global
-    # lexicographic order and _build_complexes reproduces grid_complexes exactly. Degree = -Maslov,
-    # matching the serial generation.
+    # lexicographic (= rank) order and _build_complexes reproduces grid_complexes exactly. Records
+    # are (rank, maslov, alexander, target ranks); degree = -Maslov, matching the serial generation.
     by_alexander: dict = defaultdict(list)
     for key in sorted(deps, key=lambda k: k[1]):
-        for state, m, a, targets in deps[key]:
-            by_alexander[a].append((state, -m, targets))
+        for rank, m, a, targets in deps[key]:
+            by_alexander[a].append((rank, -m, targets))
     return _build_complexes(by_alexander)
 
 
