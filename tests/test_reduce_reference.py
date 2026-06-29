@@ -8,26 +8,26 @@ real homology dimensions against hand-computed answers, not just that it runs.
 """
 import pytest
 
-from tetradrome.algebra import GradedComplex, f2_rank, homology
+from tetradrome.algebra import GradedComplex, f2_rank, homology, pack_columns
 
 
 # ---- f2_rank ------------------------------------------------------------
 
 def test_f2_rank_independent_columns():
     # Two columns with distinct leading rows are independent.
-    assert f2_rank([frozenset({0, 1}), frozenset({1})]) == 2
+    assert f2_rank(pack_columns([{0, 1}, {1}])) == 2
 
 
 def test_f2_rank_dependent_column():
     # Third column is the F2 sum of the first two, so rank stays 2.
-    cols = [frozenset({0, 1}), frozenset({1, 2}), frozenset({0, 2})]
-    assert f2_rank(cols) == 2
+    cols = [{0, 1}, {1, 2}, {0, 2}]
+    assert f2_rank(pack_columns(cols)) == 2
 
 
 def test_f2_rank_zero_and_empty():
-    assert f2_rank([]) == 0
-    assert f2_rank([frozenset(), frozenset()]) == 0
-    assert f2_rank([frozenset(), frozenset({3})]) == 1
+    assert f2_rank(pack_columns([])) == 0
+    assert f2_rank(pack_columns([set(), set()])) == 0
+    assert f2_rank(pack_columns([set(), {3}])) == 1
 
 
 # ---- homology -----------------------------------------------------------

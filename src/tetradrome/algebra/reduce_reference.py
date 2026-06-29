@@ -16,23 +16,26 @@ so homology reduces to F2 ranks of the boundary maps -- which is all this comput
 """
 from __future__ import annotations
 
+from array import array
 from collections.abc import Sequence
 
 from .complex import GradedComplex
 
 
-def f2_rank(columns: Sequence[frozenset[int]]) -> int:
-    """Rank over F2 of a 0/1 matrix given column-wise as sets of row indices.
+def f2_rank(csc: tuple[array, array]) -> int:
+    """Rank over F2 of a 0/1 matrix given in CSC form as ``(indices, indptr)`` -- the pair
+    `GradedComplex.differential` returns, where column j is ``indices[indptr[j]:indptr[j+1]]``.
 
     Column reduction over GF(2): each column is eliminated against the pivots found so
     far (keyed by their leading row); it either reduces to the zero vector (dependent,
     no new rank) or becomes a new pivot. The leading row strictly decreases on each
     elimination step, so the inner loop terminates.
     """
+    indices, indptr = csc
     pivots: dict[int, set[int]] = {}    # leading row -> reduced column
     rank = 0
-    for col in columns:
-        v = set(col)
+    for j in range(len(indptr) - 1):
+        v = set(indices[indptr[j]:indptr[j + 1]])
         while v:
             lead = max(v)
             piv = pivots.get(lead)

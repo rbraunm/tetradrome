@@ -30,13 +30,15 @@ def test_zero_dimension_degrees_are_dropped():
 
 
 def test_differential_shape_for_zero_map():
-    # No map supplied for degree 1: differential is dim(1) empty columns.
+    # No map supplied for degree 1: differential is dim(1) empty columns in CSC form.
     c = GradedComplex({1: 3, 2: 2}, {})
-    d1 = c.differential(1)
-    assert len(d1) == 3
-    assert all(col == frozenset() for col in d1)
-    # A degree with no chain group has no columns at all.
-    assert c.differential(7) == ()
+    indices, indptr = c.differential(1)
+    assert len(indptr) == 3 + 1            # one offset per column, plus the leading 0
+    assert list(indptr) == [0, 0, 0, 0]    # every column empty
+    assert len(indices) == 0
+    # A degree with no chain group has no columns: indptr is just [0].
+    idx7, ptr7 = c.differential(7)
+    assert list(idx7) == [] and list(ptr7) == [0]
 
 
 def test_valid_complex_passes_d_squared():
@@ -47,9 +49,12 @@ def test_valid_complex_passes_d_squared():
         {0: [{0, 1}], 1: [{0}, {0}]},
     )
     c.verify_d_squared()  # must not raise
-    # Columns are stored faithfully.
-    assert c.differential(0) == (frozenset({0, 1}),)
-    assert c.differential(1) == (frozenset({0}), frozenset({0}))
+    # Columns are stored faithfully in CSC: column j is indices[indptr[j]:indptr[j+1]].
+    i0, p0 = c.differential(0)
+    assert list(p0) == [0, 2] and sorted(i0[p0[0]:p0[1]]) == [0, 1]   # d^0(e0) = {0, 1}
+    i1, p1 = c.differential(1)
+    assert list(p1) == [0, 1, 2]                                      # two single-entry columns
+    assert list(i1) == [0, 0]                                         # d^1(f0) = d^1(f1) = {0}
 
 
 def test_nonzero_d_squared_is_caught():
@@ -84,3 +89,39 @@ def test_empty_complex():
     assert c.degrees() == []
     assert c.total_dim() == 0
     c.verify_d_squared()  # vacuously true
+
+
+def test_nnz_counts_stored_ones():
+    c = GradedComplex({0: 1, 1: 2, 2: 1}, {0: [{0, 1}], 1: [{0}, {0}]})
+    assert c.nnz(0) == 2      # the column {0, 1}
+    assert c.nnz(1) == 2      # columns {0}, {0}
+    assert c.nnz(2) == 0      # no map out of C^2
+
+
+def test_from_csc_matches_column_constructor():
+    # Same complex built two ways agrees on homology and on the stored buffers.
+    from array import array
+
+    columns = GradedComplex({0: 1, 1: 2, 2: 1}, {0: [{0, 1}], 1: [{0}, {0}]})
+    csc = GradedComplex.from_csc(
+        {0: 1, 1: 2, 2: 1},
+        {
+            0: (array("i", [0, 1]), array("i", [0, 2])),
+            1: (array("i", [0, 0]), array("i", [0, 1, 2])),
+        },
+    )
+    csc.verify_d_squared()
+    for n in (0, 1, 2):
+        assert list(csc.differential(n)[1]) == list(columns.differential(n)[1])
+    assert csc.dim(2) == 1 and csc.total_dim() == 4
+
+
+def test_from_csc_rejects_inconsistent_indptr():
+    from array import array
+
+    # indptr must have dim(C^0) + 1 = 2 entries; here it has 3.
+    with pytest.raises(ValueError, match=r"indptr length"):
+        GradedComplex.from_csc({0: 1, 1: 1}, {0: (array("i", [0]), array("i", [0, 1, 1]))})
+    # endpoints must bracket the stored entries.
+    with pytest.raises(ValueError, match=r"indptr ends"):
+        GradedComplex.from_csc({0: 1, 1: 2}, {0: (array("i", [0, 1]), array("i", [0, 1]))})
