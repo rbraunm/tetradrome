@@ -30,6 +30,7 @@ from ...algebra import (
     grading_peak_bytes,
     predict_cost,
     predict_size,
+    reduce_host_bytes,
 )
 from ...scheduler import ComputePath, Job, JobGraph, Placement, Shard
 from .generation import _build_complexes, _generate_slice, grading_histogram
@@ -63,15 +64,27 @@ def _assemble_run(inputs, deps):
 
 
 def _reduction_paths(peak: int, backend: str) -> tuple:
+    # `peak` is the packed word-matrix peak (matrix + pivots). reduce_host_bytes turns it into the
+    # host RAM the chosen backend's worker actually needs: a fork base plus a backend-specific
+    # working set (the pure-Python tiers hold only pivots, the packed tiers the whole matrix).
+    # The GPU VRAM is still priced at the packed peak; the dense uint8 matrix the GPU reducer
+    # builds is several times larger, a separate correction pending a GPU benchmark.
     if backend == "packed-gpu":
-        return (ComputePath(Placement.GPU, cores=1, ram_bytes=peak, vram_bytes=max(peak, 1)),)
+        return (ComputePath(Placement.GPU, cores=1,
+                            ram_bytes=reduce_host_bytes(peak, "packed-gpu"),
+                            vram_bytes=max(peak, 1)),)
     if backend != "auto":
-        return (ComputePath(Placement.CPU_PINNED, cores=1, ram_bytes=peak),)
+        return (ComputePath(Placement.CPU_PINNED, cores=1,
+                            ram_bytes=reduce_host_bytes(peak, backend)),)
     available = {name: ok for name, ok, _ in available_f2_backends()}
     paths = []
     if available.get("packed-gpu"):
-        paths.append(ComputePath(Placement.GPU, cores=1, ram_bytes=peak, vram_bytes=max(peak, 1)))
-    paths.append(ComputePath(Placement.CPU_PINNED, cores=1, ram_bytes=peak))
+        paths.append(ComputePath(Placement.GPU, cores=1,
+                                 ram_bytes=reduce_host_bytes(peak, "packed-gpu"),
+                                 vram_bytes=max(peak, 1)))
+    # The auto CPU fallback runs the fastest CPU tier, which route_backend resolves to bitint.
+    paths.append(ComputePath(Placement.CPU_PINNED, cores=1,
+                             ram_bytes=reduce_host_bytes(peak, "bitint")))
     return tuple(paths)
 
 

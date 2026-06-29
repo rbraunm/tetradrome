@@ -85,6 +85,62 @@ def grading_peak_bytes(degree_dims: Mapping[int, int]) -> int:
     return peak
 
 
+# --- backend-aware reduce-worker host memory (calibrated on CT 250, A8) ----------------------
+#
+# A reduce worker is a forked process reducing one grading; its peak resident memory is a
+# per-backend fork base plus the reducer's working set. The single packed-peak figure the
+# scheduler used to price every reduction was the working set of only the packed CPU tiers, and
+# it omitted the fork base entirely -- so it over-provisioned the pure-Python default (which never
+# builds the matrix) and under-provisioned every backend's small gradings (almost all fork base).
+# Since the array('i') migration the CSC input a worker holds is ~25x smaller than the old
+# frozensets and tiny beside the working set on the heavy gradings, so it is absorbed into the
+# fork base rather than priced separately (pricing also runs from a dimension histogram, before a
+# complex's nonzero count exists, so the footprint cannot be an exact separate term there).
+
+# Per-worker fork base: the interpreter plus the modules the reducer dirties. The pure-Python
+# tiers import only the stdlib; the packed tiers import numpy, and jit additionally numba, whose
+# compiled code dominates a grading with little matrix. A8's per-reduce-job private memory settled
+# near 6 MiB under bitint and near 20 MiB under jit for near-empty gradings; rounded up for margin.
+_REDUCE_FORK_BASE_BYTES = {
+    "reference": 10 * 2**20,
+    "bitint": 10 * 2**20,
+    "jit": 40 * 2**20,
+    "packed-cpu": 40 * 2**20,
+    "packed-gpu": 40 * 2**20,
+}
+_DEFAULT_REDUCE_FORK_BASE_BYTES = 40 * 2**20
+
+# Working set as a fraction of the packed peak. The packed CPU tiers materialize the full word
+# matrix plus pivots, so the packed peak is exactly their working set (1.0). The pure-Python tiers
+# never build the matrix, only the pivot bit-vectors -- ~0.2x of the packed peak by measurement --
+# so pricing them at the full packed peak (as the old model did) chronically over-provisions; 0.5
+# keeps a safety margin over the measured 0.2x without paying for the matrix they never build.
+_REDUCE_WORKING_FRACTION = {
+    "reference": 0.5,
+    "bitint": 0.5,
+    "jit": 1.0,
+    "packed-cpu": 1.0,
+    "packed-gpu": 1.0,
+}
+_DEFAULT_REDUCE_WORKING_FRACTION = 1.0
+
+
+def reduce_host_bytes(packed_peak: int, backend: str) -> int:
+    """Host RAM a forked reduce worker needs for ``backend`` on a grading whose packed peak (word
+    matrix plus pivots) is ``packed_peak``: a per-backend fork base plus the reducer's working set.
+
+    Backend-aware because the reducers differ: the pure-Python ``reference``/``bitint`` tiers hold
+    only the pivots (a fraction of the packed peak), the packed tiers hold the whole word matrix,
+    and every backend carries a fork base the old single-figure model omitted. The base also
+    absorbs the now-small CSC input footprint. Calibrated from the CT 250 A8 run; an unknown
+    backend falls back to the heaviest assumption (numpy fork base, full packed peak), never the
+    cheapest.
+    """
+    base = _REDUCE_FORK_BASE_BYTES.get(backend, _DEFAULT_REDUCE_FORK_BASE_BYTES)
+    fraction = _REDUCE_WORKING_FRACTION.get(backend, _DEFAULT_REDUCE_WORKING_FRACTION)
+    return base + int(packed_peak * fraction)
+
+
 def predict_size(cx) -> ComplexSize:
     """Exact size facts for a GradedComplex, including the packed reduction peak."""
     degrees = tuple(cx.degrees())

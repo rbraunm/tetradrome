@@ -10,7 +10,7 @@ roadmap/design/homology-engine.md.
 """
 from .complex import GradedComplex
 from .gpu import detect_gpu, enablement_instructions, gpu_config
-from .memory import ComplexSize, Routing, dense_block_bytes, dense_block_ops, dense_reduction_bytes, grading_cost_ops, grading_peak_bytes, max_grading_bytes, predict_cost, predict_size, route_backend
+from .memory import ComplexSize, Routing, dense_block_bytes, dense_block_ops, dense_reduction_bytes, grading_cost_ops, grading_peak_bytes, max_grading_bytes, predict_cost, predict_size, reduce_host_bytes, route_backend
 from .multimodular import rational_homology_multimodular, rational_rank_multimodular
 from .rational_complex import RationalComplex
 from .rational_reduce import rational_homology, rational_rank
@@ -53,5 +53,6 @@ __all__ = [
     "rational_homology_multimodular",
     "rational_rank",
     "rational_rank_multimodular",
+    "reduce_host_bytes",
     "route_backend",
 ]
