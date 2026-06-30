@@ -25,6 +25,7 @@ Override the relevant flag rather than editing this file if the box changes.
 from __future__ import annotations
 
 import argparse
+import base64
 import os
 import re
 import subprocess
@@ -32,6 +33,16 @@ import sys
 from datetime import datetime, timezone
 from shutil import which
 from typing import NoReturn
+
+# Windows consoles default to a non-UTF-8 codepage (e.g. cp1252) that cannot encode the artifact's
+# status emoji. Make our own console UTF-8 so printing diagnostics never crashes; the artifact
+# itself is transported base64-encoded (see build_remote_command) so it never reaches a console as
+# raw text in the first place.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(HERE)
@@ -94,8 +105,9 @@ def preflight_git() -> str:
 # --- remote run -----------------------------------------------------------------------------
 
 def build_remote_command(src: str, python: str, ref: str, reps: int, with_floer: bool) -> str:
-    """One remote shell line. Each step gates the next with &&. The generator's own console
-    output goes to a log so only the delimited file content reaches stdout for extraction."""
+    """One remote shell line. Each step gates the next with &&. The generator's console output
+    goes to a log; the artifact is returned base64-encoded between sentinels so non-ASCII content
+    (the status emoji) survives transport through any console codepage."""
     src = src.rstrip("/")
     out = src + "/BENCHMARKS.md"
     floer = " --with-floer-grid" if with_floer else ""
@@ -103,8 +115,9 @@ def build_remote_command(src: str, python: str, ref: str, reps: int, with_floer:
         "cd {src} && "
         "git fetch --depth 1 origin {ref} && "
         "git reset --hard FETCH_HEAD && "
-        "{python} scripts/comparison/generate.py --reps {reps}{floer} --out {out} > {log} 2>&1 && "
-        "printf '{begin}\\n' && cat {out} && printf '\\n{end}\\n'"
+        "{python} scripts/comparison/generate.py --reps {reps}{floer} --out {out} "
+        "> /dev/null 2> {log} && "
+        "printf '{begin}\\n' && base64 -w0 {out} && printf '\\n{end}\\n'"
     ).format(src=src, ref=ref, python=python, reps=reps, floer=floer,
              out=out, log=REMOTE_LOG, begin=BEGIN, end=END)
 
@@ -114,14 +127,21 @@ def ct_exec(ctid: int, remote_command: str, timeout: int) -> subprocess.Complete
         die("tools/ct_exec.py not found beside this script (%s)." % CT_EXEC)
     cmd = [sys.executable, CT_EXEC, "--ctid", str(ctid), "--", remote_command]
     try:
-        return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, timeout=timeout)
+        return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True,
+                              encoding="utf-8", errors="replace", timeout=timeout)
     except subprocess.TimeoutExpired:
         die("CT %d run exceeded %ds. Raise --remote-timeout or check the box." % (ctid, timeout))
 
 
 def fetch_remote_log(ctid: int) -> str:
-    result = ct_exec(ctid, "cat " + REMOTE_LOG, timeout=60)
-    return (result.stdout or "").strip() or "(remote log empty or unavailable)"
+    result = ct_exec(ctid, "base64 -w0 " + REMOTE_LOG, timeout=60)
+    raw = (result.stdout or "").strip()
+    if not raw:
+        return "(remote log empty or unavailable)"
+    try:
+        return base64.b64decode(raw).decode("utf-8", "replace").strip()
+    except Exception:
+        return "(could not decode remote log)"
 
 
 def generate_on_ct(ctid: int, src: str, python: str, ref: str,
@@ -133,8 +153,13 @@ def generate_on_ct(ctid: int, src: str, python: str, ref: str,
 
     text = result.stdout or ""
     if BEGIN in text and END in text:
-        body = text.split(BEGIN, 1)[1].split(END, 1)[0]
-        return body.replace("\r\n", "\n").replace("\r", "\n").strip("\n") + "\n"
+        b64 = text.split(BEGIN, 1)[1].split(END, 1)[0].strip()
+        try:
+            markdown = base64.b64decode(b64).decode("utf-8")
+        except Exception as error:
+            die("could not decode the artifact returned from CT %d (%s). See output above."
+                % (ctid, error))
+        return markdown if markdown.endswith("\n") else markdown + "\n"
 
     # Did not reach extraction: surface the generator's own log so the cause is visible.
     note("--- CT %d stderr ---\n%s" % (ctid, (result.stderr or "").strip()))
