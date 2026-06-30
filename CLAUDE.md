@@ -76,6 +76,24 @@ needs no password, streams output live, and exits with the remote command's stat
       python tools/ct_exec.py -- 'cd /opt/tetradrome/src && setsid venv/bin/python <cmd> > /tmp/job.log 2>&1 < /dev/null & echo PID=$!'
       python tools/ct_exec.py -- 'cat /tmp/job.log'
 
+## Oracle setup in the sandbox (scripts/install_oracles.sh)
+The comparison oracles (SnapPy, KnotJob, Sage, Khoca) are opt-in validators ONLY (decision
+0006), never a runtime dependency. `scripts/install_oracles.sh` makes a fresh sandbox
+oracle-ready so adapter work can be developed and checked here -- run it once at the start of a
+session. It is idempotent and fail-loud: a reachability preflight aborts on any egress-whitelist
+regression (those only clear in a NEW conversation), and the runnable oracles must pass a smoke
+test (KnotJob: trefoil s = +/-2; SnapPy: figure-eight volume 2.02988) or the run exits nonzero.
+
+It installs what is runnable in an ephemeral sandbox and obtains the rest, matching exactly what
+`scripts/comparison/adapters.py` probes for (PATH or import):
+- **SnapPy** -- pip-installed, importable (also pulls `knot_floer_homology`). Runnable.
+- **KnotJob** -- jar + a `knotjob` PATH wrapper over `java -jar` (Temurin >= 23). Runnable.
+- **Khoca** -- source cloned, NOT built (its prebuilt is Python-3.6 ABI-locked); build is CT 250.
+- **Sage** -- Debian repo reachability only; the multi-GB install is CT 250 work.
+
+So in the sandbox the adapter honestly reports snappy/knotjob/kfh present and sage/khoca absent.
+This is the sandbox sibling of `scripts/provision_runner.py` (which stands up CT 250 itself).
+
 ## Testing
 Tests make real assertions about computed invariants and complexes. No monkeypatching the
 logic under test. Tests verify behavior; they never drive design.
