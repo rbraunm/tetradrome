@@ -34,6 +34,15 @@ except ImportError:
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS = os.path.join(ROOT, "scripts")
 
+# A streamed remote command can emit non-ASCII (e.g. status emoji from a generated report).
+# A Windows console codepage (cp1252) cannot encode those and would crash sys.stdout.write
+# mid-stream, so make our stdout/stderr UTF-8 here. POSIX is already UTF-8; this is a no-op there.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 
 def read_credentials(ctid: int) -> dict:
     """Parse the 'key: value' login file provision_runner wrote, or {} if it is absent."""

@@ -68,8 +68,10 @@ def note(message: str) -> None:
 
 def git(*args: str) -> subprocess.CompletedProcess:
     """Run a git command in the repo root, capturing text output. Never raises on a non-zero
-    exit; callers inspect returncode so the failure message can be specific."""
-    return subprocess.run(["git", *args], cwd=REPO_ROOT, capture_output=True, text=True)
+    exit; callers inspect returncode so the failure message can be specific. Decoded UTF-8 with
+    replacement so a stray byte in git output never crashes the capture on a non-UTF-8 console."""
+    return subprocess.run(["git", *args], cwd=REPO_ROOT, capture_output=True,
+                          encoding="utf-8", errors="replace")
 
 
 def preflight_git() -> str:
@@ -236,7 +238,7 @@ def main(argv=None) -> int:
     markdown = generate_on_ct(args.ctid, args.src, args.python, args.ref,
                               args.reps, args.with_floer_grid, args.remote_timeout)
 
-    with open(args.out, "w", newline="\n") as handle:
+    with open(args.out, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(markdown)
     note("wrote %s (%d bytes)" % (args.out, len(markdown.encode("utf-8"))))
 
