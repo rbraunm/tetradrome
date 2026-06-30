@@ -247,3 +247,74 @@ def target_ranks_block(states, out_pairs, out_counts):
     out_ranks = np.empty_like(out_pairs)
     _get_rank_kernel()(states_arr, out_pairs, out_counts, n, factorial, out_ranks)
     return out_ranks
+
+
+_unrank_kernel = None
+
+
+def _unrank_impl(start, count, n, factorial, out_states):
+    """The lexicographically ``(start + s)``-th permutation of ``range(n)``, for ``s`` in
+    ``[0, count)``, written into ``out_states[s, :]`` by the factorial number system -- the
+    array-filling inverse of the Lehmer ranking in ``_target_ranks_impl``, matching
+    ``generation._unrank`` exactly (an available list, with the chosen element dropped and the tail
+    shifted down at each place). ``factorial[m] = m!``; ``out_states`` is filled in place. Valid as
+    plain Python and under numba nopython."""
+    available = np.empty(n, dtype=np.int64)
+    for s in range(count):
+        index = start + s
+        for t in range(n):
+            available[t] = t
+        remaining = n
+        position = 0
+        for place in range(n - 1, -1, -1):
+            factorial_place = factorial[place]
+            choice = index // factorial_place
+            index = index % factorial_place
+            out_states[s, position] = available[choice]
+            position += 1
+            for t in range(choice, remaining - 1):    # drop available[choice], shift tail down
+                available[t] = available[t + 1]
+            remaining -= 1
+
+
+def _get_unrank_kernel():
+    """Bind the unranking kernel once: numba-compiled if numba is present, else the plain impl."""
+    global _unrank_kernel
+    if _unrank_kernel is None:
+        if HAVE_NUMBA:
+            import numba
+
+            _unrank_kernel = numba.njit(cache=True)(_unrank_impl)
+        else:
+            _unrank_kernel = _unrank_impl
+    return _unrank_kernel
+
+
+def unrank_block(start: int, stop: int, n: int):
+    """The permutations ranked ``[start, stop)`` as a ``(stop - start, n)`` int64 array, one row per
+    generator in lexicographic order: the vectorized form of
+    ``[generation._unrank(k, n) for k in range(start, stop)]`` with no per-generator Python and no
+    intermediate tuples, writing straight into a preallocated array. This is the generation slice's
+    state build; ``generation._unrank`` remains the pure-Python oracle this is pinned against and the
+    no-numpy ``grid_complexes`` path. int64, so ``n <= 20`` (``n!`` must fit) -- a limit the whole
+    scheduled path already carries through the int64 ranking kernel."""
+    global np
+    if np is None:
+        if not HAVE_NUMPY:
+            raise BackendUnavailable(
+                "the jit generation tier needs numpy (pip install the 'jit' or 'accel' extra); "
+                "for a pure-Python complex without numpy use grid_complexes."
+            )
+        import numpy as np
+
+    count = stop - start
+    out_states = np.empty((max(count, 0), n), dtype=np.int64)
+    if count <= 0:
+        return out_states
+    factorial = np.empty(n, dtype=np.int64)
+    accumulator = 1
+    for m in range(n):
+        factorial[m] = accumulator
+        accumulator *= m + 1
+    _get_unrank_kernel()(start, count, n, factorial, out_states)
+    return out_states

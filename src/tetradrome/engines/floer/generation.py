@@ -30,6 +30,7 @@ from .differential_jit import (
     HAVE_NUMPY,
     differential_block,
     target_ranks_block,
+    unrank_block,
 )
 from .gradings import alexander, maslov
 from .gradings_jit import maslov_alexander_block
@@ -121,7 +122,7 @@ def _generate_slice(args):
     if start >= stop:
         empty = np.empty(0, dtype=np.int64)
         return _GenerationSlice(start, empty, empty, np.empty((0, 0), dtype=np.int64), empty)
-    states = np.array([_unrank(k, grid.n) for k in range(start, stop)], dtype=np.int64)
+    states = unrank_block(start, stop, grid.n)
     maslov_values, alexander_values = maslov_alexander_block(states, grid.O, grid.X)
     out_pairs, out_counts = differential_block(states, grid.O, grid.X)
     target_ranks = target_ranks_block(states, out_pairs, out_counts)

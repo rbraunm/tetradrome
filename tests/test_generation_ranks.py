@@ -22,6 +22,7 @@ from tetradrome.engines.floer.differential_jit import (
     HAVE_NUMPY,
     differential_block,
     target_ranks_block,
+    unrank_block,
 )
 
 
@@ -29,6 +30,35 @@ from tetradrome.engines.floer.differential_jit import (
 def test_rank_inverts_unrank(n):
     for k in range(math.factorial(n)):
         assert _rank(_unrank(k, n)) == k
+
+
+@pytest.mark.skipif(not HAVE_NUMPY, reason="the jit tier needs numpy")
+@pytest.mark.parametrize("n", range(2, 9))
+def test_unrank_block_matches_unrank(n):
+    # The vectorized state build must reproduce _unrank bit-for-bit over a whole slice: this is the
+    # generation slice's input, pinned directly (the scheduler's grid_complexes test catches it too,
+    # but this isolates the cause). Pure permutation arithmetic, so no grid is needed.
+    import numpy as np
+
+    total = math.factorial(n)
+    got = unrank_block(0, total, n)
+    expected = np.array([_unrank(k, n) for k in range(total)], dtype=np.int64)
+    assert got.shape == (total, n)
+    assert np.array_equal(got, expected)
+
+
+@pytest.mark.skipif(not HAVE_NUMPY, reason="the jit tier needs numpy")
+def test_unrank_block_contiguous_slice_and_empty():
+    # Generation requests contiguous slices [start, stop); a start past zero must match _unrank, and
+    # an empty slice must yield no rows (the start >= stop case generation guards before calling).
+    import numpy as np
+
+    n = 7
+    start, stop = 1234, 4321
+    got = unrank_block(start, stop, n)
+    expected = np.array([_unrank(k, n) for k in range(start, stop)], dtype=np.int64)
+    assert np.array_equal(got, expected)
+    assert unrank_block(9, 9, n).shape == (0, n)
 
 
 @pytest.mark.heavy
