@@ -167,8 +167,12 @@ def _tetraCell(inv, ladder, reps, withFloerGrid):
     if kind == "floer":
         if not withFloerGrid:
             return {"ms": None, "label": "pending (CT 250 grid run)", "agree": "n/a"}
-        return {"ms": None, "label": "grid timing TODO (wire from bench_grid_floer)",
-                "agree": "n/a"}
+        seconds = []
+        for name, _knot in ladder:
+            seconds.append(adapters.measureFloerGrid(name, reps).seconds)
+        ms = _medianMs(seconds)
+        label = None if ms is not None else "engine could not run"
+        return {"ms": ms, "label": label, "agree": "n/a"}
     return {"ms": None, "label": "unknown tetra kind", "agree": "n/a"}
 
 

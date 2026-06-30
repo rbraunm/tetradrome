@@ -81,6 +81,46 @@ def _shortValue(value):
     return text if len(text) <= 40 else text[:37] + "..."
 
 
+# ---- native grid (knot Floer) engine ------------------------------------------------------
+
+_MACHINE = None
+
+
+def _machine():
+    global _MACHINE
+    if _MACHINE is None:
+        from tetradrome.scheduler import detect_machine
+        _MACHINE = detect_machine()
+    return _MACHINE
+
+
+def measureFloerGrid(knotName, reps):
+    """Time Tetradrome's native grid (knot Floer) engine end to end for a tabulated knot: build
+    the grid, build the Poincare graph, run it through the scheduler. The engine is expensive and
+    deterministic, so a single timed run is taken (``reps`` is intentionally not applied here).
+    Fails loud on an infeasible or failed run rather than reporting a partial time. The scheduler
+    spawns worker processes, so this must run from a real module with a __main__ guard (the
+    generator is); it will hang if driven from a REPL or a stdin heredoc."""
+    from tetradrome.engines.floer import GridDiagram
+    from tetradrome.engines.floer.scheduling import whole_knot_graph
+    from tetradrome.scheduler import Scheduler
+    machine = _machine()
+    grid = GridDiagram.from_knotinfo(knotName)
+    start = time.perf_counter()
+    graph, key = whole_knot_graph(grid, backend="bitint")
+    report = Scheduler(machine).run(graph)
+    seconds = time.perf_counter() - start
+    if report.infeasible:
+        return Measurement(value="infeasible", seconds=None,
+                           note=str(report.infeasible[0])[:60], agree="n/a")
+    if report.failures:
+        return Measurement(value="failed", seconds=None,
+                           note=str(report.failures[0])[:60], agree="n/a")
+    # The support count is recorded for a future HFK-rank cross-check (confirmed on the box, not
+    # here); the artifact does not yet claim a live rank match for Floer, so agree stays neutral.
+    return Measurement(value=f"support={len(report.results[key])}", seconds=seconds, agree="n/a")
+
+
 # ---- knot_floer_homology (real) -----------------------------------------------------------
 
 def kfhAvailable():

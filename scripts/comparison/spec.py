@@ -119,7 +119,7 @@ INVARIANTS = [
               "PD / grid", "bigraded ranks, HFK polynomial", "landing", "yes", ("floer", None)),
     Invariant("tau", "Ozsvath-Szabo tau", "kfh",
               "tau from the Alexander filtration on grid homology (concordance, |tau| <= g4).",
-              "PD / grid", "integer", "landing", "yes", ("floer", None)),
+              "PD / grid", "integer", "landing", "yes", None),
     Invariant("seifert_genus", "Seifert genus (via HFK)", "kfh",
               "Top Alexander grading with nonzero HFK (HFK detects genus).",
               "PD / grid", "integer", "landing", "yes", None),
