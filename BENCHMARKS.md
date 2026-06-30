@@ -13,12 +13,12 @@ Empty cells are honest: *not implemented (target)* = we don't compute it yet (th
 ## How this run was generated
 
 - **Host:** `tetradrome` - Intel(R) Xeon(R) CPU E5-2699 v4 @ 2.20GHz, 88 logical cores, 200.0 GiB RAM
-- **Software:** Linux 6.8.12-29-pve, Python 3.11.2, tetradrome `f9f2d5a`
+- **Software:** Linux 6.8.12-29-pve, Python 3.11.2, tetradrome `05446fc`
 - **Oracle versions:** knot_floer_homology `1.2.2`, tetradrome `0.0.0`
 - **Oracles present:** kfh  |  **absent this run:** snappy, knotjob, sage, khoca
 - **Knot ladder:** 3_1, 4_1, 5_2, 6_2, 7_4, 8_19 (timings are the median across the ladder)
-- **Timing:** best-of-3 wall seconds per knot, reported in milliseconds; grid Floer engine timing deferred to a CT 250 run
-- **Generated:** 2026-06-30 05:30 UTC
+- **Timing:** best-of-3 wall seconds per knot, reported in milliseconds
+- **Generated:** 2026-06-30 05:44 UTC
 
 ## knot Floer homology -- vs Szabo's HFK Calculator (`knot_floer_homology`)
 
@@ -26,8 +26,8 @@ Tetradrome computes these natively from a grid diagram (Apache-2.0, pure Python,
 
 | Invariant | Math | In → Out | Status | KnotInfo | Tetradrome | knot_floer_homology | Validation |
 |---|---|---|---|---|---|---|---|
-| **HFK-hat (ranks / polynomial)** | Grid (MOS) knot Floer homology; bigraded ranks, Euler char = Alexander. | PD / grid → bigraded ranks, HFK polynomial | 🚧 landing | ✓ | *pending (CT 250 grid run)* | 0.37 ms | 🔗 oracle ref |
-| **Ozsvath-Szabo tau** | tau from the Alexander filtration on grid homology (concordance, \|tau\| <= g4). | PD / grid → integer | 🚧 landing | ✓ | *pending (CT 250 grid run)* | *same upstream call* | 🔗 oracle ref |
+| **HFK-hat (ranks / polynomial)** | Grid (MOS) knot Floer homology; bigraded ranks, Euler char = Alexander. | PD / grid → bigraded ranks, HFK polynomial | 🚧 landing | ✓ | 2568.49 ms | 0.68 ms | 🔗 oracle ref |
+| **Ozsvath-Szabo tau** | tau from the Alexander filtration on grid homology (concordance, \|tau\| <= g4). | PD / grid → integer | 🚧 landing | ✓ | *not implemented (target)* | *same upstream call* | 🔗 oracle ref |
 | **Seifert genus (via HFK)** | Top Alexander grading with nonzero HFK (HFK detects genus). | PD / grid → integer | 🚧 landing | ✓ | *not implemented (target)* | *same upstream call* | 🔗 oracle ref |
 | **Fibered-ness (via HFK)** | HFK detects fibredness (Ni): top Alexander grading has rank 1. | PD / grid → bool | 🔜 near | ✓ | *not implemented (target)* | *same upstream call* | 🔗 oracle ref |
 | **Hom epsilon** | epsilon from the CFK^infinity structure (concordance). | PD / grid → integer in {-1,0,1} | 🔜 near | ~ | *not implemented (target)* | *same upstream call* | 🔗 oracle ref |
@@ -40,9 +40,9 @@ Native cube-of-resolutions over F2 and Q (and, planned, Z/reduced/odd). KnotInfo
 
 | Invariant | Math | In → Out | Status | KnotInfo | Tetradrome | KnotJob | Validation |
 |---|---|---|---|---|---|---|---|
-| **Khovanov homology (F2)** | Unreduced Khovanov over F2 from the cube of resolutions; d^2 = 0 checked. | PD → bigraded Betti numbers | ✅ done | ✓ | 8.54 ms | *absent (this run)* | ✓ matches KnotInfo |
-| **Khovanov homology (Q)** | Unreduced Khovanov over Q (exact rational reduction). | PD → bigraded Betti numbers | ✅ done | ✓ | 26.08 ms | *absent (this run)* | ✓ matches KnotInfo |
-| **Rasmussen s** | s read off the quantum filtration on Lee homology over Q (\|s\|/2 <= g4). | PD → even integer | ✅ done | ✓ | 36.29 ms | *absent (this run)* | ✓ matches KnotInfo |
+| **Khovanov homology (F2)** | Unreduced Khovanov over F2 from the cube of resolutions; d^2 = 0 checked. | PD → bigraded Betti numbers | ✅ done | ✓ | 15.74 ms | *absent (this run)* | ✓ matches KnotInfo |
+| **Khovanov homology (Q)** | Unreduced Khovanov over Q (exact rational reduction). | PD → bigraded Betti numbers | ✅ done | ✓ | 32.29 ms | *absent (this run)* | ✓ matches KnotInfo |
+| **Rasmussen s** | s read off the quantum filtration on Lee homology over Q (\|s\|/2 <= g4). | PD → even integer | ✅ done | ✓ | 43.33 ms | *absent (this run)* | ✓ matches KnotInfo |
 | **Lee homology (Q)** | Lee deformation of Khovanov over Q (2-dim for a knot); the source of s. | PD → filtered homology | ✅ done | ~ | *not implemented (target)* | *absent (this run)* | - |
 | **Khovanov homology (Z, torsion)** | Integral Khovanov including torsion; extends the F2/Q engine. | PD → bigraded groups + torsion | 🔧 build | ✓ | *not implemented (target)* | *absent (this run)* | - |
 | **Odd Khovanov homology** | Odd Khovanov (Ozsvath-Rasmussen-Szabo), a sibling engine. | PD → bigraded groups | 🔧 build | ✓ | *not implemented (target)* | *absent (this run)* | - |
@@ -54,7 +54,7 @@ Computed natively from a Seifert matrix or a skein recursion. KnotInfo tabulates
 
 | Invariant | Math | In → Out | Status | KnotInfo | Tetradrome | SageMath | Validation |
 |---|---|---|---|---|---|---|---|
-| **Jones polynomial** | Kauffman bracket over the resolution cube. | PD → Laurent polynomial | ✅ done | ✓ | 0.92 ms | *absent (this run)* | ✓ matches KnotInfo |
+| **Jones polynomial** | Kauffman bracket over the resolution cube. | PD → Laurent polynomial | ✅ done | ✓ | 1.04 ms | *absent (this run)* | ✓ matches KnotInfo |
 | **Determinant** | \|Delta(-1)\| from the Seifert form. | braid / PD → integer | ✅ done | ✓ | 0.04 ms | *absent (this run)* | ✓ matches KnotInfo |
 | **Signature** | Signature of V + V^T (Seifert form). | braid / PD → integer | ✅ done | ✓ | 0.11 ms | *absent (this run)* | ✓ matches KnotInfo |
 | **Alexander polynomial** | Canonical Alexander from the Seifert form. | braid / PD → Laurent polynomial | ✅ done | ✓ | 0.39 ms | *absent (this run)* | ✓ matches KnotInfo |
