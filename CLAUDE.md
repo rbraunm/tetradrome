@@ -29,6 +29,22 @@ If a requested GPU/JIT/NUMA path is unavailable, fail loudly with a clear messag
 silently fall back to the reference path and report success -- that hides a broken
 environment and produces misleading benchmarks.
 
+## Speed is subordinate to correctness (warn, never gate)
+Tetradrome's thesis is auditability and correctness over speed (SPEC, decisions 0006/0007):
+a validated number beats a fast one, and faithful-but-slow beats fast-but-wrong or
+fast-but-won't-install. The comparison artifact (tetradrome vs the gold-master oracles)
+reports times and the measured gap as DATA -- never a pass/fail, threshold, or gate. Do NOT
+encode a speed expectation anywhere in the application: no benchmark assertion, no "must beat
+the oracle" check, no CI speed gate. The generator stays neutral and just measures.
+
+The warning is Claude's job, in conversation, not the code's. When tetradrome trails an oracle
+on math we compute, SAY SO -- frame it as a target to aim for, with the likely reason (compiled
+C/Java vs portable Python, or the n! grid vs a polynomial cube) and the roadmap lever that would
+close it (e.g. the Szabo-cube Floer engine). It is a target, NEVER a critical failure: trailing a
+compiled oracle while staying native, auditable, and portable is the expected, accepted trade. An
+oracle's speed on math we have NOT implemented is also a target -- record it as the bar a future
+engine aims at.
+
 ## Hardware-dependent tiers
 Exercise each only where its hardware exists; the agreement check must pass before any
 benchmark number means anything.
