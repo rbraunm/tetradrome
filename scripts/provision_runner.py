@@ -352,7 +352,7 @@ def verify_install(ctid: int, args, name: str) -> None:
         "print('install verified: package imports; extras defined:', ', '.join(requested) or '(none requested)')",
     ])
     exec_in(ctid, f"{base}/venv/bin/python - <<'PY'\n{py}\nPY\n")
-    print(f"  repo cloned into venv; package imports, extras verified: {', '.join(requested) or '(none)'}.")
+    print(f"  repo cloned into venv; package imports OK; extras verified: {', '.join(requested) or '(none)'}.")
 
 
 def install_oracles(ctid: int, args, name: str) -> None:
@@ -450,6 +450,7 @@ def smoke_test(ctid: int, args, name: str) -> None:
     print(f"[8/9] Smoke test: {args.smoke}")
     base = f"/opt/{name}"
     exec_in(ctid, f"cd {base}/src && {base}/venv/bin/python {args.smoke}", stream=True)
+    print("  smoke test passed.")
 
 
 def container_ip(ctid: int) -> str:
