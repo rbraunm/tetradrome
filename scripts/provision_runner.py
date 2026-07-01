@@ -13,7 +13,9 @@ authenticated connection is opened and reused for every command.
 It creates an unprivileged Debian LXC (pure compute -- no Docker, nesting, or GPU), installs
 Tetradrome into a venv with the full runnable suite by default (every CPU acceleration tier,
 the KnotInfo backend, and pytest -- so the box runs the suite, pytest --heavy and all, with no
-opt-in beyond the test flags), enables sshd with a dedicated login (password + key auth) so the
+opt-in beyond the test flags), installs the full comparison-oracle suite (SageMath plus the built
+gold-masters KnotJob, JavaKh, kht++, knotkit, and KhoHo) unless --skip-oracles, enables sshd with a
+dedicated login (password + key auth) so the
 prepared box can be used directly over SSH, advertises its hostname as <name>.local over mDNS
 (Avahi) so it is reachable without a DNS record, smoke-tests a tiny sweep, and prints how to run
 the full sweep at the container's core count with NUMA pinning.
@@ -228,7 +230,7 @@ def preflight() -> None:
 
 
 def ensure_template(template: str, template_storage: str) -> None:
-    print(f"[1/8] Ensuring template {template} is cached on {template_storage}...")
+    print(f"[1/9] Ensuring template {template} is cached on {template_storage}...")
     if template in capture(f"pveam list {template_storage}").stdout:
         print("  already cached.")
         return
@@ -237,7 +239,7 @@ def ensure_template(template: str, template_storage: str) -> None:
 
 
 def create_container(args) -> None:
-    print(f"[2/8] Creating LXC {args.ctid} ({args.hostname})...")
+    print(f"[2/9] Creating LXC {args.ctid} ({args.hostname})...")
     if container_exists(args.ctid):
         if not args.recreate:
             sys.exit(
@@ -272,7 +274,7 @@ def create_container(args) -> None:
 
 
 def wait_for_network(ctid: int) -> None:
-    print("[3/8] Waiting for container network...")
+    print("[3/9] Waiting for container network...")
     exec_in(ctid, 'for i in $(seq 1 30); do '
                   'getent hosts github.com >/dev/null 2>&1 && exit 0; sleep 2; done; '
                   'echo "no network in container after 60s" >&2; exit 1')
@@ -280,9 +282,9 @@ def wait_for_network(ctid: int) -> None:
 
 def install_repo(ctid: int, args, name: str) -> None:
     extras = f"[{args.extras}]" if args.extras else ""
-    print(f"[4/8] Installing {args.repo} ({args.branch}"
+    print(f"[4/9] Installing {args.repo} ({args.branch}"
           f"{', extras: ' + args.extras if args.extras else ''})...")
-    packages = "git python3 python3-venv python3-pip numactl ca-certificates"
+    packages = "git curl gnupg python3 python3-venv python3-pip numactl ca-certificates"
     if args.apt:
         packages += " " + args.apt
     base = f"/opt/{name}"
@@ -325,8 +327,50 @@ def verify_install(ctid: int, args, name: str) -> None:
     exec_in(ctid, f"{base}/venv/bin/python - <<'PY'\n{py}\nPY\n")
 
 
+def install_oracles(ctid: int, args, name: str) -> None:
+    """Install the comparison oracles by running the repo's own scripts/install_oracles.sh
+    inside the container -- the single place every oracle build recipe lives, so results are
+    never re-derived by hand. Pointed at the container venv (the python oracles import under the
+    same interpreter the suite runs) with SageMath enabled (bookworm ships it; the sandbox does
+    not). Runs inside the apt service-policy bracket because the script installs Temurin, PARI,
+    Eigen, GMP, and bison/flex."""
+    print("[5/9] Installing comparison oracles (all engines + SageMath) via the in-repo script...")
+    base = f"/opt/{name}"
+    script = f"{base}/src/scripts/install_oracles.sh"
+    exec_in(ctid,
+            f"test -f {shlex.quote(script)} || {{ echo 'oracle installer missing at {script}' >&2; exit 1; }}\n"
+            f"PIP={shlex.quote(base + '/venv/bin/pip')} "
+            "PIP_INSTALL_FLAGS='' "
+            f"PY={shlex.quote(base + '/venv/bin/python')} "
+            "INSTALL_SAGE=1 ORACLE_HOME=/opt/oracles BIN_DIR=/usr/local/bin "
+            f"bash {shlex.quote(script)}\n")
+    verify_oracles(ctid, args, name)
+
+
+def verify_oracles(ctid: int, args, name: str) -> None:
+    """Prove every oracle is discoverable from inside the container -- an import for the four
+    python oracles, a PATH wrapper for the five built ones, plus sage -- so a broken install
+    fails here rather than silently in a later comparison run. Independent of adapters.py so it
+    holds even before the run adapters are wired."""
+    print("  verifying every oracle is discoverable (imports + PATH wrappers)...")
+    base = f"/opt/{name}"
+    exec_in(ctid,
+            f"py={shlex.quote(base + '/venv/bin/python')}\n"
+            "fail=0\n"
+            "for mod in knot_floer_homology snappy regina khoca; do\n"
+            '  if "$py" -c "import $mod" >/dev/null 2>&1; then echo "   $mod: import OK";\n'
+            '  else echo "   $mod: IMPORT FAILED" >&2; fail=1; fi\n'
+            "done\n"
+            "for exe in knotjob javakh khtpp kk khoho sage; do\n"
+            '  if command -v "$exe" >/dev/null 2>&1; then echo "   $exe: on PATH";\n'
+            '  else echo "   $exe: NOT ON PATH" >&2; fail=1; fi\n'
+            "done\n"
+            '[ "$fail" -eq 0 ] || { echo "oracle verification FAILED" >&2; exit 1; }\n'
+            'echo "   oracle verification: all present"\n')
+
+
 def setup_ssh(ctid: int, args, name: str, password: str, public_line: str) -> None:
-    print(f"[5/8] Enabling sshd and the {args.ssh_user!r} login on the container...")
+    print(f"[6/9] Enabling sshd and the {args.ssh_user!r} login on the container...")
     base = f"/opt/{name}"
     user = shlex.quote(args.ssh_user)
     exec_in(ctid,
@@ -352,7 +396,7 @@ def setup_ssh(ctid: int, args, name: str, password: str, public_line: str) -> No
 
 
 def setup_mdns(ctid: int, mdns_name: str) -> None:
-    print(f"[6/8] Advertising {mdns_name}.local over mDNS (Avahi)...")
+    print(f"[7/9] Advertising {mdns_name}.local over mDNS (Avahi)...")
     exec_in(ctid,
             "export DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8\n"
             "apt-get install -y -qq avahi-daemon libnss-mdns\n"
@@ -369,9 +413,9 @@ def setup_mdns(ctid: int, mdns_name: str) -> None:
 
 def smoke_test(ctid: int, args, name: str) -> None:
     if not args.smoke:
-        print("[7/8] No --smoke command given; skipping smoke test.")
+        print("[8/9] No --smoke command given; skipping smoke test.")
         return
-    print(f"[7/8] Smoke test: {args.smoke}")
+    print(f"[8/9] Smoke test: {args.smoke}")
     base = f"/opt/{name}"
     exec_in(ctid, f"cd {base}/src && {base}/venv/bin/python {args.smoke}")
 
@@ -430,7 +474,7 @@ def report(ctid: int, args, name: str, ip: str, creds_path: str, key_path: str,
     python = f"{base}/venv/bin/python"
     bench = f"{base}/src/scripts/bench_grid_floer.py"
     host = ip or mdns_name + ".local"
-    print("\n[8/8] Done.")
+    print("\n[9/9] Done.")
     print(f"  Container {ctid} is up{(' at ' + ip) if ip else ''} on {SSH_TARGET}.")
     print(f"  Repo at {base}/src, venv python at {python}.")
     print(f"  SSH login '{args.ssh_user}' enabled (password + key auth); credentials in:")
@@ -464,7 +508,9 @@ def main() -> None:
     parser.add_argument("--cores", type=int, default=4, help="vCPUs (default 4; size up)")
     parser.add_argument("--memory", type=int, default=4096, help="RAM in MiB (default 4096)")
     parser.add_argument("--swap", type=int, default=512, help="swap in MiB (default 512)")
-    parser.add_argument("--rootfs-size", type=int, default=16, help="rootfs size in GiB")
+    parser.add_argument("--rootfs-size", type=int, default=32,
+                        help="rootfs size in GiB (default 32; the oracle suite -- SageMath plus "
+                        "the built gold-masters -- needs the room)")
     parser.add_argument("--template-storage", default="local", help="template storage")
     parser.add_argument("--template", default=DEFAULT_TEMPLATE)
     parser.add_argument("--bridge", default="vmbr0", help="network bridge (default vmbr0)")
@@ -494,6 +540,10 @@ def main() -> None:
                         help="command (venv python, in the repo dir) to smoke-test; '' to skip")
     parser.add_argument("--apt", default="",
                         help="extra apt packages beyond the base")
+    parser.add_argument("--skip-oracles", action="store_true",
+                        help="skip installing the comparison oracles (SageMath, KnotJob, JavaKh, "
+                        "kht++, knotkit, KhoHo, and the pip oracles regina/khoca/snappy); the box "
+                        "still runs the native suite")
     args = parser.parse_args()
 
     global SSH_TARGET, _CLIENT
@@ -507,6 +557,10 @@ def main() -> None:
         wait_for_network(args.ctid)
         set_install_service_policy(args.ctid)   # brackets every apt install below
         install_repo(args.ctid, args, name)
+        if args.skip_oracles:
+            print("[5/9] Skipping comparison-oracle install (--skip-oracles).")
+        else:
+            install_oracles(args.ctid, args, name)
         password = secrets.token_urlsafe(18)
         private_text, public_line = generate_keypair(f"tetradrome-provisioner-ct{args.ctid}")
         setup_ssh(args.ctid, args, name, password, public_line)
