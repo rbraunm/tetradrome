@@ -43,9 +43,11 @@
 #            incompatible parser, so we RESTORE the shipped parser and touch it newer than the
 #            grammar to keep make from regenerating, and build with g++ + system GMP (the Makefile
 #            hard-codes clang/libc++ and MacPorts paths).
-#   khoho    builds .so modules against system PARI; the GP layer must be loaded data-before-gvars
-#            with DStore pre-seeded so KhoHo_gvars' load-time reset_all() sees MAX_DIAGRAM_NUM, and
-#            gp must run from the source dir (the install() paths to the .so are relative).
+#   khoho    builds .so modules against system PARI; KhoHo_gvars calls reset_all() at load time,
+#            but reset_all is defined in KhoHo_data and needs MAX_DIAGRAM_NUM from the main KhoHo
+#            file, so the loader pre-seeds DStore as a vector (the guard then skips that premature
+#            reset_all), reads every module, then calls reset_all() once at the end. gp must run
+#            from the source dir (the install() paths to the .so are relative).
 #
 # Idempotent and fail-loud: re-running is safe, and any whitelist regression or failed smoke
 # aborts loudly with a nonzero exit.
@@ -323,7 +325,9 @@ EOF
 smoke_javakh() {
   log "JavaKh smoke (trefoil rational Khovanov, PD on stdin)"
   local out
-  out="$(printf '%s\n' "${TREFOIL_PD}" | timeout 60 javakh -Q 2>/dev/null || true)"
+  if ! out="$(printf '%s\n' "${TREFOIL_PD}" | timeout 60 javakh -Q 2>&1)"; then
+    printf '%s\n' "${out}" >&2; die "JavaKh smoke: invocation failed (nonzero exit or timeout)."
+  fi
   # trefoil Khovanov over Q has generators in three homological degrees (t^-3, t^-2, t^0).
   if printf '%s' "${out}" | grep -q 't\^-3' \
      && printf '%s' "${out}" | grep -q 't\^-2' \
@@ -367,7 +371,9 @@ smoke_khtpp() {
   [ -f "${dir}/examples/tests/3_1.kht" ] || die "kht++ shipped example missing under ${dir}."
   # kht++ mangles an absolute path (strips the leading slash), so it must be given a path
   # relative to its working directory -- run from the khtpp dir with the relative example path.
-  out="$( cd "${dir}" && timeout 60 khtpp examples/tests/3_1.kht 2>&1 || true )"
+  if ! out="$( cd "${dir}" && timeout 60 khtpp examples/tests/3_1.kht 2>&1 )"; then
+    printf '%s\n' "${out}" >&2; die "kht++ smoke: invocation failed (nonzero exit or timeout)."
+  fi
   if printf '%s' "${out}" | grep -q "Computation for" \
      && ! printf '%s' "${out}" | grep -qi "cannot read"; then
     info "computed the shipped 3_1 example (PASS)"
@@ -407,7 +413,9 @@ EOF
 smoke_knotkit() {
   log "knotkit smoke (trefoil Rasmussen s)"
   local out
-  out="$(timeout 60 kk s "T(2,3)" 2>&1 || true)"
+  if ! out="$(timeout 60 kk s "T(2,3)" 2>&1)"; then
+    printf '%s\n' "${out}" >&2; die "knotkit smoke: invocation failed (nonzero exit or timeout)."
+  fi
   if printf '%s' "${out}" | grep -qE 's\(T\(2,3\).*= *-?2$'; then
     info "s(T(2,3)) magnitude 2 (PASS)"
   else
@@ -462,7 +470,9 @@ EOF
 smoke_khoho() {
   log "KhoHo smoke (trefoil rational Khovanov polynomial)"
   local out
-  out="$(printf 'print(KhPol_Q(torus(2,3)));\n' | timeout 90 khoho 2>/dev/null || true)"
+  if ! out="$(printf 'print(KhPol_Q(torus(2,3)));\n' | timeout 90 khoho 2>&1)"; then
+    printf '%s\n' "${out}" >&2; die "KhoHo smoke: invocation failed (nonzero exit or timeout)."
+  fi
   # trefoil unreduced Khovanov over Q: q + q^3 + q^5 t^2 + q^9 t^3 -- gate on the top term.
   if printf '%s' "${out}" | grep -q 'q\^9\*t\^3'; then
     info "KhPol_Q(trefoil) includes q^9*t^3 (PASS)"
