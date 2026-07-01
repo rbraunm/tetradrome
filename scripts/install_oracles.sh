@@ -64,6 +64,11 @@
 
 set -euo pipefail
 
+# A guaranteed-present UTF-8 locale, so apt maintainer scripts (perl, apt-listchanges) stop
+# emitting "Setting locale failed ... falling back to C" noise. C.UTF-8 always exists; stderr is
+# otherwise left intact so a genuine apt warning still surfaces.
+export LC_ALL=C.UTF-8 LANG=C.UTF-8
+
 ORACLE_HOME="${ORACLE_HOME:-/opt/oracles}"
 BIN_DIR="${BIN_DIR:-/usr/local/bin}"
 TEMURIN_MAJOR="${TEMURIN_MAJOR:-25}"
@@ -71,6 +76,7 @@ PIP="${PIP:-pip}"
 PIP_INSTALL_FLAGS="${PIP_INSTALL_FLAGS:---break-system-packages}"
 PY="${PY:-python}"
 INSTALL_SAGE="${INSTALL_SAGE:-0}"
+DEBUG="${DEBUG:-}"          # non-empty: stream each source build live instead of hiding it in a log
 
 KNOTJOB_URL="https://www.maths.dur.ac.uk/users/dirk.schuetz/KnotJob.zip"
 JAVAKH_REPO="https://github.com/geometer/JavaKh-v2.git"
@@ -102,6 +108,26 @@ STATUS_SAGE="not attempted"
 log() { printf '\n== %s\n' "$*"; }
 info() { printf '   %s\n' "$*"; }
 die() { printf '\nFATAL: %s\n' "$*" >&2; exit 1; }
+
+# Run a source build quietly: a clean build prints nothing here (only the caller's section header
+# and its "wrapper at" line remain), while a failed build dumps the log tail and aborts. DEBUG
+# streams it live instead. <command> is eval'd, so the caller's in-scope vars (dir, GMP_INC,
+# PARI_INC, SUDO) resolve. The thousands of compiler warnings from these third-party trees are the
+# bulk of what this hides; a real error still surfaces via the tail and the nonzero exit.
+quiet_build() {
+  # quiet_build <description> <command>
+  local desc="$1" cmd="$2" logpath
+  if [ -n "${DEBUG}" ]; then
+    eval "${cmd}"
+    return
+  fi
+  logpath="$(mktemp)"
+  if ! eval "${cmd}" >"${logpath}" 2>&1; then
+    tail -n 40 "${logpath}" >&2
+    die "${desc} failed -- full build log at ${logpath}."
+  fi
+  rm -f "${logpath}"
+}
 
 # OS identity (VERSION_CODENAME picks the Adoptium suite; ID picks the base apt mirror to probe).
 . /etc/os-release
@@ -310,7 +336,8 @@ install_javakh() {
   local dir="${ORACLE_HOME}/javakh"
   ${SUDO} mkdir -p "${ORACLE_HOME}"
   clone_or_pull "${JAVAKH_REPO}" "${dir}"
-  ( cd "${dir}" && ${SUDO} sh build.sh )                 # javac over all sources; JDK 25 is fine
+  # javac over all sources; JDK 25 is fine (only finalize() deprecation warnings, now in the log).
+  quiet_build "JavaKh build" '( cd "${dir}" && ${SUDO} sh build.sh )'
   [ -d "${dir}/build" ] || die "JavaKh build produced no build/ dir."
   local cp="${dir}/build:${dir}/jars/log4j-1.2.12.jar:${dir}/jars/junit-4.12.jar:${dir}/jars/commons-logging-1.1.jar:${dir}/jars/commons-io-1.2.jar:${dir}/jars/commons-cli-1.0.jar"
   ${SUDO} tee "${BIN_DIR}/javakh" >/dev/null <<EOF
@@ -352,7 +379,7 @@ install_khtpp() {
   if ! grep -q '#include <cstdint>' "${hdr}"; then
     ${SUDO} sed -i 's|#include <vector>|#include <vector>\n#include <cstdint>|' "${hdr}"
   fi
-  ( cd "${dir}" && ${SUDO} make -s PATH_EIGEN=/usr/include/eigen3 CXX=g++ )
+  quiet_build "kht++ build" '( cd "${dir}" && ${SUDO} make -s PATH_EIGEN=/usr/include/eigen3 CXX=g++ )'
   [ -x "${dir}/kht++" ] || die "kht++ build produced no binary."
   # kht++ resolves its input path relative to the working directory (it strips a leading slash),
   # so a caller cd's to the directory holding the .kht file and passes a relative path.
@@ -393,13 +420,14 @@ install_knotkit() {
   # The system bison 3.x regenerates a parser incompatible with knotkit's 2012 grammar. Restore
   # the shipped bison-2.4.3 parser and stamp the generated files newer than their sources so make
   # never re-runs bison/flex.
-  ( cd "${dir}"
-    ${SUDO} git checkout -- .
-    ${SUDO} find . -name '*.o' -delete
-    ${SUDO} touch knot_parser/knot_parser.cc knot_parser/knot_parser.hh knot_parser/knot_scanner.cc \
-                  rd_parser/rd_parser.cc rd_parser/rd_parser.hh rd_parser/rd_scanner.cc
-    ${SUDO} make -s CXX=g++ OPTFLAGS="-O2 -g -std=c++14" \
-                 INCLUDES="-I. -I${GMP_INC}" LDFLAGS="" LIBS="-lgmp -lgmpxx -lz" kk )
+  quiet_build "knotkit build" \
+    '( cd "${dir}"
+       ${SUDO} git checkout -- .
+       ${SUDO} find . -name \*.o -delete
+       ${SUDO} touch knot_parser/knot_parser.cc knot_parser/knot_parser.hh knot_parser/knot_scanner.cc \
+                     rd_parser/rd_parser.cc rd_parser/rd_parser.hh rd_parser/rd_scanner.cc
+       ${SUDO} make -s CXX=g++ OPTFLAGS="-O2 -g -std=c++14" \
+                    INCLUDES="-I. -I${GMP_INC}" LDFLAGS="" LIBS="-lgmp -lgmpxx -lz" kk )'
   [ -x "${dir}/kk" ] || die "knotkit build produced no kk binary."
   ${SUDO} tee "${BIN_DIR}/kk" >/dev/null <<EOF
 #!/usr/bin/env bash
@@ -431,7 +459,7 @@ install_khoho() {
   local dir="${ORACLE_HOME}/khoho"
   ${SUDO} mkdir -p "${ORACLE_HOME}"
   clone_or_pull "${KHOHO_REPO}" "${dir}"
-  ( cd "${dir}" && ${SUDO} make -s PARI_INPUT="-I${PARI_INC}" )
+  quiet_build "KhoHo build" '( cd "${dir}" && ${SUDO} make -s PARI_INPUT="-I${PARI_INC}" )'
   ${SUDO} test -f "${dir}/print_ranks.so" || die "KhoHo build produced no print_ranks.so."
 
   # The GP layer must load with DStore pre-seeded (so KhoHo_gvars' load-time reset_all() does not

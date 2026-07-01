@@ -68,6 +68,7 @@ DEFAULT_SMOKE = "scripts/bench_grid_floer.py --knots 3_1 --sizes 5"
 
 SSH_TARGET = ""    # the user@host spec, kept for display in messages
 _CLIENT = None     # the single authenticated paramiko connection, opened in connect()
+VERBOSE = False    # --debug/-v: echo each command and stream its output live (else quiet-capture)
 
 # capture() mirrors the (returncode, stdout, stderr) shape callers relied on before.
 Result = namedtuple("Result", "returncode stdout stderr")
@@ -100,19 +101,31 @@ def connect(host_spec: str) -> "paramiko.SSHClient":
     return client
 
 
-def run(cmd: str) -> None:
-    """Run a Proxmox-host command over the shared connection, streaming output live;
-    exit on nonzero status (no silent fallbacks)."""
-    print(f"$ {cmd}")
+def run(cmd: str, *, stream: bool = False) -> None:
+    """Run a Proxmox-host command over the shared connection; exit on nonzero status (no silent
+    fallbacks). Quiet by default: output is captured and shown only if the command fails, so a
+    normal run stays readable. --debug (VERBOSE) echoes the command and streams live; stream=True
+    streams without the echo (for the steps whose live progress is the payoff)."""
+    live = VERBOSE or stream
+    if VERBOSE:
+        print(f"$ {cmd}")
     chan = _CLIENT.get_transport().open_session()
-    chan.set_combine_stderr(True)
+    chan.set_combine_stderr(True)   # one stream to drain -> no stdout/stderr deadlock
     chan.exec_command(cmd)
-    stdout = chan.makefile("r")
-    for line in iter(stdout.readline, ""):
-        sys.stdout.write(line)
-        sys.stdout.flush()
+    out = chan.makefile("r")
+    captured = ""
+    if live:
+        for line in iter(out.readline, ""):
+            sys.stdout.write(line)
+            sys.stdout.flush()
+    else:
+        captured = out.read()       # drain fully before recv_exit_status
     rc = chan.recv_exit_status()
     if rc != 0:
+        if not live and captured:   # fail loud: surface what the failed command said
+            print(f"$ {cmd}")
+            sys.stdout.write(captured)
+            sys.stdout.flush()
         sys.exit(f"command failed (exit {rc}) on {SSH_TARGET}: {cmd}")
 
 
@@ -130,29 +143,40 @@ def container_exists(ctid: int) -> bool:
     return capture(f"pct status {ctid}").returncode == 0
 
 
-def exec_in(ctid: int, script: str) -> None:
-    """Run a bash script inside the container, fail-loud (set -euo pipefail)."""
+def exec_in(ctid: int, script: str, *, stream: bool = False) -> None:
+    """Run a bash script inside the container, fail-loud (set -euo pipefail). Quiet by default;
+    stream=True (or --debug) shows its output live -- used for the steps whose progress is the
+    payoff (the oracle build/smoke and the final smoke test)."""
     body = "set -euo pipefail\n" + script
-    run(f"pct exec {ctid} -- bash -lc {shlex.quote(body)}")
+    run(f"pct exec {ctid} -- bash -lc {shlex.quote(body)}", stream=stream)
 
 
 def exec_in_stdin(ctid: int, cmd: str, stdin_data: str) -> None:
-    """Run an in-container command, feeding stdin_data to it over the channel's stdin so a
-    secret never lands on a command line or in the printed log (same care as the node
-    password). Fail loud on nonzero exit."""
+    """Run an in-container command, feeding stdin_data over the channel's stdin so a secret never
+    lands on a command line or in the printed log (same care as the node password). Quiet by
+    default; fail loud on nonzero exit, dumping captured output only then."""
     full = f"pct exec {ctid} -- {cmd}"
-    print(f"$ {full}  (stdin withheld)")
+    if VERBOSE:
+        print(f"$ {full}  (stdin withheld)")
     chan = _CLIENT.get_transport().open_session()
     chan.set_combine_stderr(True)
     chan.exec_command(full)
     chan.sendall(stdin_data.encode())
     chan.shutdown_write()
     out = chan.makefile("r")
-    for line in iter(out.readline, ""):
-        sys.stdout.write(line)
-        sys.stdout.flush()
+    captured = ""
+    if VERBOSE:
+        for line in iter(out.readline, ""):
+            sys.stdout.write(line)
+            sys.stdout.flush()
+    else:
+        captured = out.read()
     rc = chan.recv_exit_status()
     if rc != 0:
+        if not VERBOSE:
+            print(f"$ {full}  (stdin withheld)")
+            sys.stdout.write(captured)
+            sys.stdout.flush()
         sys.exit(f"command failed (exit {rc}) on {SSH_TARGET}: {full}")
 
 
@@ -164,7 +188,8 @@ def set_install_service_policy(ctid: int) -> None:
     upgrade. We start every service we need explicitly afterward, with verification, and a
     direct systemctl call ignores policy-rc.d -- so this removes a half-managed path we do
     not want, never a working one."""
-    print("[*] Suppressing apt service auto-start (policy-rc.d 101); services started explicitly below.")
+    if VERBOSE:
+        print("[*] Suppressing apt service auto-start (policy-rc.d 101); services started explicitly below.")
     exec_in(ctid,
             "printf '#!/bin/sh\\nexit 101\\n' > /usr/sbin/policy-rc.d\n"
             "chmod 0755 /usr/sbin/policy-rc.d\n"
@@ -196,7 +221,6 @@ def generate_keypair(comment: str) -> tuple[str, str]:
 def install_authorized_key(ctid: int, args, public_line: str) -> None:
     """Install the provisioning public key into the login's authorized_keys (key auth, in
     addition to the password). The public line is not secret; its postcondition is asserted."""
-    print(f"  installing the provisioning SSH key for {args.ssh_user!r} (key auth)...")
     user = shlex.quote(args.ssh_user)
     key_q = shlex.quote(public_line)
     exec_in(ctid,
@@ -210,6 +234,7 @@ def install_authorized_key(ctid: int, args, public_line: str) -> None:
             # postcondition: the key really landed (grep -F exits nonzero -> set -e fails loud)
             f'grep -qF {key_q} "$home/.ssh/authorized_keys"\n'
             'echo "verified: authorized_keys installed for $user"\n')
+    print(f"  provisioning SSH key installed for {args.ssh_user!r} (key auth).")
 
 
 def project_name(repo_url: str) -> str:
@@ -271,6 +296,8 @@ def create_container(args) -> None:
         f"--rootfs {rootfs} --net0 {shlex.quote(net)}{dns} "
         f"--unprivileged 1 --onboot 0 --tags {shlex.quote(args.tags)} --start 1"
     )
+    print(f"  created: CT {args.ctid} ({args.hostname}), {args.rootfs_size} GiB rootfs on "
+          f"{args.rootfs_storage}, {args.cores} cores / {args.memory} MiB.")
 
 
 def wait_for_network(ctid: int) -> None:
@@ -278,6 +305,7 @@ def wait_for_network(ctid: int) -> None:
     exec_in(ctid, 'for i in $(seq 1 30); do '
                   'getent hosts github.com >/dev/null 2>&1 && exit 0; sleep 2; done; '
                   'echo "no network in container after 60s" >&2; exit 1')
+    print("  network up.")
 
 
 def install_repo(ctid: int, args, name: str) -> None:
@@ -308,7 +336,6 @@ def verify_install(ctid: int, args, name: str) -> None:
     optional smoke test, three steps later). So prove the package imports and that the
     installed metadata defines every requested extra; pip exiting 0 with the extra
     present implies its dependencies resolved and installed."""
-    print("  verifying the install (package import + requested extras defined)...")
     base = f"/opt/{name}"
     requested = [e.strip() for e in args.extras.split(",") if e.strip()]
     py = "\n".join([
@@ -325,6 +352,7 @@ def verify_install(ctid: int, args, name: str) -> None:
         "print('install verified: package imports; extras defined:', ', '.join(requested) or '(none requested)')",
     ])
     exec_in(ctid, f"{base}/venv/bin/python - <<'PY'\n{py}\nPY\n")
+    print(f"  repo cloned into venv; package imports, extras verified: {', '.join(requested) or '(none)'}.")
 
 
 def install_oracles(ctid: int, args, name: str) -> None:
@@ -337,13 +365,15 @@ def install_oracles(ctid: int, args, name: str) -> None:
     print("[5/9] Installing comparison oracles (all engines + SageMath) via the in-repo script...")
     base = f"/opt/{name}"
     script = f"{base}/src/scripts/install_oracles.sh"
+    debug_env = "DEBUG=1 " if VERBOSE else ""
     exec_in(ctid,
             f"test -f {shlex.quote(script)} || {{ echo 'oracle installer missing at {script}' >&2; exit 1; }}\n"
-            f"PIP={shlex.quote(base + '/venv/bin/pip')} "
+            f"{debug_env}PIP={shlex.quote(base + '/venv/bin/pip')} "
             "PIP_INSTALL_FLAGS='' "
             f"PY={shlex.quote(base + '/venv/bin/python')} "
             "INSTALL_SAGE=1 ORACLE_HOME=/opt/oracles BIN_DIR=/usr/local/bin "
-            f"bash {shlex.quote(script)}\n")
+            f"bash {shlex.quote(script)}\n",
+            stream=True)
     verify_oracles(ctid, args, name)
 
 
@@ -352,7 +382,6 @@ def verify_oracles(ctid: int, args, name: str) -> None:
     python oracles, a PATH wrapper for the five built ones, plus sage -- so a broken install
     fails here rather than silently in a later comparison run. Independent of adapters.py so it
     holds even before the run adapters are wired."""
-    print("  verifying every oracle is discoverable (imports + PATH wrappers)...")
     base = f"/opt/{name}"
     exec_in(ctid,
             f"py={shlex.quote(base + '/venv/bin/python')}\n"
@@ -367,6 +396,7 @@ def verify_oracles(ctid: int, args, name: str) -> None:
             "done\n"
             '[ "$fail" -eq 0 ] || { echo "oracle verification FAILED" >&2; exit 1; }\n'
             'echo "   oracle verification: all present"\n')
+    print("  verified: all oracles discoverable (4 imports + 6 on PATH, incl. sage).")
 
 
 def setup_ssh(ctid: int, args, name: str, password: str, public_line: str) -> None:
@@ -390,6 +420,7 @@ def setup_ssh(ctid: int, args, name: str, password: str, public_line: str) -> No
             "systemctl is-active --quiet ssh\n"
             "sshd -T 2>/dev/null | grep -i '^passwordauthentication yes'\n"
             "echo 'verified: sshd is active with password auth effective'\n")
+    print(f"  sshd active; password + key auth enabled for {args.ssh_user!r}.")
     # set the password over stdin so it never appears on a command line or in the log
     exec_in_stdin(ctid, "chpasswd", f"{args.ssh_user}:{password}\n")
     install_authorized_key(ctid, args, public_line)
@@ -409,6 +440,7 @@ def setup_mdns(ctid: int, mdns_name: str) -> None:
             "avahi-daemon --check\n"
             f"grep -x 'host-name={mdns_name}' /etc/avahi/avahi-daemon.conf\n"
             "echo 'verified: avahi-daemon is active and advertising the host-name above'\n")
+    print(f"  advertising {mdns_name}.local via Avahi.")
 
 
 def smoke_test(ctid: int, args, name: str) -> None:
@@ -417,7 +449,7 @@ def smoke_test(ctid: int, args, name: str) -> None:
         return
     print(f"[8/9] Smoke test: {args.smoke}")
     base = f"/opt/{name}"
-    exec_in(ctid, f"cd {base}/src && {base}/venv/bin/python {args.smoke}")
+    exec_in(ctid, f"cd {base}/src && {base}/venv/bin/python {args.smoke}", stream=True)
 
 
 def container_ip(ctid: int) -> str:
@@ -544,10 +576,15 @@ def main() -> None:
                         help="skip installing the comparison oracles (SageMath, KnotJob, JavaKh, "
                         "kht++, knotkit, KhoHo, and the pip oracles regina/khoca/snappy); the box "
                         "still runs the native suite")
+    parser.add_argument("--debug", "-v", action="store_true",
+                        help="verbose: echo every remote command and stream all output live "
+                        "(default: quiet, showing step progress, warnings, and full output only "
+                        "on failure)")
     args = parser.parse_args()
 
-    global SSH_TARGET, _CLIENT
+    global SSH_TARGET, _CLIENT, VERBOSE
     SSH_TARGET = args.host
+    VERBOSE = args.debug
     _CLIENT = connect(args.host)
     try:
         name = project_name(args.repo)
