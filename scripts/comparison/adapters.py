@@ -437,6 +437,106 @@ def snappyRun(knot, reps):
         agree="oracle")}
 
 
+# ---- shared classical-polynomial normalization (single-variable Laurent) -------------------
+
+def _splitLaurentTerms(text):
+    """Split a single-variable Laurent polynomial into signed terms, treating ``+``/``-`` as term
+    separators except when they are an exponent sign (immediately after ``^``)."""
+    text = text.replace(" ", "")
+    terms, current = [], ""
+    for i, ch in enumerate(text):
+        if ch in "+-" and i > 0 and text[i - 1] != "^":
+            terms.append(current)
+            current = ch
+        else:
+            current += ch
+    if current:
+        terms.append(current)
+    return terms
+
+
+def _parseLaurentTerm(term, var):
+    """A single ``[sign][coeff]var^exp`` (or a bare constant) -> (exponent, coefficient)."""
+    term = term.replace("*", "")
+    sign = 1
+    if term[:1] == "+":
+        term = term[1:]
+    elif term[:1] == "-":
+        sign, term = -1, term[1:]
+    if var in term:
+        left, _, right = term.partition(var)
+        coeff = int(left) if left else 1
+        exponent = int(right[1:]) if right.startswith("^") else 1
+        return exponent, sign * coeff
+    return 0, sign * int(term)
+
+
+def _parseLaurent(text, var):
+    """Single-variable Laurent polynomial (e.g. regina's Jones in x) -> {exponent: coefficient},
+    zero coefficients dropped. Handles signs, negative exponents, an implicit exponent 1, and a
+    bare constant term."""
+    poly: dict = {}
+    for term in _splitLaurentTerms(text):
+        if not term or term in "+-":
+            continue
+        exponent, coeff = _parseLaurentTerm(term, var)
+        poly[exponent] = poly.get(exponent, 0) + coeff
+    return {e: c for e, c in poly.items() if c}
+
+
+def _negateExponents(poly):
+    """The t <-> t^-1 Jones convention flip: {e: c} -> {-e: c}."""
+    return {-e: c for e, c in poly.items()}
+
+
+def _nativeJonesDict(knot):
+    """Native Jones (low, coeffs ascending in t) -> {t-exponent: coefficient}."""
+    low, coeffs = _nativeValue(knot, "jones_polynomial")
+    return {low + i: c for i, c in enumerate(coeffs) if c}
+
+
+def _agreeJones(knot, oracleJones):
+    """Verdict for a {t-exponent: coeff} Jones against native, up to the t <-> t^-1 convention."""
+    return _verdict(oracleJones, _nativeJonesDict(knot), _negateExponents)
+
+
+# ---- regina (Jones, HOMFLY) ----------------------------------------------------------------
+
+def reginaAvailable():
+    return _probeImport("regina", "Regina")
+
+
+def reginaRun(knot, reps):
+    """regina's Jones (a Laurent poly in x = t^(1/2)) mapped to native's t by halving exponents,
+    judged up to the t <-> t^-1 convention (regina matches native directly). HOMFLY is reported as
+    oracle-only data -- native computes no HOMFLY. regina reads the PD via Link.fromPD."""
+    import regina
+    try:
+        pd = pdAsList(knot)
+
+        def call():
+            link = regina.Link.fromPD(pd)
+            return str(link.jones()), str(link.homfly())
+
+        (jonesText, homflyText), seconds = _best(call, reps)
+        xPoly = _parseLaurent(jonesText, "x")
+        if not xPoly or any(e % 2 for e in xPoly):
+            raise ValueError("unexpected regina Jones (x = t^1/2): %r" % jonesText)
+        jones = {e // 2: c for e, c in xPoly.items()}
+    except Exception as error:
+        miss = Measurement(value=f"error: {type(error).__name__}", seconds=None,
+                           note=str(error)[:80], agree="n/a")
+        return {"jones_polynomial": miss, "homfly_polynomial": miss}
+    return {
+        "jones_polynomial": Measurement(
+            value=_shortValue(jones), seconds=seconds, note="regina jones(); x = t^1/2",
+            agree=_agreeJones(knot, jones)),
+        "homfly_polynomial": Measurement(
+            value=homflyText.strip()[:40] or "?", seconds=None,
+            note="regina homfly(); oracle-only", agree="oracle"),
+    }
+
+
 # ---- probe-only oracles (timed calls land once a host has them) ---------------------------
 
 def _probeImport(moduleName, label):
@@ -484,6 +584,7 @@ class Oracle:
 ORACLES = [
     Oracle("kfh", kfhAvailable, kfhRun),
     Oracle("snappy", snappyAvailable, snappyRun),
+    Oracle("regina", reginaAvailable, reginaRun),
     Oracle("knotjob", knotjobAvailable, knotjobRun),
     Oracle("javakh", javakhAvailable, javakhRun),
     Oracle("khoho", khohoAvailable, khohoRun),

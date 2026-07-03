@@ -155,6 +155,34 @@ def test_khoho_rational_khovanov_matches_native_up_to_mirror():
         assert adapters._mirrorKhovanov(groups) == NATIVE_RATIONAL[name], name
 
 
+# regina jones() output (Laurent in x = t^1/2) on Tetradrome PD, captured on CT 250.
+REGINA_JONES = {
+    "3_1": "-x^8 + x^6 + x^2",
+    "4_1": "x^4 - x^2 + 1 - x^-2 + x^-4",
+}
+# Native Jones as {t-exponent: coeff}: 3_1 from invariants.compute (1,(1,0,1,-1)); 4_1 the
+# symmetric figure-eight value (amphichiral, convention-independent).
+NATIVE_JONES = {
+    "3_1": {1: 1, 3: 1, 4: -1},
+    "4_1": {-2: 1, -1: -1, 0: 1, 1: -1, 2: 1},
+}
+
+
+def test_parse_laurent_single_variable_signs_and_negative_exponents():
+    assert adapters._parseLaurent("-x^8 + x^6 + x^2", "x") == {8: -1, 6: 1, 2: 1}
+    assert adapters._parseLaurent("x^4 - x^2 + 1 - x^-2 + x^-4", "x") == {
+        4: 1, 2: -1, 0: 1, -2: -1, -4: 1}
+    assert adapters._parseLaurent("2 x^3 - x", "x") == {3: 2, 1: -1}
+
+
+def test_regina_jones_matches_native_after_halving():
+    for name, native in NATIVE_JONES.items():
+        xPoly = adapters._parseLaurent(REGINA_JONES[name], "x")
+        assert all(e % 2 == 0 for e in xPoly), name
+        jones = {e // 2: c for e, c in xPoly.items()}
+        assert jones == native, name
+
+
 if __name__ == "__main__":
     import traceback
     tests = [value for name, value in sorted(globals().items())
