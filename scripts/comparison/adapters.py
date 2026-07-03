@@ -309,6 +309,37 @@ def knotjobRun(knot, reps):
     }
 
 
+# ---- JavaKh (rational Khovanov) ------------------------------------------------------------
+
+def javakhAvailable():
+    return _probeBinary("javakh", "JavaKh")
+
+
+def javakhRun(knot, reps):
+    """One ``javakh -Q`` call (bracket PD on stdin) -> rational Khovanov as a quoted
+    ``q^a*t^b`` string. JavaKh reads Tetradrome PD in the mirror convention, judged up to mirror."""
+    import subprocess
+    try:
+        bracket = _bracketPD(knot)
+
+        def call():
+            proc = subprocess.run(["javakh", "-Q"], input=bracket + "\n",
+                                  check=True, capture_output=True, text=True)
+            return proc.stdout
+
+        out, seconds = _best(call, reps)
+        groups = _parseKhovanovPoly(out.replace('"', ""))
+        if not groups:
+            raise ValueError("no parseable Khovanov terms in javakh output: %r" % out[:80])
+    except Exception as error:
+        return {"rational_khovanov_homology": Measurement(
+            value=f"error: {type(error).__name__}", seconds=None, note=str(error)[:80],
+            agree="n/a")}
+    return {"rational_khovanov_homology": Measurement(
+        value=f"total_rank={sum(groups.values())}", seconds=seconds, note="javakh -Q",
+        agree=_agreeGroups(knot, "rational_khovanov_homology", groups))}
+
+
 # ---- probe-only oracles (timed calls land once a host has them) ---------------------------
 
 def _probeImport(moduleName, label):
@@ -357,6 +388,7 @@ ORACLES = [
     Oracle("kfh", kfhAvailable, kfhRun),
     Oracle("snappy", snappyAvailable, None),
     Oracle("knotjob", knotjobAvailable, knotjobRun),
+    Oracle("javakh", javakhAvailable, javakhRun),
     Oracle("sage", sageAvailable, None),
     Oracle("khoca", khocaAvailable, None),
 ]

@@ -109,6 +109,20 @@ def test_field_after_colon():
     assert adapters._fieldAfterColon(text, "not present") is None
 
 
+# JavaKh -Q output (quoted q^a*t^b string) on Tetradrome PD, captured on CT 250.
+JAVAKH = {
+    "3_1": '"q^1*t^0 + q^3*t^0 + q^5*t^2 + q^9*t^3 "',
+    "4_1": '"q^-5*t^-2 + q^-1*t^-1 + q^-1*t^0 + q^1*t^0 + q^1*t^1 + q^5*t^2 "',
+    "5_1": '"q^3*t^0 + q^5*t^0 + q^7*t^2 + q^11*t^3 + q^11*t^4 + q^15*t^5 "',
+}
+
+
+def test_javakh_rational_khovanov_matches_native_up_to_mirror():
+    for name, native in NATIVE_RATIONAL.items():
+        groups = adapters._parseKhovanovPoly(JAVAKH[name].replace('"', ""))
+        assert adapters._mirrorKhovanov(groups) == native, name
+
+
 if __name__ == "__main__":
     import traceback
     tests = [value for name, value in sorted(globals().items())
