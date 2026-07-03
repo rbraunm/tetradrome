@@ -18,6 +18,7 @@ Timing is best-of-``reps`` wall seconds (the floor is the least noisy estimate o
 """
 from __future__ import annotations
 
+import ast
 import dataclasses
 import importlib
 import re
@@ -537,6 +538,142 @@ def reginaRun(knot, reps):
     }
 
 
+# ---- SageMath (Jones, Alexander, determinant, signature, Khovanov) --------------------------
+#
+# Sage runs once per knot and prints structured data (coefficient dicts, invariant-factor tuples,
+# ints), so there is nothing fragile to parse. Sage reads Tetradrome PD in native's own
+# convention: Khovanov and determinant match directly, Alexander matches after re-canonicalizing
+# (it is defined only up to a unit +/- t^k), while Jones and signature come back in the opposite
+# convention (t <-> t^-1 for Jones, a sign flip for signature) and so read as "mirror".
+
+_SAGE_SCRIPT = """L = Link(%(pd)s)
+J = L.jones_polynomial()
+print("JONES", {int(e): int(c) for c, e in J.coefficients()})
+A = L.alexander_polynomial()
+print("ALEXANDER", {int(k): int(v) for k, v in A.dict().items()})
+print("SIGNATURE", int(L.signature()))
+print("DETERMINANT", int(L.determinant()))
+K = L.khovanov_homology()
+kh = {}
+for q in K:
+    for h in K[q]:
+        inv = tuple(int(x) for x in K[q][h].invariants())
+        if inv:
+            kh[(int(h), int(q))] = inv
+print("KHOVANOV", kh)
+"""
+
+_SAGE_TAGS = ("JONES", "ALEXANDER", "SIGNATURE", "DETERMINANT", "KHOVANOV")
+
+
+def _parseSageFields(text):
+    """Pull the tagged structured lines the sage script prints into {tag: value}."""
+    fields = {}
+    for line in text.splitlines():
+        for tag in _SAGE_TAGS:
+            if line.startswith(tag + " "):
+                fields[tag] = ast.literal_eval(line[len(tag) + 1:])
+    return fields
+
+
+def _sageKhovanov(cells):
+    """{(h, q): invariant-factor tuple} (0 = a Z summand) -> (free ranks, order-2 torsion counts);
+    even-order factors are the ones that survive to F2."""
+    free, torsion = {}, {}
+    for (h, q), invariants in cells.items():
+        rank = sum(1 for x in invariants if x == 0)
+        even = sum(1 for x in invariants if x != 0 and x % 2 == 0)
+        if rank:
+            free[(h, q)] = rank
+        if even:
+            torsion[(h, q)] = even
+    return free, torsion
+
+
+def _nativeAlexanderDict(knot):
+    """Native Alexander (ascending coeffs, lowest term at t^0) -> {exponent: coefficient}."""
+    coeffs = _nativeValue(knot, "alexander_polynomial")
+    return {i: c for i, c in enumerate(coeffs) if c}
+
+
+def _canonicalAlexander(poly):
+    """Put a Laurent Alexander polynomial in native's canonical form: shift the lowest nonzero term
+    to t^0, then flip the sign so the constant term is positive (Alexander is defined up to a unit
+    +/- t^k)."""
+    if not poly:
+        return {}
+    low = min(poly)
+    shifted = {e - low: c for e, c in poly.items()}
+    if shifted[min(shifted)] < 0:
+        shifted = {e: -c for e, c in shifted.items()}
+    return shifted
+
+
+def _agreeAlexander(knot, oracleAlexander):
+    """Verdict for an Alexander polynomial against native, up to the +/- t^k unit."""
+    return "pass" if _canonicalAlexander(oracleAlexander) == _nativeAlexanderDict(knot) else "mismatch"
+
+
+def sageRun(knot, reps):
+    """One sage run per knot -> Jones, Alexander, determinant, signature, and rational + F2
+    Khovanov (F2 via UCT from the invariant factors). Sage shares native's PD convention, so
+    Khovanov and determinant are direct, Alexander is up to canonicalization, and Jones/signature
+    read as mirror (opposite variable / sign convention). One call carries the time."""
+    import os
+    import subprocess
+    import tempfile
+    names = ("jones_polynomial", "alexander_polynomial", "determinant", "signature",
+             "rational_khovanov_homology", "khovanov_homology")
+    try:
+        script = _SAGE_SCRIPT % {"pd": repr(pdAsList(knot))}
+        with tempfile.TemporaryDirectory() as work:
+            path = os.path.join(work, "compute.sage")
+            with open(path, "w") as handle:
+                handle.write(script)
+
+            def call():
+                proc = subprocess.run(["sage", path], check=True, capture_output=True, text=True)
+                return proc.stdout
+
+            out, seconds = _best(call, reps)
+        fields = _parseSageFields(out)
+        missing = [tag for tag in _SAGE_TAGS if tag not in fields]
+        if missing:
+            raise ValueError("sage output missing %s" % ", ".join(missing))
+        jones = {int(e): int(c) for e, c in fields["JONES"].items()}
+        alexander = {int(e): int(c) for e, c in fields["ALEXANDER"].items()}
+        signature = int(fields["SIGNATURE"])
+        determinant = int(fields["DETERMINANT"])
+        free, torsion = _sageKhovanov(fields["KHOVANOV"])
+        f2 = _f2FromIntegral(free, torsion)
+    except Exception as error:
+        miss = Measurement(value=f"error: {type(error).__name__}", seconds=None,
+                           note=str(error)[:80], agree="n/a")
+        return {name: miss for name in names}
+    return {
+        "jones_polynomial": Measurement(
+            value=_shortValue(jones), seconds=seconds, note="sage jones_polynomial()",
+            agree=_agreeJones(knot, jones)),
+        "alexander_polynomial": Measurement(
+            value=_shortValue(alexander), seconds=None,
+            note="sage alexander_polynomial(); same run", agree=_agreeAlexander(knot, alexander)),
+        "determinant": Measurement(
+            value=str(determinant), seconds=None, note="same run",
+            agree=_agreeScalar(knot, "determinant", determinant, mirror=lambda v: v)),
+        "signature": Measurement(
+            value=str(signature), seconds=None, note="same run",
+            agree=_agreeScalar(knot, "signature", signature)),
+        "rational_khovanov_homology": Measurement(
+            value=f"total_rank={sum(free.values())}", seconds=None,
+            note="sage khovanov_homology(); same run",
+            agree=_agreeGroups(knot, "rational_khovanov_homology", free)),
+        "khovanov_homology": Measurement(
+            value=f"total_rank={sum(f2.values())}", seconds=None,
+            note="F2 via UCT from invariant factors; same run",
+            agree=_agreeGroups(knot, "khovanov_homology", f2)),
+    }
+
+
 # ---- probe-only oracles (timed calls land once a host has them) ---------------------------
 
 def _probeImport(moduleName, label):
@@ -588,6 +725,6 @@ ORACLES = [
     Oracle("knotjob", knotjobAvailable, knotjobRun),
     Oracle("javakh", javakhAvailable, javakhRun),
     Oracle("khoho", khohoAvailable, khohoRun),
-    Oracle("sage", sageAvailable, None),
+    Oracle("sage", sageAvailable, sageRun),
     Oracle("khoca", khocaAvailable, None),
 ]

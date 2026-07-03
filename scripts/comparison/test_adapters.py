@@ -183,6 +183,67 @@ def test_regina_jones_matches_native_after_halving():
         assert jones == native, name
 
 
+# Sage structured output (what sageRun's script prints) for 3_1 on Tetradrome PD, built from the
+# captured sage values: Jones in the t <-> t^-1 (negative-power) convention, Khovanov as
+# invariant-factor tuples (0 = a Z summand, 2 = a Z/2 summand).
+SAGE_3_1_OUTPUT = (
+    "JONES {-1: 1, -3: 1, -4: -1}\n"
+    "ALEXANDER {-1: 1, 0: -1, 1: 1}\n"
+    "SIGNATURE 2\n"
+    "DETERMINANT 3\n"
+    "KHOVANOV {(-3, -9): (0,), (-2, -5): (0,), (0, -3): (0,), (0, -1): (0,), (-2, -7): (2,)}\n"
+)
+# Native Alexander as {exponent: coeff}: canonical form (lowest term at t^0, positive constant).
+NATIVE_ALEXANDER = {"3_1": {0: 1, 1: -1, 2: 1}}
+NATIVE_SIGNATURE = {"3_1": -2}
+
+
+def test_parse_sage_fields():
+    fields = adapters._parseSageFields(SAGE_3_1_OUTPUT)
+    assert fields["JONES"] == {-1: 1, -3: 1, -4: -1}
+    assert fields["SIGNATURE"] == 2
+    assert fields["DETERMINANT"] == 3
+    assert fields["KHOVANOV"][(-2, -7)] == (2,)
+
+
+def test_sage_khovanov_splits_free_and_torsion():
+    fields = adapters._parseSageFields(SAGE_3_1_OUTPUT)
+    free, torsion = adapters._sageKhovanov(fields["KHOVANOV"])
+    assert free == {(-3, -9): 1, (-2, -5): 1, (0, -3): 1, (0, -1): 1}
+    assert torsion == {(-2, -7): 1}
+
+
+def test_sage_khovanov_invariant_factors_free_rank_and_even_torsion():
+    # (0,0) is Z^2 (free rank 2); (2,0) is Z + Z/2; (3,) is Z/3 (odd -> no F2 torsion).
+    free, torsion = adapters._sageKhovanov({(0, 0): (0, 0), (1, 2): (2, 0), (2, 4): (3,)})
+    assert free == {(0, 0): 2, (1, 2): 1}
+    assert torsion == {(1, 2): 1}
+
+
+def test_sage_rational_and_f2_khovanov_match_native_directly():
+    fields = adapters._parseSageFields(SAGE_3_1_OUTPUT)
+    free, torsion = adapters._sageKhovanov(fields["KHOVANOV"])
+    assert free == NATIVE_RATIONAL["3_1"]                     # identity: sage shares the convention
+    assert adapters._f2FromIntegral(free, torsion) == NATIVE_F2["3_1"]
+
+
+def test_sage_jones_matches_native_after_negation():
+    fields = adapters._parseSageFields(SAGE_3_1_OUTPUT)
+    assert adapters._negateExponents(fields["JONES"]) == NATIVE_JONES["3_1"]
+
+
+def test_canonical_alexander_matches_native_up_to_unit():
+    fields = adapters._parseSageFields(SAGE_3_1_OUTPUT)
+    assert adapters._canonicalAlexander(fields["ALEXANDER"]) == NATIVE_ALEXANDER["3_1"]
+    # a shifted, sign-flipped copy (same polynomial up to +/- t^k) canonicalizes identically
+    assert adapters._canonicalAlexander({-3: -1, -2: 1, -1: -1}) == NATIVE_ALEXANDER["3_1"]
+
+
+def test_sage_signature_matches_native_after_negation():
+    fields = adapters._parseSageFields(SAGE_3_1_OUTPUT)
+    assert -fields["SIGNATURE"] == NATIVE_SIGNATURE["3_1"]
+
+
 if __name__ == "__main__":
     import traceback
     tests = [value for name, value in sorted(globals().items())
