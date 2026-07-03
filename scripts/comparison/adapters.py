@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import dataclasses
 import importlib
+import re
 import shutil
 import time
 
@@ -162,6 +163,152 @@ def kfhRun(knot, reps):
     return results
 
 
+# ---- shared oracle normalization: Khovanov polynomials, mirror, agreement ------------------
+#
+# Several oracles (KnotJob, JavaKh, KhoHo, ...) emit Khovanov homology as a Laurent polynomial in
+# t (homological) and q (quantum). We parse those to {(h, q): rank} -- the shape
+# ``invariants.compute`` returns natively -- then judge agreement up to the per-oracle mirror the
+# design pass fixed: a knot read with the opposite PD/orientation convention is the mirror knot,
+# whose Khovanov is (h, q) -> (-h, -q) and whose Rasmussen s negates. So a verdict is "pass"
+# (equal outright, e.g. an amphichiral knot), "mirror" (equal after the transform -- the expected
+# result for a mirror-convention oracle), or "mismatch" (a real disagreement).
+
+def _bracketPD(knot):
+    """Tetradrome's PD as the ``PD[X[...],...]`` bracket string KnotJob / JavaKh read."""
+    return "PD[" + ",".join("X[%d,%d,%d,%d]" % tuple(crossing) for crossing in knot.pd_code) + "]"
+
+
+def _monomial(term):
+    """One ``c t^h q^q`` monomial (factors ``*``-joined or juxtaposed, exponents optional and
+    possibly negative) -> ((h, q), coefficient)."""
+    term = term.replace("*", "").strip()
+    leading = re.match(r"[+-]?\d+", term)
+    coefficient = int(leading.group(0)) if leading else 1
+    tPart = re.search(r"t(\^-?\d+)?", term)
+    h = 0 if tPart is None else (int(tPart.group(1)[1:]) if tPart.group(1) else 1)
+    qPart = re.search(r"q(\^-?\d+)?", term)
+    q = 0 if qPart is None else (int(qPart.group(1)[1:]) if qPart.group(1) else 1)
+    return (h, q), coefficient
+
+
+def _parseKhovanovPoly(text):
+    """Sum of Khovanov monomials in t, q -> {(h, q): rank} (zeros dropped). Handles ``*`` or
+    juxtaposed factors, negative exponents, and KhoHo's parenthesized (h=0) groups."""
+    text = text.replace("(", "").replace(")", "").replace(" ", "")
+    groups: dict = {}
+    for term in text.split("+"):
+        if not term:
+            continue
+        key, coefficient = _monomial(term)
+        groups[key] = groups.get(key, 0) + coefficient
+    return {key: c for key, c in groups.items() if c}
+
+
+def _mirrorKhovanov(groups):
+    """Khovanov of the mirror knot: (h, q) -> (-h, -q)."""
+    return {(-h, -q): rank for (h, q), rank in groups.items()}
+
+
+def _f2FromIntegral(free, torsion):
+    """Khovanov dimensions over F2 from the integral free ranks plus the order-2 torsion, by the
+    universal coefficient theorem: a Z/2 summand at (h, q) gives an F2 class at (h, q) and at
+    (h-1, q). Tetradrome's ``khovanov_homology`` is this F2 theory."""
+    f2 = dict(free)
+    for (h, q), count in torsion.items():
+        f2[(h, q)] = f2.get((h, q), 0) + count
+        f2[(h - 1, q)] = f2.get((h - 1, q), 0) + count
+    return {key: rank for key, rank in f2.items() if rank}
+
+
+def _verdict(oracleValue, nativeValue, mirror):
+    """``pass`` if equal, ``mirror`` if equal after applying ``mirror``, else ``mismatch``."""
+    if oracleValue == nativeValue:
+        return "pass"
+    if mirror(oracleValue) == nativeValue:
+        return "mirror"
+    return "mismatch"
+
+
+def _nativeValue(knot, computeName):
+    from tetradrome import invariants
+    return invariants.compute(knot, computeName).value
+
+
+def _agreeGroups(knot, computeName, oracleGroups):
+    """Verdict for a {(h, q): rank} oracle value against native, up to the Khovanov mirror."""
+    return _verdict(oracleGroups, _nativeValue(knot, computeName), _mirrorKhovanov)
+
+
+def _agreeScalar(knot, computeName, oracleValue, mirror=lambda v: -v):
+    """Verdict for a scalar (e.g. Rasmussen s) against native; the mirror knot's value is
+    ``mirror(oracleValue)`` (negation for s)."""
+    return _verdict(oracleValue, _nativeValue(knot, computeName), mirror)
+
+
+def _fieldAfterColon(text, marker):
+    """Text after ``:`` on the first line containing ``marker``, or None."""
+    for line in text.splitlines():
+        if marker in line:
+            return line.split(":", 1)[1].strip()
+    return None
+
+
+# ---- KnotJob (rational + F2 Khovanov, Rasmussen s) -----------------------------------------
+
+def knotjobRun(knot, reps):
+    """One ``knotjob -kb0 -s0`` call (PD file in, results file out) yields rational Khovanov (the
+    integral free part), F2 Khovanov (that free part plus the order-2 torsion via UCT), and
+    Rasmussen s. KnotJob reads Tetradrome's PD in the mirror convention, so each is judged up to
+    mirror. The Khovanov call carries the measured time; the others come from the same call."""
+    import os
+    import subprocess
+    import tempfile
+    try:
+        bracket = _bracketPD(knot)
+        with tempfile.TemporaryDirectory() as work:
+            with open(os.path.join(work, "knot.txt"), "w") as handle:
+                handle.write(bracket + "\n")
+
+            def call():
+                subprocess.run(["knotjob", "knot.txt", "-kb0", "-s0"], cwd=work,
+                               check=True, capture_output=True, text=True)
+                out = os.path.join(work, "knot.txt_s0_kb0")
+                if not os.path.exists(out):
+                    raise RuntimeError("knotjob wrote no knot.txt_s0_kb0 output file")
+                with open(out) as handle:
+                    return handle.read()
+
+            text, seconds = _best(call, reps)
+
+        freeText = _fieldAfterColon(text, "Integral unreduced Khovanov Homology")
+        sText = _fieldAfterColon(text, "S-Invariant mod 0")
+        if freeText is None or sText is None:
+            raise ValueError("no Khovanov / s lines in knotjob output")
+        torsionText = _fieldAfterColon(text, "Torsion of order 2")
+        free = _parseKhovanovPoly(freeText)
+        torsion = _parseKhovanovPoly(torsionText) if torsionText else {}
+        f2 = _f2FromIntegral(free, torsion)
+        s = int(sText)
+    except Exception as error:
+        miss = Measurement(value=f"error: {type(error).__name__}", seconds=None,
+                           note=str(error)[:80], agree="n/a")
+        return {name: miss for name in
+                ("rational_khovanov_homology", "khovanov_homology", "rasmussen_s")}
+
+    return {
+        "rational_khovanov_homology": Measurement(
+            value=f"total_rank={sum(free.values())}", seconds=seconds, note="knotjob -kb0 -s0",
+            agree=_agreeGroups(knot, "rational_khovanov_homology", free)),
+        "khovanov_homology": Measurement(
+            value=f"total_rank={sum(f2.values())}", seconds=None,
+            note="F2 via UCT from integral + torsion; same call",
+            agree=_agreeGroups(knot, "khovanov_homology", f2)),
+        "rasmussen_s": Measurement(
+            value=str(s), seconds=None, note="same call",
+            agree=_agreeScalar(knot, "rasmussen_s", s)),
+    }
+
+
 # ---- probe-only oracles (timed calls land once a host has them) ---------------------------
 
 def _probeImport(moduleName, label):
@@ -209,7 +356,7 @@ class Oracle:
 ORACLES = [
     Oracle("kfh", kfhAvailable, kfhRun),
     Oracle("snappy", snappyAvailable, None),
-    Oracle("knotjob", knotjobAvailable, None),
+    Oracle("knotjob", knotjobAvailable, knotjobRun),
     Oracle("sage", sageAvailable, None),
     Oracle("khoca", khocaAvailable, None),
 ]
