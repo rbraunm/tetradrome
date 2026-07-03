@@ -408,6 +408,35 @@ def khohoRun(knot, reps):
         agree=_agreeGroups(knot, "rational_khovanov_homology", groups))}
 
 
+# ---- SnapPy (hyperbolic volume) ------------------------------------------------------------
+
+def snappyRun(knot, reps):
+    """One SnapPy volume for a hyperbolic knot (by its KnotInfo name). Hyperbolic volume is not a
+    native invariant, so this is oracle-only data (no agreement verdict). Non-hyperbolic knots
+    (torus knots, etc.) report n/a rather than a degenerate number."""
+    import snappy
+    name = getattr(knot, "identity", None)
+    if not name:
+        return {"hyperbolic_volume": Measurement(
+            value="n/a", seconds=None, note="no KnotInfo name for SnapPy", agree="n/a")}
+    try:
+        def call():
+            manifold = snappy.Manifold(str(name))
+            solution = manifold.solution_type()
+            if solution != "all tetrahedra positively oriented":
+                raise ValueError("non-geometric solution: %s" % solution)
+            return float(manifold.volume())
+
+        volume, seconds = _best(call, reps)
+    except Exception as error:
+        return {"hyperbolic_volume": Measurement(
+            value="n/a", seconds=None,
+            note="not hyperbolic (%s)" % type(error).__name__, agree="n/a")}
+    return {"hyperbolic_volume": Measurement(
+        value=f"{volume:.10f}", seconds=seconds, note="snappy Manifold(name).volume()",
+        agree="oracle")}
+
+
 # ---- probe-only oracles (timed calls land once a host has them) ---------------------------
 
 def _probeImport(moduleName, label):
@@ -454,7 +483,7 @@ class Oracle:
 
 ORACLES = [
     Oracle("kfh", kfhAvailable, kfhRun),
-    Oracle("snappy", snappyAvailable, None),
+    Oracle("snappy", snappyAvailable, snappyRun),
     Oracle("knotjob", knotjobAvailable, knotjobRun),
     Oracle("javakh", javakhAvailable, javakhRun),
     Oracle("khoho", khohoAvailable, khohoRun),
