@@ -340,6 +340,74 @@ def javakhRun(knot, reps):
         agree=_agreeGroups(knot, "rational_khovanov_homology", groups))}
 
 
+# ---- KhoHo (rational Khovanov, (2,n) torus knots) ------------------------------------------
+
+def khohoAvailable():
+    return _probeBinary("khoho", "KhoHo")
+
+
+_TORUS_2N = re.compile(r"^(\d+)_1$")
+
+
+def _torusParams(identity):
+    """(2, n) for the (2, n) torus knot spelled ``n_1`` with n odd >= 3 (KhoHo's ``torus`` input);
+    None otherwise (a non-torus KhoHo input path is not wired yet -- Wave 2)."""
+    if not identity:
+        return None
+    match = _TORUS_2N.match(identity)
+    if not match:
+        return None
+    n = int(match.group(1))
+    return (2, n) if n >= 3 and n % 2 == 1 else None
+
+
+def _khohoPoly(text):
+    """KhoHo prints gp progress, then the Khovanov polynomial on the final line. Return the last
+    line that is polynomial-only (q, t, digits, exponents, +, *, parens, spaces) and mentions q."""
+    poly = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if "q" in stripped and re.fullmatch(r"[q t0-9\^\*\+\(\)\-]+", stripped):
+            poly = stripped
+    return poly
+
+
+def khohoRun(knot, reps):
+    """One ``KhPol_Q(torus(2,n))`` call via gp (KhoHo) for the (2,n) torus knots -> rational
+    Khovanov. KhoHo's ``torus(2,n)`` is the positive torus knot, the mirror of KnotInfo's n_1, so
+    it is judged up to mirror. Non-torus knots report n/a (no KhoHo input path wired yet)."""
+    params = _torusParams(getattr(knot, "identity", None))
+    if params is None:
+        return {"rational_khovanov_homology": Measurement(
+            value="n/a", seconds=None, note="KhoHo torus input; non-(2,n)-torus knot",
+            agree="n/a")}
+    import subprocess
+    m, n = params
+    try:
+        program = "print(KhPol_Q(torus(%d,%d)));\n" % (m, n)
+
+        def call():
+            proc = subprocess.run(["khoho"], input=program,
+                                  check=True, capture_output=True, text=True)
+            return proc.stdout
+
+        out, seconds = _best(call, reps)
+        polyText = _khohoPoly(out)
+        if polyText is None:
+            raise ValueError("no Khovanov polynomial line in khoho output")
+        groups = _parseKhovanovPoly(polyText)
+        if not groups:
+            raise ValueError("empty Khovanov polynomial from khoho: %r" % polyText)
+    except Exception as error:
+        return {"rational_khovanov_homology": Measurement(
+            value=f"error: {type(error).__name__}", seconds=None, note=str(error)[:80],
+            agree="n/a")}
+    return {"rational_khovanov_homology": Measurement(
+        value=f"total_rank={sum(groups.values())}", seconds=seconds,
+        note="KhPol_Q(torus(%d,%d))" % (m, n),
+        agree=_agreeGroups(knot, "rational_khovanov_homology", groups))}
+
+
 # ---- probe-only oracles (timed calls land once a host has them) ---------------------------
 
 def _probeImport(moduleName, label):
@@ -389,6 +457,7 @@ ORACLES = [
     Oracle("snappy", snappyAvailable, None),
     Oracle("knotjob", knotjobAvailable, knotjobRun),
     Oracle("javakh", javakhAvailable, javakhRun),
+    Oracle("khoho", khohoAvailable, khohoRun),
     Oracle("sage", sageAvailable, None),
     Oracle("khoca", khocaAvailable, None),
 ]

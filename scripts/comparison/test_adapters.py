@@ -123,6 +123,38 @@ def test_javakh_rational_khovanov_matches_native_up_to_mirror():
         assert adapters._mirrorKhovanov(groups) == native, name
 
 
+# KhoHo KhPol_Q(torus(2,n)) final polynomial line, captured on CT 250.
+KHOHO = {
+    "3_1": "q^9*t^3 + q^5*t^2 + (q^3 + q)",
+    "5_1": "q^15*t^5 + q^11*t^4 + q^11*t^3 + q^7*t^2 + (q^5 + q^3)",
+}
+
+
+def test_torus_params_only_odd_n_1():
+    assert adapters._torusParams("3_1") == (2, 3)
+    assert adapters._torusParams("5_1") == (2, 5)
+    assert adapters._torusParams("7_1") == (2, 7)
+    assert adapters._torusParams("4_1") is None      # amphichiral, not a torus knot
+    assert adapters._torusParams("6_1") is None      # even, a twist knot
+    assert adapters._torusParams("K11n34") is None
+    assert adapters._torusParams(None) is None
+
+
+def test_khoho_poly_extracts_final_polynomial_line():
+    sample = ("  ***   Warning: new stack size = 512000000 (488.281 Mbytes).\n"
+              "Computing Betti numbers ...\n"
+              "Secondary grading: 9. Reducing the chain complex ... done.\n"
+              "   ... done with computing Betti numbers.\n"
+              "q^9*t^3 + q^5*t^2 + (q^3 + q)\n")
+    assert adapters._khohoPoly(sample) == "q^9*t^3 + q^5*t^2 + (q^3 + q)"
+
+
+def test_khoho_rational_khovanov_matches_native_up_to_mirror():
+    for name in ("3_1", "5_1"):
+        groups = adapters._parseKhovanovPoly(KHOHO[name])
+        assert adapters._mirrorKhovanov(groups) == NATIVE_RATIONAL[name], name
+
+
 if __name__ == "__main__":
     import traceback
     tests = [value for name, value in sorted(globals().items())
