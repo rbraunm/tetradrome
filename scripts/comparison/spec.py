@@ -64,16 +64,16 @@ GROUPS = [
     ),
     Group(
         "knotjob",
-        "Khovanov-family homology -- vs KnotJob / JavaKh / KnotTheory`",
-        "KnotJob (Schutz, Java); JavaKh/knotkit; KnotTheory` (Bar-Natan, Mathematica)",
+        "Khovanov-family homology -- vs KnotJob / JavaKh / KnotTheory",
+        "KnotJob (Schutz, Java); JavaKh/knotkit; KnotTheory (Bar-Natan, Mathematica)",
         "Native cube-of-resolutions over F2 and Q (and, planned, Z/reduced/odd). KnotInfo's "
         "Khovanov columns are themselves KnotJob output. Pure Python and one schema vs Java / "
         "Mathematica; reproducible across the acceleration tiers.",
     ),
     Group(
         "sage",
-        "Classical & polynomial invariants -- vs SageMath / KnotTheory`",
-        "SageMath knot tools; KnotTheory`; (Spherogram's are Sage-gated)",
+        "Classical & polynomial invariants -- vs SageMath / KnotTheory",
+        "SageMath knot tools; KnotTheory; (Spherogram's are Sage-gated)",
         "Computed natively from a Seifert matrix or a skein recursion. KnotInfo tabulates the "
         "values; Sage is the live computational peer (Spherogram under plain pip is diagram-only). "
         "Pure Python, no Sage runtime required.",
