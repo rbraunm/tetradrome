@@ -11,9 +11,10 @@ This runs on the workstation that can reach CT 250 (Toshiro), not in a sandbox. 
 in the artifact are DATA, never a gate (see CLAUDE.md); this tool just produces and commits
 the chart.
 
-Order is fail-fast: git push-readiness is checked BEFORE the multi-minute CT 250 run, so a
-misconfigured git never wastes a benchmark. Every seam fails loud with a clear next step;
-nothing is swallowed and there is no silent fallback.
+Order is fail-fast: git push-readiness is checked and the local branch is synced with origin
+(fast-forward, or rebase if it diverged) BEFORE the multi-minute CT 250 run -- so a misconfigured
+or out-of-date git never wastes a benchmark and the final push fast-forwards. Every seam fails
+loud with a clear next step; nothing is swallowed and there is no silent fallback.
 
     python tools/generate_benchmarks.py
     python tools/generate_benchmarks.py --reps 5 --with-floer-grid
@@ -104,6 +105,59 @@ def preflight_git() -> str:
     return branch
 
 
+def remote_branch_exists(branch: str) -> bool:
+    ls = git("ls-remote", "--heads", "origin", branch)
+    if ls.returncode != 0:
+        die("cannot query origin for branch '%s':\n%s" % (branch, ls.stderr.strip()))
+    return bool(ls.stdout.strip())
+
+
+def _ahead_behind(branch: str) -> tuple[int, int]:
+    """(ahead, behind) of local HEAD relative to origin/<branch>. Assumes origin/<branch> is
+    up to date locally (fetch first)."""
+    ahead = git("rev-list", "--count", "origin/%s..HEAD" % branch).stdout.strip() or "0"
+    behind = git("rev-list", "--count", "HEAD..origin/%s" % branch).stdout.strip() or "0"
+    return int(ahead), int(behind)
+
+
+def sync_with_remote(branch: str) -> None:
+    """Bring the local branch in line with origin/<branch> BEFORE the run, so the eventual push
+    fast-forwards. Handles the three cases the artifact push actually hits:
+
+      - origin/<branch> does not exist yet -> nothing to sync; the push will create it.
+      - local is simply behind             -> fast-forward.
+      - local has diverged (unpushed work) -> rebase onto origin, aborting cleanly on conflict.
+
+    Fails loud on a dirty tree (fast-forward refused) or a rebase conflict rather than guessing."""
+    if not remote_branch_exists(branch):
+        note("origin/%s does not exist yet; it will be created on push." % branch)
+        return
+    fetched = git("fetch", "origin", branch)
+    if fetched.returncode != 0:
+        die("git fetch origin %s failed:\n%s" % (branch, fetched.stderr.strip()))
+    ahead, behind = _ahead_behind(branch)
+    if behind == 0:
+        note("local '%s' is current with origin (ahead %d)." % (branch, ahead))
+        return
+    if ahead == 0:
+        note("origin/%s is ahead by %d commit(s); fast-forwarding local." % (branch, behind))
+        ff = git("merge", "--ff-only", "origin/%s" % branch)
+        if ff.returncode != 0:
+            die("fast-forward failed (uncommitted local changes in the way?). Commit or stash "
+                "them and re-run.\n%s" % (ff.stderr + "\n" + ff.stdout).strip())
+        return
+    note("local '%s' has diverged from origin (ahead %d, behind %d); rebasing onto origin."
+         % (branch, ahead, behind))
+    rebase = git("rebase", "origin/%s" % branch)
+    if rebase.returncode != 0:
+        git("rebase", "--abort")
+        die("rebase onto origin/%s hit a conflict and was aborted -- your branch is unchanged. "
+            "Likely an unpushed local commit touches the same file as origin. Resolve it manually "
+            "(or drop the unpushed commit) and re-run.\n%s"
+            % (branch, (rebase.stdout + "\n" + rebase.stderr).strip()))
+    note("rebased local '%s' onto origin." % branch)
+
+
 # --- remote run -----------------------------------------------------------------------------
 
 def build_remote_command(src: str, python: str, ref: str, reps: int, with_floer: bool) -> str:
@@ -180,6 +234,34 @@ def compare_url(branch: str) -> str | None:
     return "https://github.com/%s/%s/compare/%s?expand=1" % (match.group(1), match.group(2), branch)
 
 
+def _push_with_resync(branch: str) -> bool:
+    """Push the branch. If origin advanced during the CT run so the push is non-fast-forward,
+    rebase our single commit onto the new tip and retry once. Returns True on success, and
+    distinguishes 'origin advanced' (retry) from other failures like auth (do not retry)."""
+    pushed = git("push", "-u", "origin", branch)
+    if pushed.returncode == 0:
+        return True
+    git("fetch", "origin", branch)
+    _ahead, behind = _ahead_behind(branch)
+    if behind == 0:
+        note("push failed and origin is not ahead -- likely auth or permissions:\n%s"
+             % pushed.stderr.strip())
+        return False
+    note("origin/%s advanced during the run; rebasing our commit onto it and retrying." % branch)
+    rebase = git("rebase", "origin/%s" % branch)
+    if rebase.returncode != 0:
+        git("rebase", "--abort")
+        note("rebase after the run hit a conflict (origin has a newer artifact?); the commit is "
+             "local. Re-run to regenerate against the new origin.\n%s"
+             % (rebase.stdout + "\n" + rebase.stderr).strip())
+        return False
+    retry = git("push", "-u", "origin", branch)
+    if retry.returncode != 0:
+        note("push still failed after rebasing onto origin:\n" + retry.stderr.strip())
+        return False
+    return True
+
+
 def commit_and_push(out_path: str, branch: str, ctid: int, message: str, push: bool) -> None:
     rel = os.path.relpath(out_path, REPO_ROOT)
     add = git("add", "--", rel)
@@ -202,10 +284,9 @@ def commit_and_push(out_path: str, branch: str, ctid: int, message: str, push: b
         note("--no-push set; the commit is local on '%s'." % branch)
         return
 
-    pushed = git("push", "origin", branch)
-    if pushed.returncode != 0:
+    if not _push_with_resync(branch):
         die("git push failed; the commit is local on '%s'. Configure git credentials/remote "
-            "and re-run, or push manually.\n%s" % (branch, pushed.stderr.strip()))
+            "and re-run, or push manually." % branch)
     note("pushed '%s' to origin." % branch)
     url = compare_url(branch)
     if url:
@@ -235,6 +316,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     branch = preflight_git()
+    sync_with_remote(branch)
     markdown = generate_on_ct(args.ctid, args.src, args.python, args.ref,
                               args.reps, args.with_floer_grid, args.remote_timeout)
 
