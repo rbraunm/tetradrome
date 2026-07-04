@@ -58,6 +58,9 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 _ORACLE_COL = {
     "kfh": "knot_floer_homology",
     "knotjob": "KnotJob",
+    "javakh": "JavaKh",
+    "khoho": "KhoHo",
+    "regina": "Regina",
     "sage": "SageMath",
     "khoca": "Khoca",
     "snappy": "SnapPy",
@@ -137,17 +140,36 @@ def _medianMs(seconds_list):
 
 
 def measure(ladder, reps, withFloerGrid):
-    """Return per-invariant {name: {"tetra": cell, "oracle": cell}} where each cell is a dict
-    {ms, label, agree}; ms None means not measured (with a label saying why)."""
-    oracleLive = {orc.key: orc.available() for orc in adapters.ORACLES}
-    oracleByKey = {orc.key: orc for orc in adapters.ORACLES}
-    results = {}
+    """Native cells per invariant, plus every present oracle's full output cached per knot.
 
-    for inv in spec.INVARIANTS:
-        tetraCell = _tetraCell(inv, ladder, reps, withFloerGrid)
-        oracleCell = _oracleCell(inv, ladder, reps, oracleLive, oracleByKey)
-        results[inv.name] = {"tetra": tetraCell, "oracle": oracleCell}
-    return results, oracleLive
+    Returns (tetraCells, oracleResults, oracleLive):
+      tetraCells    {invariantName: {ms, label, agree}}                      Tetradrome's column
+      oracleResults {oracleKey: {knotName: {invariantName: Measurement}}}    one run per knot
+      oracleLive    {oracleKey: (present, detail)}
+    """
+    oracleLive = {orc.key: orc.available() for orc in adapters.ORACLES}
+    oracleResults = _runOracles(ladder, reps, oracleLive)
+    tetraCells = {inv.name: _tetraCell(inv, ladder, reps, withFloerGrid)
+                  for inv in spec.INVARIANTS}
+    return tetraCells, oracleResults, oracleLive
+
+
+def _runOracles(ladder, reps, oracleLive):
+    """Run each present oracle ONCE per knot -- a single run yields all of that oracle's invariants,
+    so nothing is recomputed per row. {oracleKey: {knotName: {invariantName: Measurement}}}."""
+    results = {}
+    for orc in adapters.ORACLES:
+        present, _detail = oracleLive[orc.key]
+        if not present or orc.run is None:
+            continue
+        perKnot = {}
+        for name, knot in ladder:
+            try:
+                perKnot[name] = orc.run(knot, reps)
+            except Exception as error:                       # a run should catch its own failures;
+                perKnot[name] = {"__error__": str(error)}    # if not, keep the artifact alive
+        results[orc.key] = perKnot
+    return results
 
 
 def _tetraCell(inv, ladder, reps, withFloerGrid):
@@ -176,38 +198,93 @@ def _tetraCell(inv, ladder, reps, withFloerGrid):
     return {"ms": None, "label": "unknown tetra kind", "agree": "n/a"}
 
 
-def _oracleCell(inv, ladder, reps, oracleLive, oracleByKey):
-    group = next(g for g in spec.GROUPS if g.key == inv.group)
-    orcKey = inv.group if inv.group in oracleByKey else None
-    if orcKey is None:                               # bounds / apex groups have no computing peer
-        return {"ms": None, "label": "no computing peer", "agree": "n/a", "col": group.oracle}
-    present, _detail = oracleLive[orcKey]
-    if not present:
-        return {"ms": None, "label": "absent (this run)", "agree": "n/a", "col": orcKey}
-    orc = oracleByKey[orcKey]
-    if orc.run is None:
-        return {"ms": None, "label": "adapter pending", "agree": "n/a", "col": orcKey}
-    seconds = []
-    agree = "oracle"
-    for _name, knot in ladder:
-        perInvariant = orc.run(knot, reps)
-        cell = perInvariant.get(inv.name)
-        if cell is None:
+# ---- oracle capability & cells (derived from what each run actually returns) ---------------
+
+def _computes(perKnot, invName):
+    """True if this oracle's run returned the invariant for any knot -- i.e. it computes it."""
+    return any(invName in byInvariant for byInvariant in perKnot.values())
+
+
+def _oracleCellFor(perKnot, invName, ladder):
+    """Aggregate one oracle's measurements for one invariant across the ladder.
+
+    None  -> the oracle does not compute this invariant at all (render "-").
+    {error}   -> the run reported an error (render loud).
+    {na}      -> applies in principle but not to these knots (e.g. KhoHo on a non-torus knot).
+    {ms, verdict} -> otherwise; verdict is the worst agreement seen (mismatch dominates), so a
+                     disagreement on any knot is never hidden by aggregation."""
+    seconds, agrees, errored, seen = [], [], False, False
+    for name, _knot in ladder:
+        measurement = perKnot.get(name, {}).get(invName)
+        if measurement is None:
             continue
-        seconds.append(cell.seconds)
-        agree = cell.agree or agree
-    ms = _medianMs(seconds)
-    label = None if ms is not None else "same upstream call"
-    return {"ms": ms, "label": label, "agree": agree, "col": orcKey}
+        seen = True
+        seconds.append(measurement.seconds)
+        agrees.append(measurement.agree)
+        if str(measurement.value).startswith("error"):
+            errored = True
+    if not seen:
+        return None
+    if errored:
+        return {"error": True}
+    if all(a == "n/a" for a in agrees) and not any(s is not None for s in seconds):
+        return {"na": True}
+    verdict = "n/a"
+    for level in ("mismatch", "mirror", "pass", "oracle"):
+        if level in agrees:
+            verdict = level
+            break
+    return {"ms": _medianMs(seconds), "verdict": verdict}
 
 
-# ---- markdown -----------------------------------------------------------------------------
+_VERDICT_SYM = {
+    "pass": "\u2713",
+    "mirror": "\u2194",
+    "mismatch": "\u2717 MISMATCH",
+    "oracle": "",
+    "n/a": "",
+}
 
-def _cellText(cell):
+
+def _oracleCellText(cell):
+    if cell is None:
+        return "-"
+    if cell.get("error"):
+        return "\u2717 error"
+    if cell.get("na"):
+        return "n/a"
+    base = f"{cell['ms']:.2f} ms" if cell.get("ms") is not None else "same call"
+    symbol = _VERDICT_SYM.get(cell["verdict"], "")
+    return f"{base} {symbol}".strip()
+
+
+def _sectionColumns(invs, oracleResults):
+    """Oracle keys (in ORACLES order) that compute at least one invariant in this section."""
+    columns = []
+    for orc in adapters.ORACLES:
+        perKnot = oracleResults.get(orc.key)
+        if perKnot and any(_computes(perKnot, inv.name) for inv in invs):
+            columns.append(orc.key)
+    return columns
+
+
+def _tetraCellText(cell):
     if cell["ms"] is not None:
         return f"{cell['ms']:.2f} ms"
     return f"*{cell['label']}*"
 
+
+def _fallbackColumn(group, oracleLive, oracleByKey):
+    """A section with no computing oracle this run keeps one informational column: (header, label)."""
+    if group.key not in oracleByKey:
+        return _ORACLE_COL.get(group.key, group.oracle), "no computing peer"
+    present, _detail = oracleLive.get(group.key, (False, ""))
+    if not present:
+        return _ORACLE_COL.get(group.key, group.key), "absent (this run)"
+    return _ORACLE_COL.get(group.key, group.key), "adapter pending"
+
+
+# ---- markdown -----------------------------------------------------------------------------
 
 def _cell(text):
     """Make text safe inside a markdown table cell: escape pipes (which are column delimiters,
@@ -216,7 +293,8 @@ def _cell(text):
     return str(text).replace("|", "\\|").replace("\n", " ").strip()
 
 
-def emit(results, oracleLive, facts, ladder, reps, withFloerGrid):
+def emit(tetraCells, oracleResults, oracleLive, facts, ladder, reps, withFloerGrid):
+    oracleByKey = {orc.key: orc for orc in adapters.ORACLES}
     lines = []
     add = lines.append
 
@@ -260,27 +338,44 @@ def emit(results, oracleLive, facts, ladder, reps, withFloerGrid):
         invs = spec.invariants_for(group.key)
         if not invs:
             continue
-        present_here = oracleLive.get(group.key, (False, ""))[0]
         add(f"## {group.title}\n")
         add(f"{group.blurb}\n")
-        oracleHeader = _ORACLE_COL.get(group.key, group.key)
-        add(f"| Invariant | Math | In \u2192 Out | Status | KnotInfo | Tetradrome | "
-            f"{oracleHeader} | Validation |")
-        add("|---|---|---|---|---|---|---|---|")
+        columns = _sectionColumns(invs, oracleResults)
+        if columns:
+            headers = " | ".join(_ORACLE_COL.get(k, k) for k in columns)
+            add(f"| Invariant | Math | In \u2192 Out | Status | KnotInfo | Tetradrome | "
+                f"{headers} | Validation |")
+            add("|" + "---|" * (7 + len(columns)))
+            fallbackLabel = None
+        else:
+            fallbackHeader, fallbackLabel = _fallbackColumn(group, oracleLive, oracleByKey)
+            add(f"| Invariant | Math | In \u2192 Out | Status | KnotInfo | Tetradrome | "
+                f"{fallbackHeader} | Validation |")
+            add("|---|---|---|---|---|---|---|---|")
         for inv in invs:
-            cell = results[inv.name]
-            agreeKey = (cell["tetra"]["agree"] if cell["tetra"]["agree"] not in ("n/a", "")
-                        else cell["oracle"]["agree"])
+            tetra = tetraCells[inv.name]
+            oracleCells = ([_oracleCellFor(oracleResults[k], inv.name, ladder) for k in columns]
+                           if columns else [])
+            if tetra["agree"] not in ("n/a", ""):
+                validationKey = tetra["agree"]            # native computed: its check vs KnotInfo
+            elif any(c is not None and not c.get("na") and not c.get("error")
+                     for c in oracleCells):
+                validationKey = "oracle"                  # native target, but a tool provides it
+            else:
+                validationKey = "n/a"
             row = [
                 f"**{_cell(inv.label)}**",
                 _cell(inv.math),
                 _cell(f"{inv.inputs} \u2192 {inv.outputs}"),
                 _STATUS.get(inv.status, inv.status),
                 _KNOTINFO.get(inv.knotinfo, "?"),
-                _cell(_cellText(cell["tetra"])),
-                _cell(_cellText(cell["oracle"])),
-                _AGREE.get(agreeKey, "-"),
+                _cell(_tetraCellText(tetra)),
             ]
+            if columns:
+                row += [_cell(_oracleCellText(c)) for c in oracleCells]
+            else:
+                row.append(_cell(f"*{fallbackLabel}*"))
+            row.append(_AGREE.get(validationKey, "-"))
             add("| " + " | ".join(row) + " |")
         add("")
 
@@ -313,8 +408,9 @@ def main():
 
     ladder = adapters.buildLadder(args.knots)
     facts = hostFacts()
-    results, oracleLive = measure(ladder, args.reps, args.with_floer_grid)
-    markdown = emit(results, oracleLive, facts, ladder, args.reps, args.with_floer_grid)
+    tetraCells, oracleResults, oracleLive = measure(ladder, args.reps, args.with_floer_grid)
+    markdown = emit(tetraCells, oracleResults, oracleLive, facts, ladder, args.reps,
+                    args.with_floer_grid)
 
     with open(args.out, "w") as handle:
         handle.write(markdown)
