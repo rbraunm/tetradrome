@@ -15,22 +15,44 @@ discipline, design section 4):
   changes. This is the GPU-capable path (the CPU `numpy` run validates the exact code
   the GPU runs).
 
+A column arrives in compressed-sparse-column form, the representation GradedComplex stores
+and `GradedComplex.differential` returns: a pair ``(indices, indptr)`` over ``array('i')``
+where column j is ``indices[indptr[j]:indptr[j+1]]``. The pure-Python reducer slices the
+buffers directly; the packed reducers scatter them into word arrays with a single
+vectorized numpy pass (`_pack_csc`). `pack_columns` builds the same CSC from a readable
+column-by-column matrix for callers that have one (tests, ad-hoc use).
+
 Both do column reduction: a column is XORed against the stored pivot for its leading
 row until it either hits an empty pivot slot (new pivot, rank += 1) or reduces to zero.
 The leading row strictly drops each step, so it terminates.
 """
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from array import array
 
 
-def f2_rank_bitint(columns: Iterable[Iterable[int]]) -> int:
-    """GF(2) rank with each column packed into a Python int bit-vector."""
-    pivots: dict[int, int] = {}     # leading row -> reduced column
-    rank = 0
+def pack_columns(columns) -> tuple[array, array]:
+    """Pack a matrix given column-by-column (each column an iterable of row indices) into the
+    CSC buffers ``(indices, indptr)`` over ``array('i')`` the reducers consume. The bridge
+    from a readable per-column matrix to CSC; GradedComplex builds the same internally."""
+    indices = array("i")
+    indptr = array("i", [0])
     for col in columns:
-        v = 0
         for r in col:
+            indices.append(int(r))
+        indptr.append(len(indices))
+    return indices, indptr
+
+
+def f2_rank_bitint(csc: tuple[array, array]) -> int:
+    """GF(2) rank with each column packed into a Python int bit-vector. `csc` is the
+    ``(indices, indptr)`` pair; column j is ``indices[indptr[j]:indptr[j+1]]``."""
+    indices, indptr = csc
+    pivots: dict[int, int] = {}  # leading row -> reduced column
+    rank = 0
+    for j in range(len(indptr) - 1):
+        v = 0
+        for r in indices[indptr[j]:indptr[j + 1]]:
             v |= 1 << r
         while v:
             lead = v.bit_length() - 1
@@ -43,18 +65,28 @@ def f2_rank_bitint(columns: Iterable[Iterable[int]]) -> int:
     return rank
 
 
-def _pack(columns, nrows, xp):
-    """Pack columns (sets of row indices) into an (n_cols, n_words) uint64 array."""
+def _pack_csc(indices: array, indptr: array, nrows: int, xp):
+    """Pack CSC columns into an (n_cols, n_words) uint64 array over array module `xp`. The
+    scatter is one vectorized numpy pass on the host -- `repeat` to label each entry with its
+    column, then a single `bitwise_or.at` setting the bit -- and the finished matrix moves to
+    the device in one transfer for the GPU path (per-element device assignment would dwarf
+    the reduction)."""
+    import numpy as np
+
     nwords = max(1, (nrows + 63) // 64)
-    rows = []
-    for col in columns:
-        words = [0] * nwords
-        for r in col:
-            words[r >> 6] |= 1 << (r & 63)
-        rows.append(words)
-    if not rows:
+    ptr = np.frombuffer(indptr, dtype=np.int32)
+    ncols = ptr.shape[0] - 1
+    if ncols <= 0:
         return xp.zeros((0, nwords), dtype=xp.uint64)
-    return xp.array(rows, dtype=xp.uint64)
+    host = np.zeros((ncols, nwords), dtype=np.uint64)
+    idx = np.frombuffer(indices, dtype=np.int32)
+    if idx.shape[0]:
+        idx64 = idx.astype(np.int64)
+        col_of = np.repeat(np.arange(ncols, dtype=np.int64), np.diff(ptr.astype(np.int64)))
+        np.bitwise_or.at(
+            host, (col_of, idx64 >> 6), np.uint64(1) << (idx64 & np.int64(63)).astype(np.uint64)
+        )
+    return xp.asarray(host)
 
 
 def _leading_row(v, xp) -> int:
@@ -66,12 +98,13 @@ def _leading_row(v, xp) -> int:
     return top * 64 + (int(v[top]).bit_length() - 1)
 
 
-def f2_rank_words(columns: Sequence[Iterable[int]], nrows: int, xp) -> int:
-    """GF(2) rank with columns packed into uint64 word arrays over array module `xp`
+def f2_rank_words(csc: tuple[array, array], nrows: int, xp) -> int:
+    """GF(2) rank with CSC columns packed into uint64 word arrays over array module `xp`
     (`numpy` for CPU, `cupy` for GPU). Same algorithm as `f2_rank_bitint`; the XOR is a
     vectorized word-array operation, so it carries to the GPU unchanged."""
-    mat = _pack(columns, nrows, xp)
-    pivots: dict[int, object] = {}      # leading row -> reduced packed column
+    indices, indptr = csc
+    mat = _pack_csc(indices, indptr, nrows, xp)
+    pivots: dict[int, object] = {}  # leading row -> reduced packed column
     rank = 0
     for k in range(mat.shape[0]):
         v = mat[k].copy()
@@ -88,7 +121,7 @@ def f2_rank_words(columns: Sequence[Iterable[int]], nrows: int, xp) -> int:
     return rank
 
 
-def f2_rank_dense(columns: Sequence[Iterable[int]], nrows: int, xp) -> int:
+def f2_rank_dense(csc: tuple[array, array], nrows: int, xp) -> int:
     """GF(2) rank by vectorized dense row reduction over array module `xp`.
 
     Unlike `f2_rank_words`, which syncs once per elimination step to find a leading bit,
@@ -97,20 +130,22 @@ def f2_rank_dense(columns: Sequence[Iterable[int]], nrows: int, xp) -> int:
     matrix) for far fewer host round-trips, which is what the GPU wants -- the batched
     kernel for `packed-gpu`. The numpy run validates the exact code cupy executes.
 
-    The matrix is assembled on the host and moved to the device in a single transfer:
-    per-element assignment on a GPU array is one kernel launch each, so building it on the
-    device would dwarf the reduction.
+    The matrix is assembled on the host -- a single vectorized scatter from the CSC buffers
+    -- and moved to the device in one transfer: per-element assignment on a GPU array is one
+    kernel launch each, so building it on the device would dwarf the reduction.
     """
     import numpy as np
 
-    cols = list(columns)
-    ncols = len(cols)
-    if ncols == 0 or nrows == 0:
+    indices, indptr = csc
+    ptr = np.frombuffer(indptr, dtype=np.int32)
+    ncols = ptr.shape[0] - 1
+    if ncols <= 0 or nrows == 0:
         return 0
     host = np.zeros((nrows, ncols), dtype=np.uint8)
-    for j, col in enumerate(cols):
-        for r in col:
-            host[r, j] = 1
+    idx = np.frombuffer(indices, dtype=np.int32)
+    if idx.shape[0]:
+        col_of = np.repeat(np.arange(ncols, dtype=np.int64), np.diff(ptr.astype(np.int64)))
+        host[idx.astype(np.int64), col_of] = 1
     mat = xp.asarray(host)
     rank = 0
     prow = 0

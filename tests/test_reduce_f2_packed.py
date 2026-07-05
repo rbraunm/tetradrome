@@ -15,7 +15,7 @@ import pytest
 from tetradrome import knots
 from tetradrome.algebra import gpu, reduce_f2_jit, tiers
 from tetradrome.algebra.reduce_f2_jit import f2_rank_jit
-from tetradrome.algebra.reduce_f2_packed import f2_rank_bitint, f2_rank_dense, f2_rank_words
+from tetradrome.algebra.reduce_f2_packed import f2_rank_bitint, f2_rank_dense, f2_rank_words, pack_columns
 from tetradrome.algebra.reduce_reference import f2_rank, homology
 from tetradrome.engines import khovanov
 from tetradrome.errors import BackendUnavailable
@@ -27,14 +27,15 @@ RUNNABLE = [name for name, ok, _ in tiers.available_f2_backends() if ok]
 
 
 def test_handbuilt_ranks_match_reference():
-    cols = [{0, 1}, {1, 2}, {0, 2}]  # rank 2 over F2 (columns sum to zero)
-    assert f2_rank_bitint(cols) == f2_rank(cols) == 2
-    assert f2_rank_words(cols, 3, np) == 2
+    csc = pack_columns([{0, 1}, {1, 2}, {0, 2}])  # rank 2 over F2 (columns sum to zero)
+    assert f2_rank_bitint(csc) == f2_rank(csc) == 2
+    assert f2_rank_words(csc, 3, np) == 2
 
 
 def test_empty_and_zero_columns():
-    assert f2_rank_bitint([]) == f2_rank_words([], 0, np) == 0
-    assert f2_rank_bitint([set(), set()]) == f2_rank_words([set(), set()], 4, np) == 0
+    assert f2_rank_bitint(pack_columns([])) == f2_rank_words(pack_columns([]), 0, np) == 0
+    zero = pack_columns([set(), set()])
+    assert f2_rank_bitint(zero) == f2_rank_words(zero, 4, np) == 0
 
 
 @pytest.mark.parametrize("name", KNOTS)
@@ -42,10 +43,10 @@ def test_packed_ranks_match_reference(name):
     pd = knots.from_name(name).pd_code
     for cx in khovanov.khovanov_complexes(pd).values():
         for n in cx.degrees():
-            cols, nrows = cx.differential(n), cx.dim(n + 1)
-            ref = f2_rank(cols)
-            assert f2_rank_bitint(cols) == ref
-            assert f2_rank_words(cols, nrows, np) == ref
+            csc, nrows = cx.differential(n), cx.dim(n + 1)
+            ref = f2_rank(csc)
+            assert f2_rank_bitint(csc) == ref
+            assert f2_rank_words(csc, nrows, np) == ref
 
 
 @pytest.mark.parametrize("name", KNOTS)
@@ -56,10 +57,10 @@ def test_dense_and_jit_ranks_match_reference(name):
     pd = knots.from_name(name).pd_code
     for cx in khovanov.khovanov_complexes(pd).values():
         for n in cx.degrees():
-            cols, nrows = cx.differential(n), cx.dim(n + 1)
-            ref = f2_rank(cols)
-            assert f2_rank_dense(cols, nrows, np) == ref
-            assert f2_rank_jit(cols, nrows) == ref
+            csc, nrows = cx.differential(n), cx.dim(n + 1)
+            ref = f2_rank(csc)
+            assert f2_rank_dense(csc, nrows, np) == ref
+            assert f2_rank_jit(csc, nrows) == ref
 
 
 def test_jit_tier_actually_compiles_when_numba_present():
@@ -72,7 +73,7 @@ def test_jit_tier_actually_compiles_when_numba_present():
     numba = pytest.importorskip("numba")
     from numba.core.dispatcher import Dispatcher
 
-    f2_rank_jit([{0, 1}, {1, 2}, {0, 2}], 3)  # force first-call binding/compilation
+    f2_rank_jit(pack_columns([{0, 1}, {1, 2}, {0, 2}]), 3)  # force first-call binding/compilation
     assert reduce_f2_jit.HAVE_NUMBA, (
         "numba imports but reduce_f2_jit.HAVE_NUMBA is False -- presence check is broken; "
         "the jit tier will never compile."
@@ -139,8 +140,8 @@ def test_gpu_dense_agrees_with_reference_on_large_full_rank_input():
     n = 512
     rng = np.random.default_rng(0)                          # deterministic, reproducible
     mat = rng.integers(0, 2, size=(n, n), dtype=np.uint8)
-    cols = _cols_from_matrix(mat)
-    ref = f2_rank(cols)                                     # pure-Python truth
+    csc = pack_columns(_cols_from_matrix(mat))
+    ref = f2_rank(csc)                                      # pure-Python truth
 
     # Positive proof the work landed on the device. f2_rank_dense stores the matrix DENSE
     # as uint8 (nrows, ncols) -- not bit-packed (see reduce_f2_packed.f2_rank_dense:
@@ -159,7 +160,7 @@ def test_gpu_dense_agrees_with_reference_on_large_full_rank_input():
     mempool = cp.get_default_memory_pool()
     mempool.free_all_blocks()
     assert mempool.total_bytes() == 0
-    rank = f2_rank_dense(cols, n, cp)
+    rank = f2_rank_dense(csc, n, cp)
     cp.cuda.Stream.null.synchronize()
     assert mempool.total_bytes() >= floor_bytes, "GPU kernel did not allocate the device matrix"
 
@@ -178,10 +179,10 @@ def test_gpu_dense_finds_dependencies_on_rank_deficient_input():
     b = rng.integers(0, n_indep, size=n_dep)
     extra = base[:, a] ^ base[:, b]
     mat = np.concatenate([base, extra], axis=1)
-    cols = _cols_from_matrix(mat)
+    csc = pack_columns(_cols_from_matrix(mat))
 
-    ref = f2_rank(cols)
-    rank = f2_rank_dense(cols, nrows, cp)
+    ref = f2_rank(csc)
+    rank = f2_rank_dense(csc, nrows, cp)
     cp.cuda.Stream.null.synchronize()
 
     assert rank == ref
@@ -196,4 +197,4 @@ def test_jit_without_numpy_fails_loud(monkeypatch):
     monkeypatch.setattr(reduce_f2_jit, "np", None)
     monkeypatch.setattr(reduce_f2_jit, "HAVE_NUMPY", False)
     with pytest.raises(BackendUnavailable):
-        f2_rank_jit([{0, 1}, {1, 2}], 3)
+        f2_rank_jit(pack_columns([{0, 1}, {1, 2}]), 3)

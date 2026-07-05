@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from ...algebra import f2_kernel, f2_rank
+from ...algebra import f2_kernel, f2_rank, pack_columns
 from ...errors import UnvalidatedResult
 from .differential import filtered_differential
 from .gradings import alexander, maslov
@@ -48,9 +48,9 @@ def tau(grid) -> int:
         frozenset(zero_index[y] for y in filtered_differential(grid, s) if y in zero_index)
         for s in c1
     ]
-    rank_d1 = f2_rank(d1)
+    rank_d1 = f2_rank(pack_columns(d1))
 
-    h0_dim = len(c0) - f2_rank(d0) - rank_d1
+    h0_dim = len(c0) - f2_rank(pack_columns(d0)) - rank_d1
     if h0_dim != 1:
         raise UnvalidatedResult(
             f"filtered grid homology has dim H_0 = {h0_dim}, expected 1 for a knot."
@@ -63,6 +63,6 @@ def tau(grid) -> int:
             frozenset(below[p] for p in relation)            # lift column indices back to C_0
             for relation in f2_kernel([d0[k] for k in below])
         ]
-        if f2_rank(d1 + cycles) > rank_d1:
+        if f2_rank(pack_columns(d1 + cycles)) > rank_d1:
             return level
     raise UnvalidatedResult("no Alexander level carried the surviving class; tau undefined.")

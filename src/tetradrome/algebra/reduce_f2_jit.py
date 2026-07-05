@@ -21,7 +21,7 @@ from __future__ import annotations
 import importlib.util
 
 from ..errors import BackendUnavailable
-from .reduce_f2_packed import _pack
+from .reduce_f2_packed import _pack_csc
 
 # Cheap presence checks that do NOT import (or compile) the optional deps.
 HAVE_NUMPY = importlib.util.find_spec("numpy") is not None
@@ -83,8 +83,9 @@ def _get_reducer():
     return _reducer
 
 
-def f2_rank_jit(columns, nrows: int) -> int:
-    """GF(2) rank via the (numba-compiled if available) packed reducer."""
+def f2_rank_jit(csc, nrows: int) -> int:
+    """GF(2) rank via the (numba-compiled if available) packed reducer. `csc` is the
+    ``(indices, indptr)`` pair GradedComplex.differential returns."""
     global np
     if np is None:
         if not HAVE_NUMPY:
@@ -93,7 +94,8 @@ def f2_rank_jit(columns, nrows: int) -> int:
                 "extra); the pure-Python 'reference' and 'bitint' backends need no numpy."
             )
         import numpy as np
-    mat = _pack(columns, nrows, np)
+    indices, indptr = csc
+    mat = _pack_csc(indices, indptr, nrows, np)
     if mat.shape[0] == 0:
         return 0
     return int(_get_reducer()(mat, mat.shape[1]))

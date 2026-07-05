@@ -102,7 +102,13 @@ def gaussian_homology(cx) -> dict[int, int]:
         raise TypeError(f"gaussian_homology: unsupported complex type {type(cx).__name__}.")
     dims = {n: cx.dim(n) for n in cx.degrees()}
     if isinstance(cx, GradedComplex):
-        columns = {n: [dict.fromkeys(col, 1) for col in cx.differential(n)] for n in dims}
+        columns = {}
+        for n in dims:
+            indices, indptr = cx.differential(n)
+            columns[n] = [
+                dict.fromkeys(indices[indptr[j]:indptr[j + 1]], 1)
+                for j in range(len(indptr) - 1)
+            ]
         return _cancel_all(dims, columns, 2)
     columns = {n: [dict(col) for col in cx.differential(n)] for n in dims}
     return _cancel_all(dims, columns, None)

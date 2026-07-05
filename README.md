@@ -29,6 +29,10 @@ The motivating example is the Conway knot — historically the smallest knot who
 
 Active, with several engines built and validated. The specification (`SPEC.md`) is complete, and the native compute path is well underway: the Jones polynomial, the shared exact-algebra back end, Khovanov homology (mod-2 and rational), Lee homology, and the Rasmussen *s*-invariant are implemented and validated against KnotInfo, behind a multi-core / optional-GPU acceleration backend whose every tier is checked to reproduce the reference exactly. The native knot Floer (grid homology) engine is in progress; the reporter, the Conway-knot reproducer, and broader link / 3–4-manifold input paths are the work ahead. Interfaces may still change.
 
+## Benchmarks and comparison
+
+[BENCHMARKS.md](BENCHMARKS.md) is an auto-generated, per-invariant comparison of Tetradrome against the computational gold-masters that already exist (`knot_floer_homology`, KnotJob, SageMath, Khoca, SnapPy) and against KnotInfo, with the math, the inputs and outputs, the validation status, and live compute timings measured at generation time. It is the at-a-glance answer to what Tetradrome computes, whether it agrees with the established tools, and how fast.
+
 ## Design at a glance
 
 ```

@@ -18,6 +18,7 @@ from tetradrome.algebra.memory import (
     dense_block_ops,
     predict_cost,
     predict_size,
+    reduce_host_bytes,
     route_backend,
 )
 from tetradrome.engines import khovanov
@@ -86,6 +87,37 @@ def test_predict_cost_is_dimension_based_like_predict_size():
 def test_predict_cost_zero_without_an_adjacent_degree():
     # a lone nonempty degree has no boundary block to reduce
     assert predict_cost(GradedComplex({0: 5}, {})) == 0
+
+
+def test_reduce_host_bytes_is_backend_aware():
+    MiB = 2**20
+    peak = 100 * MiB
+    # pure-Python tiers: 10 MiB fork base + half the packed peak (pivots only, no matrix built).
+    assert reduce_host_bytes(peak, "bitint") == 10 * MiB + 50 * MiB
+    assert reduce_host_bytes(peak, "reference") == 10 * MiB + 50 * MiB
+    # packed tiers: 40 MiB fork base + the full packed peak (word matrix + pivots).
+    assert reduce_host_bytes(peak, "jit") == 40 * MiB + 100 * MiB
+    assert reduce_host_bytes(peak, "packed-cpu") == 40 * MiB + 100 * MiB
+
+
+def test_reduce_host_bytes_charges_fork_base_on_empty_grading():
+    # A near-empty grading still costs a worker its fork base -- the term the old packed-only
+    # model omitted, which made small reductions look nearly free and under-provisioned them.
+    assert reduce_host_bytes(0, "bitint") == 10 * 2**20
+    assert reduce_host_bytes(0, "jit") == 40 * 2**20
+
+
+def test_reduce_host_bytes_unknown_backend_is_conservative():
+    # An unrecognized backend falls back to the heaviest assumption, never the cheapest.
+    MiB = 2**20
+    assert reduce_host_bytes(100 * MiB, "mystery") == 40 * MiB + 100 * MiB
+
+
+def test_reduce_host_bytes_bitint_under_packed_prediction():
+    # The point of the fix: for a substantial grading the default bitint tier is priced below the
+    # raw packed peak the old model charged, since it never materializes the matrix.
+    peak = 200 * 2**20
+    assert reduce_host_bytes(peak, "bitint") < peak
 
 
 _GPU_ON = GpuConfig(enabled=True, device_id=0, vram_budget_mib=1024, compute_capability="8.6")

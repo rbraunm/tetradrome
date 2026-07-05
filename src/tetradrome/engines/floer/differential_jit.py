@@ -1,0 +1,320 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Randy Braunm
+
+"""Numba-JIT grid (knot Floer) differential (engine Phase 6).
+
+A typed-integer-array transcription of ``differential`` in ``differential.py``: the same
+empty-rectangle enumeration, the same emptiness and marker-avoidance tests, the same F2
+reduction -- reorganized by unordered row pair so the parity is exact and allocation-free.
+
+The reorganization is an identity, not a change of maths. ``differential`` enumerates ordered
+row pairs ``(i, j)`` and yields, for each empty marker-avoiding rectangle, the target obtained
+by transposing the points in rows ``i`` and ``j``. That target depends only on the unordered
+pair ``{i, j}`` (transposing ``i, j`` and transposing ``j, i`` give the same permutation), and
+distinct unordered pairs give distinct targets, so no two pairs ever collide on a target. The
+two ordered rectangles of ``{i, j}`` -- ``R(i, j)`` and ``R(j, i)`` -- therefore contribute to
+exactly one target, and the F2 count of that target is ``valid(i, j) + valid(j, i) (mod 2)``,
+i.e. it survives iff exactly one of the two rectangles is empty and marker-avoiding. So the
+differential is ``{ transpose(sigma, i, j) : i < j, valid(i, j) != valid(j, i) }`` -- the same
+rectangles and tests as the reference, with the modulo-2 fold done per pair instead of through
+a global counter.
+
+``valid(a, b)`` is the reference's two checks verbatim, in modular integer arithmetic instead
+of Python sets: a state point lies in the open rectangle iff its row is an interior row and its
+column offset from ``sigma[a]`` is in ``[1, width-1]``; a marker lies in the (half-open) cell
+box iff ``(row - a) mod n < height`` and ``(col - sigma[a]) mod n < width``.
+
+The kernel is valid both as plain Python and under numba nopython; numba/numpy import lazily,
+so the package imports (and the reference differential runs) with neither, only a process that
+runs the tier compiles it, and ``cache=True`` persists the compile (mirrors ``reduce_f2_jit``).
+The reference ``differential.py`` stays the canonical definition and the oracle the agreement
+test pins this against, exhaustively.
+"""
+from __future__ import annotations
+
+import importlib.util
+
+from ...errors import BackendUnavailable
+
+# Cheap presence checks that do NOT import (or compile) the optional deps.
+HAVE_NUMPY = importlib.util.find_spec("numpy") is not None
+HAVE_NUMBA = importlib.util.find_spec("numba") is not None
+
+np = None               # bound lazily on first call; numpy is an optional accel dependency
+_rect_valid = None      # njit (or plain) helper, bound before the kernel that calls it
+_kernel = None          # lazily bound block kernel
+
+
+def _rect_valid_impl(states, s, a, b, n, marker_rows, marker_cols, marker_count):
+    """Is the toroidal rectangle ``R(a, b)`` out of generator ``states[s]`` empty of other
+    state points and free of any avoided marker? The reference's two tests, in integer form.
+
+    ``R(a, b)`` has its south-west corner on the point in row ``a``, rises ``height`` rows to
+    row ``b`` and extends ``width`` columns right to column ``states[s, b]`` (all toroidal).
+    """
+    corner_col = states[s, a]
+    height = (b - a) % n
+    width = (states[s, b] - corner_col) % n
+    # Empty of other state points: no interior row's point falls in an interior column.
+    for t in range(1, height):
+        row = (a + t) % n
+        offset = (states[s, row] - corner_col) % n
+        if offset >= 1 and offset <= width - 1:
+            return False
+    # Marker-avoiding: no avoided marker lies in the half-open cell box
+    # rows [a, a+height) x columns [corner_col, corner_col+width).
+    for m in range(marker_count):
+        if ((marker_rows[m] - a) % n < height
+                and (marker_cols[m] - corner_col) % n < width):
+            return False
+    return True
+
+
+def _differential_pairs_impl(states, marker_rows, marker_cols, marker_count, n,
+                             out_pairs, out_counts):
+    """For each generator in ``states`` (``B x n``), fill ``out_pairs[s, :out_counts[s]]`` with
+    the surviving unordered row pairs, packed as ``i*n + j`` (``i < j``): the pairs whose two
+    toroidal rectangles disagree on validity, i.e. the F2 differential targets by transposition.
+    """
+    count = states.shape[0]
+    for s in range(count):
+        written = 0
+        for i in range(n):
+            for j in range(i + 1, n):
+                valid_ij = _rect_valid(states, s, i, j, n,
+                                       marker_rows, marker_cols, marker_count)
+                valid_ji = _rect_valid(states, s, j, i, n,
+                                       marker_rows, marker_cols, marker_count)
+                if valid_ij != valid_ji:
+                    out_pairs[s, written] = i * n + j
+                    written += 1
+        out_counts[s] = written
+
+
+def _bind():
+    """Bind the helper then the kernel once: numba-compiled if numba is present (the kernel
+    references the helper as a module global, so it must be bound first), else the plain impls."""
+    global _rect_valid, _kernel
+    if _kernel is None:
+        if HAVE_NUMBA:
+            import numba
+
+            _rect_valid = numba.njit(cache=True)(_rect_valid_impl)
+            _kernel = numba.njit(cache=True)(_differential_pairs_impl)
+        else:
+            _rect_valid = _rect_valid_impl
+            _kernel = _differential_pairs_impl
+    return _kernel
+
+
+def differential_block(states, o_markers, x_markers):
+    """Surviving transposition pairs of the (hat) differential for a block of generators.
+
+    Returns ``(out_pairs, out_counts)``: for generator ``s``, ``out_pairs[s, :out_counts[s]]``
+    holds the packed ``i*n + j`` (``i < j``) of each surviving pair; transposing rows ``i, j``
+    of ``states[s]`` gives a target with F2 coefficient 1. Avoids every O and X marker, matching
+    ``differential``. Uses the numba-compiled kernel when numba is present, else the plain impl.
+    """
+    global np
+    if np is None:
+        if not HAVE_NUMPY:
+            raise BackendUnavailable(
+                "the jit differential tier needs numpy (pip install the 'jit' or 'accel' "
+                "extra); the pure-Python differential in differential.py needs no numpy."
+            )
+        import numpy as np
+
+    states_arr = np.ascontiguousarray(states, dtype=np.int64)
+    n = states_arr.shape[1]
+    marker_count = 2 * n
+    marker_rows = np.empty(marker_count, dtype=np.int64)
+    marker_cols = np.empty(marker_count, dtype=np.int64)
+    for r in range(n):
+        marker_rows[r] = r
+        marker_cols[r] = int(o_markers[r])
+        marker_rows[n + r] = r
+        marker_cols[n + r] = int(x_markers[r])
+    max_pairs = n * (n - 1) // 2
+    out_pairs = np.empty((states_arr.shape[0], max_pairs), dtype=np.int64)
+    out_counts = np.empty(states_arr.shape[0], dtype=np.int64)
+    _bind()(states_arr, marker_rows, marker_cols, marker_count, n, out_pairs, out_counts)
+    return out_pairs, out_counts
+
+
+def differential_jit(grid, sigma) -> dict:
+    """Bigraded (hat) differential ``d(sigma)`` as ``{target: 1}`` over F2, via the jit tier.
+
+    A drop-in for ``differential`` for one generator: reconstructs the target permutations from
+    the surviving transposition pairs the kernel returns.
+    """
+    global np
+    if np is None:
+        if not HAVE_NUMPY:
+            raise BackendUnavailable(
+                "the jit differential tier needs numpy (pip install the 'jit' or 'accel' "
+                "extra); the pure-Python differential in differential.py needs no numpy."
+            )
+        import numpy as np
+
+    n = len(sigma)
+    out_pairs, out_counts = differential_block(np.array([sigma], dtype=np.int64),
+                                               grid.O, grid.X)
+    base = list(sigma)
+    result: dict = {}
+    for index in range(int(out_counts[0])):
+        code = int(out_pairs[0, index])
+        i, j = divmod(code, n)
+        target = list(base)
+        target[i], target[j] = base[j], base[i]
+        result[tuple(target)] = 1
+    return result
+
+
+# --- target ranking ------------------------------------------------------------------------
+# Labelling each differential target by its lexicographic rank (a single int) -- the inverse of
+# generation._unrank -- so the merge keys generators on ints instead of permutation tuples. This
+# is a relabelling of the same targets the differential produces, not a change to the differential.
+
+_rank_kernel = None
+
+
+def _target_ranks_impl(states, out_pairs, out_counts, n, factorial, out_ranks):
+    """For each generator and each surviving transposition pair, the lexicographic rank of the
+    transposed permutation, by its Lehmer code -- matching ``generation._rank`` / ``_unrank``.
+    ``factorial[m] = m!``; ``out_ranks`` is filled in place, same shape as ``out_pairs``."""
+    count = states.shape[0]
+    permutation = np.empty(n, dtype=np.int64)
+    used = np.empty(n, dtype=np.int64)
+    for s in range(count):
+        written = out_counts[s]
+        for slot in range(written):
+            code = out_pairs[s, slot]
+            i = code // n
+            j = code % n
+            for t in range(n):
+                permutation[t] = states[s, t]
+            swapped = permutation[i]
+            permutation[i] = permutation[j]
+            permutation[j] = swapped
+            for t in range(n):
+                used[t] = 0
+            rank = 0
+            for t in range(n):
+                value = permutation[t]
+                smaller_unused = 0
+                for u in range(value):
+                    if used[u] == 0:
+                        smaller_unused += 1
+                rank += smaller_unused * factorial[n - 1 - t]
+                used[value] = 1
+            out_ranks[s, slot] = rank
+
+
+def _get_rank_kernel():
+    """Bind the ranking kernel once: numba-compiled if numba is present, else the plain impl."""
+    global _rank_kernel
+    if _rank_kernel is None:
+        if HAVE_NUMBA:
+            import numba
+
+            _rank_kernel = numba.njit(cache=True)(_target_ranks_impl)
+        else:
+            _rank_kernel = _target_ranks_impl
+    return _rank_kernel
+
+
+def target_ranks_block(states, out_pairs, out_counts):
+    """Lexicographic ranks of the differential targets: ``out[s, :out_counts[s]]`` are the ranks of
+    the permutations reached by the surviving transpositions of generator ``s`` (same shape as
+    ``out_pairs``), matching ``generation._rank`` / ``_unrank``. ``states``/``out_pairs``/
+    ``out_counts`` are the arrays from ``differential_block``."""
+    global np
+    if np is None:
+        if not HAVE_NUMPY:
+            raise BackendUnavailable(
+                "the jit differential tier needs numpy (pip install the 'jit' or 'accel' "
+                "extra); the pure-Python differential in differential.py needs no numpy."
+            )
+        import numpy as np
+
+    states_arr = np.ascontiguousarray(states, dtype=np.int64)
+    n = states_arr.shape[1]
+    factorial = np.empty(n, dtype=np.int64)
+    accumulator = 1
+    for m in range(n):
+        factorial[m] = accumulator
+        accumulator *= m + 1
+    out_ranks = np.empty_like(out_pairs)
+    _get_rank_kernel()(states_arr, out_pairs, out_counts, n, factorial, out_ranks)
+    return out_ranks
+
+
+_unrank_kernel = None
+
+
+def _unrank_impl(start, count, n, factorial, out_states):
+    """The lexicographically ``(start + s)``-th permutation of ``range(n)``, for ``s`` in
+    ``[0, count)``, written into ``out_states[s, :]`` by the factorial number system -- the
+    array-filling inverse of the Lehmer ranking in ``_target_ranks_impl``, matching
+    ``generation._unrank`` exactly (an available list, with the chosen element dropped and the tail
+    shifted down at each place). ``factorial[m] = m!``; ``out_states`` is filled in place. Valid as
+    plain Python and under numba nopython."""
+    available = np.empty(n, dtype=np.int64)
+    for s in range(count):
+        index = start + s
+        for t in range(n):
+            available[t] = t
+        remaining = n
+        position = 0
+        for place in range(n - 1, -1, -1):
+            factorial_place = factorial[place]
+            choice = index // factorial_place
+            index = index % factorial_place
+            out_states[s, position] = available[choice]
+            position += 1
+            for t in range(choice, remaining - 1):    # drop available[choice], shift tail down
+                available[t] = available[t + 1]
+            remaining -= 1
+
+
+def _get_unrank_kernel():
+    """Bind the unranking kernel once: numba-compiled if numba is present, else the plain impl."""
+    global _unrank_kernel
+    if _unrank_kernel is None:
+        if HAVE_NUMBA:
+            import numba
+
+            _unrank_kernel = numba.njit(cache=True)(_unrank_impl)
+        else:
+            _unrank_kernel = _unrank_impl
+    return _unrank_kernel
+
+
+def unrank_block(start: int, stop: int, n: int):
+    """The permutations ranked ``[start, stop)`` as a ``(stop - start, n)`` int64 array, one row per
+    generator in lexicographic order: the vectorized form of
+    ``[generation._unrank(k, n) for k in range(start, stop)]`` with no per-generator Python and no
+    intermediate tuples, writing straight into a preallocated array. This is the generation slice's
+    state build; ``generation._unrank`` remains the pure-Python oracle this is pinned against and the
+    no-numpy ``grid_complexes`` path. int64, so ``n <= 20`` (``n!`` must fit) -- a limit the whole
+    scheduled path already carries through the int64 ranking kernel."""
+    global np
+    if np is None:
+        if not HAVE_NUMPY:
+            raise BackendUnavailable(
+                "the jit generation tier needs numpy (pip install the 'jit' or 'accel' extra); "
+                "for a pure-Python complex without numpy use grid_complexes."
+            )
+        import numpy as np
+
+    count = stop - start
+    out_states = np.empty((max(count, 0), n), dtype=np.int64)
+    if count <= 0:
+        return out_states
+    factorial = np.empty(n, dtype=np.int64)
+    accumulator = 1
+    for m in range(n):
+        factorial[m] = accumulator
+        accumulator *= m + 1
+    _get_unrank_kernel()(start, count, n, factorial, out_states)
+    return out_states
