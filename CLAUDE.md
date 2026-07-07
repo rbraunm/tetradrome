@@ -14,6 +14,25 @@ with older "orchestration" language surviving elsewhere in the tree.
 - **No heuristics in the core (decision 0007).** Only exact, answer-preserving reductions may optimize a computation. The raw, faithful path is first-class and always runnable.
 - **Never present an unvalidated number as a fact.** Every result carries method, version, conventions, raw output, and an explicit validation status. The reporter distinguishes computation, obstruction, and theorem reference.
 
+## Validation policy (decisions 0004, 0006, 0013)
+Backing a computation and validating it are separate concerns. Tetradrome always BACKS a result
+with its own native code (decision 0006); an external tool may only VALIDATE it. `compute(...,
+validate=...)` is a three-mode enum:
+- **strict (default).** Wherever a computed oracle for the invariant exists anywhere, it is REQUIRED. A missing required oracle raises -- the message says whether it is not installed (run `scripts/install_oracles.sh`) or not yet wired -- and ANY oracle that runs and disagrees raises. KnotInfo rides along as an extra cross-check, never the primary validator.
+- **soft.** Use the computed oracle if installed; otherwise fall back to KnotInfo with an info message noting that strict would have raised, distinguishing "not installed" (provisioning gap) from "not wired" (dev gap). A computed oracle that runs and DISAGREES still raises: soft tolerates absence, never disagreement.
+- **off.** No validation. The result still carries full provenance.
+
+Multi-oracle rule: a result is validated when at least one oracle agrees, and ANY oracle that ran
+and disagrees raises. KnotInfo is a fallback of last resort -- used only when no computed oracle
+exists anywhere for the invariant, not merely when one is absent from this host.
+
+Provenance is the deliverable (decision 0013). Every result records the mathematics (backend and
+version, method, inputs), each validator's identity, version, and verdict, and the versions of the
+computational libraries that can move an answer. The recorded version is the reproducibility, so we
+apply updates rather than pin and let the run record what it converged to. This is also why
+native-first is a reproducibility argument and not only a licensing one: the shorter the compute
+chain, the fewer versions can silently move a result.
+
 ## Acceleration: agreement discipline (non-negotiable)
 The core is built to be accelerated (JIT, multi-core/NUMA, optional GPU) WITHOUT changing
 its answers.
@@ -76,23 +95,30 @@ needs no password, streams output live, and exits with the remote command's stat
       python tools/ct_exec.py -- 'cd /opt/tetradrome/src && setsid venv/bin/python <cmd> > /tmp/job.log 2>&1 < /dev/null & echo PID=$!'
       python tools/ct_exec.py -- 'cat /tmp/job.log'
 
-## Oracle setup in the sandbox (scripts/install_oracles.sh)
-The comparison oracles (SnapPy, KnotJob, Sage, Khoca) are opt-in validators ONLY (decision
-0006), never a runtime dependency. `scripts/install_oracles.sh` makes a fresh sandbox
-oracle-ready so adapter work can be developed and checked here -- run it once at the start of a
-session. It is idempotent and fail-loud: a reachability preflight aborts on any egress-whitelist
-regression (those only clear in a NEW conversation), and the runnable oracles must pass a smoke
-test (KnotJob: trefoil s = +/-2; SnapPy: figure-eight volume 2.02988) or the run exits nonzero.
+## Oracle setup (scripts/install_oracles.sh)
+The comparison oracles are opt-in validators ONLY (decision 0006), never a runtime dependency.
+`scripts/install_oracles.sh` makes a box oracle-ready and is a first-class project artifact: run it
+at the START of a session and let it manage the oracles. Never install an oracle ad-hoc -- a stray
+`pip install` leaves an unrecorded version, which defeats decision 0013. It is the sandbox sibling
+of `scripts/provision_runner.py` (which stands up CT 250 itself).
 
-It installs what is runnable in an ephemeral sandbox and obtains the rest, matching exactly what
-`scripts/comparison/adapters.py` probes for (PATH or import):
-- **SnapPy** -- pip-installed, importable (also pulls `knot_floer_homology`). Runnable.
-- **KnotJob** -- jar + a `knotjob` PATH wrapper over `java -jar` (Temurin >= 23). Runnable.
-- **Khoca** -- source cloned, NOT built (its prebuilt is Python-3.6 ABI-locked); build is CT 250.
-- **Sage** -- Debian repo reachability only; the multi-GB install is CT 250 work.
+It is idempotent, update-aware, and fail-loud. A reachability preflight aborts on any
+egress-whitelist regression (those only clear in a NEW conversation). It converges rather than
+reinstalls: an oracle already at the current upstream is left alone, one with an upstream update is
+rebuilt, a missing one is installed, and only oracles that changed this run are re-smoked. A
+converged re-run does no compile and ends with "All oracles present and current -- good to
+proceed"; a run that changed something ends with "changes applied this run -- good to proceed". It
+reports the exact version of every oracle it converged to (decision 0013).
+- `scripts/install_oracles.sh` -- converge, apply updates, verify.
+- `scripts/install_oracles.sh --check` -- dry run: report each oracle's version and update state, change nothing (nonzero exit only if any are missing).
+- `VERIFY=1 scripts/install_oracles.sh` -- additionally re-run every smoke even when converged.
 
-So in the sandbox the adapter honestly reports snappy/knotjob/kfh present and sage/khoca absent.
-This is the sandbox sibling of `scripts/provision_runner.py` (which stands up CT 250 itself).
+What it provisions, matching exactly what `scripts/comparison/adapters.py` probes for (PATH or
+import):
+- **pip (importable):** SnapPy (also pulls `knot_floer_homology`), Regina, Khoca. Runnable in the sandbox.
+- **KnotJob:** rolling jar + a `knotjob` PATH wrapper over `java -jar` (Temurin >= 23); the jar is swapped only when its content hash changes.
+- **Built from source:** JavaKh, kht++, knotkit, KhoHo -- each rebuilt only on an upstream change or a missing artifact, then smoked (e.g. trefoil s = +/-2, figure-eight volume 2.02988).
+- **SageMath:** the ONLY oracle not provisioned in the sandbox -- its multi-GB apt tree is CT 250 work (set `INSTALL_SAGE=1` there). So in the sandbox the adapter reports every oracle present except Sage.
 
 ## Testing
 Tests make real assertions about computed invariants and complexes. No monkeypatching the

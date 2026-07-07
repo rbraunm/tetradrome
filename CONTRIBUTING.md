@@ -2,8 +2,31 @@
 
 The authoritative design and engineering rules live in `SPEC.md`, `roadmap/decisions/`, and
 `CLAUDE.md`. Read those for the native compute model, the validation discipline, the
-no-silent-fallback rule, and the acceleration-agreement requirements. This file covers one norm
-that is easy to forget: keeping the benchmark artifact honest.
+no-silent-fallback rule, and the acceleration-agreement requirements. This file covers two norms
+that are easy to forget: provisioning every oracle through the one setup script, and keeping the
+benchmark artifact honest.
+
+## Oracles come from one script
+
+`scripts/install_oracles.sh` is the single source of every validator on a host, and it is a
+first-class project artifact. Run it at the start of a session and let it manage the oracles; do
+not hand-install one. A stray `pip install` or manual build leaves a version the run never
+recorded, and the recorded version is the reproducibility (decision 0013).
+
+- `scripts/install_oracles.sh` converges the host: installs what is missing, applies upstream
+  updates, rebuilds a source oracle only when its upstream actually moved, and re-smokes only what
+  changed. It prints the exact version of every oracle it converged to and ends with an unambiguous
+  "good to proceed".
+- `scripts/install_oracles.sh --check` is a non-mutating dry run that reports each oracle's version
+  and whether an update is available; a nonzero exit means something is missing.
+- `VERIFY=1 scripts/install_oracles.sh` re-runs every smoke even when converged.
+- Every oracle except SageMath provisions in the ephemeral sandbox; Sage's multi-GB apt tree is
+  CT 250 work (`INSTALL_SAGE=1` there).
+
+Adding a new oracle is an edit to this script (a version-probed install plus a smoke), not a manual
+step in your shell -- that keeps every host reproducible from the one artifact. The validation
+discipline that consumes these oracles (the strict/soft/off modes, the computed-oracle-required
+rule, and KnotInfo as fallback of last resort) lives in `CLAUDE.md` and decisions 0004/0006/0013.
 
 ## The benchmark artifact tracks what is measurable
 
@@ -18,9 +41,9 @@ measurable thing sitting as a static status row.
 
 - **Implemented an invariant natively?** Point its `spec.py` entry's `tetra` field at the real
   caller and set its status to `done`. The next run times it and validates it against KnotInfo.
-- **Made an oracle available** (installed it on the host, or it became pip-installable)? Give it a
-  real `run` in `adapters.py` in place of the probe-only stub, so its column fills in with real
-  numbers instead of "absent".
+- **Made an oracle available** (added it to `scripts/install_oracles.sh`, or it became
+  pip-installable there)? Give it a real `run` in `adapters.py` in place of the probe-only stub, so
+  its column fills in with real numbers instead of "absent".
 - **Adding an invariant the project aims at but does not yet compute?** Add a status-only row so
   the chart shows the ambition and the oracle's time stands as the target to aim at.
 
