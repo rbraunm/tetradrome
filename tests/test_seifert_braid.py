@@ -39,4 +39,4 @@ def test_compute_validates_against_knotinfo(name):
     for inv in ("determinant", "signature"):
         # validate=True raises if the computed value disagrees with KnotInfo.
         result = invariants.compute(k, inv)
-        assert result.validation.known_answer_match == "pass"
+        assert result.validation.verdict("knotinfo") == "pass"

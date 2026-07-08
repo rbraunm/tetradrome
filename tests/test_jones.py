@@ -42,7 +42,7 @@ SWEEP = ["3_1", "4_1", "5_1", "5_2", "6_1", "6_2", "6_3", "7_4", "8_19", "9_42",
 @pytest.mark.parametrize("name", SWEEP)
 def test_jones_validates_against_knotinfo(name):
     result = invariants.compute(knots.from_name(name), "jones_polynomial")
-    assert result.validation.known_answer_match == "pass"
+    assert result.validation.verdict("knotinfo") == "pass"
 
 
 def test_jones_via_compute_value_and_provenance():

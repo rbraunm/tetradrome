@@ -73,8 +73,8 @@ def measureTetradrome(knot, computeName, reps):
     except Exception as error:                       # an engine that cannot run on this knot
         return Measurement(value=f"error: {type(error).__name__}", seconds=None,
                            note=str(error)[:60], agree="n/a")
-    match = getattr(result.validation, "known_answer_match", "")
-    agree = {"pass": "pass", "not_available": "no-oracle"}.get(match, match or "")
+    verdict = result.validation.verdict("knotinfo")
+    agree = {"pass": "pass", "not_run": "no-oracle"}.get(verdict, verdict)
     return Measurement(value=_shortValue(result.value), seconds=seconds, agree=agree)
 
 

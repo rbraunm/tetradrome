@@ -39,7 +39,7 @@ SWEEP = ["3_1", "4_1", "5_1", "5_2", "6_1", "6_2", "6_3", "7_4", "8_19", "9_42",
 @pytest.mark.parametrize("name", SWEEP)
 def test_alexander_validates_against_knotinfo(name):
     result = invariants.compute(knots.from_name(name), "alexander_polynomial")
-    assert result.validation.known_answer_match == "pass"
+    assert result.validation.verdict("knotinfo") == "pass"
 
 
 def test_conway_knot_alexander_is_trivial():
@@ -47,7 +47,7 @@ def test_conway_knot_alexander_is_trivial():
     # hard: the Alexander polynomial (and determinant) cannot see it.
     result = invariants.compute(knots.from_name("K11n34"), "alexander_polynomial")
     assert result.value == (1,)
-    assert result.validation.known_answer_match == "pass"
+    assert result.validation.verdict("knotinfo") == "pass"
 
 
 def test_alexander_offtable_torus():

@@ -118,6 +118,17 @@ def normalize_name(name: str) -> str:
     return n
 
 
+def version() -> str:
+    """The KnotInfo data-package version consulted -- KnotInfo's validator version (ADR 0013).
+
+    KnotInfo is a validator, so the reproducibility-relevant version is the ``database_knotinfo``
+    distribution the answers are read from.
+    """
+    from importlib.metadata import version as _packageVersion
+
+    return _packageVersion("database_knotinfo")
+
+
 def rows() -> list[dict]:
     """All KnotInfo rows (read-only); loads the table on first use. This is the public
     enumerator the validation rosters build on -- callers must not mutate the result."""

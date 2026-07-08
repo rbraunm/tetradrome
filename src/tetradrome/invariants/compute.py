@@ -26,7 +26,7 @@ from ..diagrams import NormalizedDiagram
 from ..engines import khovanov
 from ..errors import UnknownKnot, UnvalidatedResult
 from . import jones, seifert
-from .schema import InvariantResult, Provenance, ValidationStatus
+from .schema import InvariantResult, Provenance, ValidationStatus, ValidatorRecord
 
 # Invariants read from the braid Seifert matrix (Collins).
 _SEIFERT_INVARIANTS = {
@@ -45,9 +45,31 @@ _PD_INVARIANTS = {
 _RUNS_D_SQUARED = {"khovanov_homology", "rational_khovanov_homology", "rasmussen_s"}
 
 
+def _library_versions(used: tuple[str, ...] = ()) -> tuple[tuple[str, str], ...]:
+    """Versions of the computational libraries a result depends on (ADR 0013).
+
+    Always records the interpreter, then each library the computation actually used. The native
+    core uses no third-party computational library (ADR 0006), so a native result records only the
+    interpreter -- that short chain is the native-first argument made concrete, and it is the true
+    record, not the set of libraries that merely happen to be installed. A declared library that is
+    missing is a fail-loud error (the caller claimed to use something absent), never a silent skip.
+    """
+    import platform
+    from importlib.metadata import version as _packageVersion
+
+    versions: list[tuple[str, str]] = [("python", platform.python_version())]
+    for name in used:
+        versions.append((name, _packageVersion(name)))
+    return tuple(versions)
+
+
 def _finalize(knot, invariant, value, method, inputs, fallback_label, validate,
-              d_squared="not_applicable"):
-    """Attach the oracle check, provenance, and validation outcome to a value."""
+              d_squared="not_applicable", libraries: tuple[str, ...] = ()):
+    """Attach the oracle check, provenance, and validation outcome to a value.
+
+    ``libraries`` names the third-party computational libraries the computation used, if any; the
+    native core uses none, so it defaults to empty and the result records only the interpreter.
+    """
     oracle = (
         knotinfo_backend.known_answer(knot.identity, invariant)
         if knot.identity is not None
@@ -59,7 +81,13 @@ def _finalize(knot, invariant, value, method, inputs, fallback_label, validate,
         elif invariant == "jones_polynomial":
             oracle = jones.canonical_laurent(*oracle)
 
-    known = "not_available" if oracle is None else ("pass" if value == oracle else "fail")
+    # KnotInfo is the only validator wired at this checkpoint; it is recorded as one validator
+    # among what will become many (ADR 0013). No tabulated answer means KnotInfo was not consulted.
+    if oracle is None:
+        validators: tuple[ValidatorRecord, ...] = ()
+    else:
+        verdict = "pass" if value == oracle else "fail"
+        validators = (ValidatorRecord("knotinfo", knotinfo_backend.version(), verdict),)
 
     result = InvariantResult(
         knot=knot.identity or fallback_label,
@@ -70,19 +98,21 @@ def _finalize(knot, invariant, value, method, inputs, fallback_label, validate,
             backend_version=__version__,
             method=method,
             inputs=inputs,
+            library_versions=_library_versions(libraries),
         ),
-        validation=ValidationStatus(known_answer_match=known, d_squared_check=d_squared),
+        validation=ValidationStatus(validators=validators, d_squared_check=d_squared),
     )
 
-    if validate and known == "fail":
+    if validate and result.validation.has_disagreement:
+        disagreeing = next(v for v in validators if v.verdict == "fail")
         raise UnvalidatedResult(
             f"{invariant} for {result.knot}: computed {value!r} disagrees with "
-            f"KnotInfo oracle {oracle!r}."
+            f"{disagreeing.oracle} {disagreeing.version} oracle {oracle!r}."
         )
     if validate and not result.validation.is_validated:
         raise UnvalidatedResult(
-            f"{invariant} for {result.knot}: no validation available "
-            f"(known_answer_match={known})."
+            f"{invariant} for {result.knot}: no validator passed "
+            f"(validators={validators})."
         )
     return result
 

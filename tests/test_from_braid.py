@@ -43,8 +43,8 @@ def test_from_braid_with_identity_validates():
     k = knots.from_braid([1, 1, 1], identity="3_1")
     det = invariants.compute(k, "determinant")  # validate=True
     sig = invariants.compute(k, "signature")
-    assert det.value == 3 and det.validation.known_answer_match == "pass"
-    assert sig.value == -2 and sig.validation.known_answer_match == "pass"
+    assert det.value == 3 and det.validation.verdict("knotinfo") == "pass"
+    assert sig.value == -2 and sig.validation.verdict("knotinfo") == "pass"
     assert det.provenance.inputs == "braid_word"
 
 
@@ -55,7 +55,7 @@ def test_offtable_requires_opt_in():
     with pytest.raises(UnvalidatedResult):
         invariants.compute(k, "determinant")  # validate=True
     out = invariants.compute(k, "determinant", validate=False)
-    assert out.validation.known_answer_match == "not_available"
+    assert out.validation.verdict("knotinfo") == "not_run"
     assert out.knot == "(braid word)"
 
 

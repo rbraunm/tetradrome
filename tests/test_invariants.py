@@ -28,8 +28,8 @@ def test_determinant_and_signature_match_knotinfo(name, det, sig):
     s = invariants.compute(k, "signature")
     assert d.value == det
     assert s.value == sig
-    assert d.validation.known_answer_match == "pass"
-    assert s.validation.known_answer_match == "pass"
+    assert d.validation.verdict("knotinfo") == "pass"
+    assert s.validation.verdict("knotinfo") == "pass"
     assert d.validation.is_validated and s.validation.is_validated
     assert d.provenance.backend == "tetradrome-native"
     assert d.provenance.method == "seifert_form_from_braid"
@@ -41,7 +41,7 @@ def test_homological_invariants_validate_against_knotinfo(invariant, name):
     # The native cube/Lee computation must match KnotInfo's oracle (mirrored to our
     # chirality in the backend), and the d^2 = 0 check must have run.
     r = invariants.compute(knots.from_name(name), invariant)
-    assert r.validation.known_answer_match == "pass"
+    assert r.validation.verdict("knotinfo") == "pass"
     assert r.validation.is_validated
     assert r.validation.d_squared_check == "pass"
     assert r.provenance.backend == "tetradrome-native"
@@ -59,7 +59,7 @@ def test_offtable_pd_homological_is_unvalidated():
         invariants.compute(raw, "khovanov_homology")
     # validate=False returns the computed value, marked as having no oracle.
     r = invariants.compute(raw, "khovanov_homology", validate=False)
-    assert r.validation.known_answer_match == "not_available"
+    assert r.validation.verdict("knotinfo") == "not_run"
 
 
 def test_diagrammatic_invariant_needs_a_pd():
