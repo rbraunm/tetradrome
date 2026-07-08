@@ -188,6 +188,17 @@ def tau_invariant(name: str) -> int:
     return int(str(raw).strip())
 
 
+def three_genus(name: str) -> int:
+    """KnotInfo's Seifert (three-)genus (the oracle for the grid Seifert genus).
+
+    Genus is chirality-independent, so unlike the Khovanov/s columns it needs no mirror adjustment.
+    """
+    raw = lookup(name).get("three_genus")
+    if raw is None or str(raw).strip() == "":
+        raise UnknownKnot(f"{name!r} has no three_genus in KnotInfo.")
+    return int(str(raw).strip())
+
+
 def braid_word(name: str) -> list[int]:
     """Parse a knot's braid word from KnotInfo into a list of nonzero ints.
 
@@ -243,6 +254,28 @@ def known_answer(name: str, invariant: str):
         if _blank(raw):
             return None
         return -int(str(raw).strip())  # s(mirror) = -s
+
+    # Knot Floer invariants. Unlike the Khovanov/s columns above, KnotInfo's HFK/tau/genus columns
+    # sit in the SAME chirality as its PD -- verified empirically: kfh computed from our PD (which
+    # carries KnotInfo's chirality) matches these raw for chiral knots (3_1/8_19/10_124, tau != 0),
+    # so no mirror or sign flip is applied. hfk_ranks is keyed (Maslov, Alexander), the native
+    # hfk_hat convention; the native engine's grading orientation is checked against this raw oracle
+    # where the two meet (fail-loud-on-mirror at the compute wiring).
+    if invariant == "knot_floer_homology":
+        try:
+            return hfk_ranks(name)
+        except UnknownKnot:
+            return None
+    if invariant == "ozsvath_szabo_tau":
+        try:
+            return tau_invariant(name)
+        except UnknownKnot:
+            return None
+    if invariant == "three_genus":
+        try:
+            return three_genus(name)
+        except UnknownKnot:
+            return None
 
     column = _ORACLE_COLUMN.get(invariant)
     if column is None:
