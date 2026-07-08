@@ -103,11 +103,10 @@ def _gitSha():
 
 def _toolVersions():
     versions = {}
-    try:
-        kfh = __import__("knot_floer_homology")
-        versions["knot_floer_homology"] = getattr(kfh, "__version__", "present")
-    except Exception:
-        pass
+    for orc in adapters.ORACLES:
+        ok, _detail = orc.available()
+        if ok:
+            versions[orc.key] = orc.version()
     try:
         td = __import__("tetradrome")
         versions["tetradrome"] = getattr(td, "__version__", _gitSha())

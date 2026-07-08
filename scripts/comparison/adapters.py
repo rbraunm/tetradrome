@@ -20,9 +20,12 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import hashlib
 import importlib
+import os
 import re
 import shutil
+import subprocess
 import time
 
 
@@ -709,22 +712,97 @@ def khocaAvailable():
     return _probeImport("khoca", "Khoca")
 
 
+# ---- oracle versions (ADR 0013) -----------------------------------------------------------
+# Each probe mirrors what scripts/install_oracles.sh records, so the artifact's versions match the
+# provisioned host exactly: pip distributions by metadata, source oracles by their built git sha,
+# the rolling KnotJob jar by content hash. An absent oracle reports "absent" (the generator only
+# records versions for oracles it also found present).
+
+def _oracleHome():
+    return os.environ.get("ORACLE_HOME", "/opt/oracles")
+
+
+def _pipVersion(distribution):
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as packageVersion
+    try:
+        return packageVersion(distribution)
+    except PackageNotFoundError:
+        return "absent"
+
+
+def _gitShaVersion(subdir):
+    path = os.path.join(_oracleHome(), subdir)
+    done = subprocess.run(["git", "-C", path, "rev-parse", "--short", "HEAD"],
+                          capture_output=True, text=True)
+    return f"git:{done.stdout.strip()}" if done.returncode == 0 and done.stdout.strip() else "absent"
+
+
+def _jarHashVersion(relativePath):
+    path = os.path.join(_oracleHome(), relativePath)
+    try:
+        with open(path, "rb") as handle:
+            return f"sha256:{hashlib.sha256(handle.read()).hexdigest()[:12]}"
+    except OSError:
+        return "absent"
+
+
+def kfhVersion():
+    return _pipVersion("knot_floer_homology")
+
+
+def snappyVersion():
+    return _pipVersion("snappy")
+
+
+def reginaVersion():
+    return _pipVersion("regina")
+
+
+def khocaVersion():
+    return _pipVersion("khoca")
+
+
+def knotjobVersion():
+    return _jarHashVersion("knotjob/KnotJob/KnotJob.jar")
+
+
+def javakhVersion():
+    return _gitShaVersion("javakh")
+
+
+def khohoVersion():
+    return _gitShaVersion("khoho")
+
+
+def sageVersion():
+    exe = shutil.which("sage")
+    if not exe:
+        return "absent"
+    done = subprocess.run([exe, "--version"], capture_output=True, text=True)
+    line = (done.stdout.strip().splitlines() or [""])[0]
+    marker = "SageMath version "
+    return line.split(marker, 1)[1].split(",")[0].strip() if marker in line else "present"
+
+
 # Registry the generator iterates. ``run`` is None for probe-only oracles -- the generator prints
 # "adapter pending" for the invariants they cover until a run is wired against a real install.
+# ``version`` mirrors what install_oracles.sh recorded for the oracle (ADR 0013).
 @dataclasses.dataclass
 class Oracle:
     key: str
     available: object           # () -> (bool, detail)
     run: object | None          # (knot, reps) -> {invariantName: Measurement} | None
+    version: object             # () -> version string, or "absent"
 
 
 ORACLES = [
-    Oracle("kfh", kfhAvailable, kfhRun),
-    Oracle("snappy", snappyAvailable, snappyRun),
-    Oracle("regina", reginaAvailable, reginaRun),
-    Oracle("knotjob", knotjobAvailable, knotjobRun),
-    Oracle("javakh", javakhAvailable, javakhRun),
-    Oracle("khoho", khohoAvailable, khohoRun),
-    Oracle("sage", sageAvailable, sageRun),
-    Oracle("khoca", khocaAvailable, None),
+    Oracle("kfh", kfhAvailable, kfhRun, kfhVersion),
+    Oracle("snappy", snappyAvailable, snappyRun, snappyVersion),
+    Oracle("regina", reginaAvailable, reginaRun, reginaVersion),
+    Oracle("knotjob", knotjobAvailable, knotjobRun, knotjobVersion),
+    Oracle("javakh", javakhAvailable, javakhRun, javakhVersion),
+    Oracle("khoho", khohoAvailable, khohoRun, khohoVersion),
+    Oracle("sage", sageAvailable, sageRun, sageVersion),
+    Oracle("khoca", khocaAvailable, None, khocaVersion),
 ]
