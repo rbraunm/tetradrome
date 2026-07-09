@@ -14,11 +14,16 @@ Supported invariants: the Seifert-form invariants `determinant`, `signature`, an
 `alexander_polynomial` (from the Collins braid Seifert matrix); `jones_polynomial` (from
 the Kauffman bracket over the resolution cube); and the native homological invariants
 `khovanov_homology` (over F2), `rational_khovanov_homology` (over Q), and `rasmussen_s`
-(from the Lee quantum filtration). All are checked against KnotInfo when the knot is
-tabulated -- the homological oracles are mirrored/sign-flipped to KnotInfo's chirality
-convention (Phase 2c/3c). Seifert-form invariants accept a braid word (from_braid,
-off-table included) or a tabulated knot's KnotInfo braid; the diagrammatic invariants
-need a PD diagram (from_name or from_pd). Off-table results have no KnotInfo oracle,
+(from the Lee quantum filtration); and the native grid Floer invariants
+`knot_floer_homology` (HFK-hat), `ozsvath_szabo_tau`, and `three_genus`. All are checked
+against KnotInfo when the knot is tabulated -- the Khovanov/s oracles are
+mirrored/sign-flipped to KnotInfo's chirality convention (Phase 2c/3c), while the Floer
+oracles compare RAW: KnotInfo's HFK/tau/genus columns share its PD chirality, and the
+native grid is built in that standard chirality, so any mismatch is a genuine error and
+raises -- never a silent reflect/transpose. Seifert-form invariants accept a braid word
+(from_braid, off-table included) or a tabulated knot's KnotInfo braid; the diagrammatic
+invariants need a PD diagram (from_name or from_pd); the Floer invariants need a
+tabulated knot (the grid comes from KnotInfo's grid notation). Off-table results have no KnotInfo oracle,
 so until their computed oracles are wired they raise under strict and soft; pass
 validate="off" to opt in.
 """
@@ -30,7 +35,7 @@ from typing import Literal
 from .._version import __version__
 from ..backends import knotinfo_backend, registry
 from ..diagrams import NormalizedDiagram
-from ..engines import khovanov
+from ..engines import floer, khovanov
 from ..errors import UnknownKnot, UnvalidatedResult
 from . import jones, seifert
 from .schema import InvariantResult, Provenance, ValidationStatus, ValidatorRecord
@@ -54,6 +59,16 @@ _PD_INVARIANTS = {
 }
 # PD invariants whose computation verifies d^2 = 0 over its coefficient ring.
 _RUNS_D_SQUARED = {"khovanov_homology", "rational_khovanov_homology", "rasmussen_s"}
+# Invariants read from the grid diagram via the native Floer engine: (function, method label).
+# The grid comes from KnotInfo's tabulated grid notation, so these are tabulated-knot-only
+# paths. The engine carries its own fail-loud self-checks (hfk_hat verifies the V-factor
+# division by reconstruction; tau verifies dim H_0 = 1), which are not d^2 checks, so
+# d_squared_check stays not_applicable here.
+_FLOER_INVARIANTS = {
+    "knot_floer_homology": (floer.hfk_hat, "grid_hfk_hat"),
+    "ozsvath_szabo_tau": (floer.tau, "grid_filtered_tau"),
+    "three_genus": (floer.seifert_genus, "grid_hfk_genus"),
+}
 
 
 def _library_versions(used: tuple[str, ...] = ()) -> tuple[tuple[str, str], ...]:
@@ -237,5 +252,18 @@ def compute(
             knot, invariant, value, method, "pd_code", "(pd)", validate, d_squared=d_squared
         )
 
-    supported = sorted(_SEIFERT_INVARIANTS) + sorted(_PD_INVARIANTS)
+    if invariant in _FLOER_INVARIANTS:
+        if knot.identity is None:
+            raise UnknownKnot(
+                f"{invariant} needs a tabulated knot: the grid diagram comes from "
+                "KnotInfo's grid notation, and an off-table knot has no grid."
+            )
+        grid = floer.GridDiagram.from_knotinfo(knot.identity)
+        func, method = _FLOER_INVARIANTS[invariant]
+        value = func(grid)
+        return _finalize(
+            knot, invariant, value, method, "knotinfo:grid_notation", "(grid)", validate
+        )
+
+    supported = sorted(_SEIFERT_INVARIANTS) + sorted(_PD_INVARIANTS) + sorted(_FLOER_INVARIANTS)
     raise ValueError(f"compute does not support {invariant!r}; supported: {supported}")

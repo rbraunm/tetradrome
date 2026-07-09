@@ -71,7 +71,7 @@ def test_diagrammatic_invariant_needs_a_pd():
 def test_unsupported_invariant_raises():
     k = knots.from_name("3_1")
     with pytest.raises(ValueError):
-        invariants.compute(k, "knot_floer_homology")  # genuinely not supported
+        invariants.compute(k, "homfly_polynomial")  # genuinely not supported
 
 
 def test_offtable_knot_without_identity_raises():
