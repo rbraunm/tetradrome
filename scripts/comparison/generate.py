@@ -11,10 +11,6 @@ pass/fail or a speed gate (CLAUDE.md). An absent oracle is reported absent, neve
 
     python scripts/comparison/generate.py                 # default ladder, writes BENCHMARKS.md
     python scripts/comparison/generate.py --reps 5 --out BENCHMARKS.md
-    python scripts/comparison/generate.py --with-floer-grid   # time the grid Floer engine too
-
-The grid Floer engine timing is flag-gated: it spins up the multi-core scheduler, which belongs
-on the provisioned box, not in a laptop/sandbox. Off by default; the row reads "pending (CT 250)".
 """
 from __future__ import annotations
 
@@ -138,7 +134,7 @@ def _medianMs(seconds_list):
     return statistics.median(clean) * 1000.0
 
 
-def measure(ladder, reps, withFloerGrid):
+def measure(ladder, reps):
     """Native cells per invariant, plus every present oracle's full output cached per knot.
 
     Returns (tetraCells, oracleResults, oracleLive):
@@ -148,8 +144,7 @@ def measure(ladder, reps, withFloerGrid):
     """
     oracleLive = {orc.key: orc.available() for orc in adapters.ORACLES}
     oracleResults = _runOracles(ladder, reps, oracleLive)
-    tetraCells = {inv.name: _tetraCell(inv, ladder, reps, withFloerGrid)
-                  for inv in spec.INVARIANTS}
+    tetraCells = {inv.name: _tetraCell(inv, ladder, reps) for inv in spec.INVARIANTS}
     return tetraCells, oracleResults, oracleLive
 
 
@@ -171,7 +166,7 @@ def _runOracles(ladder, reps, oracleLive):
     return results
 
 
-def _tetraCell(inv, ladder, reps, withFloerGrid):
+def _tetraCell(inv, ladder, reps):
     if inv.tetra is None:
         return {"ms": None, "label": "not implemented (target)", "agree": "n/a"}
     kind, arg = inv.tetra
@@ -185,15 +180,6 @@ def _tetraCell(inv, ladder, reps, withFloerGrid):
         ms = _medianMs(seconds)
         label = None if ms is not None else "could not run"
         return {"ms": ms, "label": label, "agree": agree}
-    if kind == "floer":
-        if not withFloerGrid:
-            return {"ms": None, "label": "pending (CT 250 grid run)", "agree": "n/a"}
-        seconds = []
-        for name, _knot in ladder:
-            seconds.append(adapters.measureFloerGrid(name, reps).seconds)
-        ms = _medianMs(seconds)
-        label = None if ms is not None else "engine could not run"
-        return {"ms": ms, "label": label, "agree": "n/a"}
     return {"ms": None, "label": "unknown tetra kind", "agree": "n/a"}
 
 
@@ -292,7 +278,7 @@ def _cell(text):
     return str(text).replace("|", "\\|").replace("\n", " ").strip()
 
 
-def emit(tetraCells, oracleResults, oracleLive, facts, ladder, reps, withFloerGrid):
+def emit(tetraCells, oracleResults, oracleLive, facts, ladder, reps):
     oracleByKey = {orc.key: orc for orc in adapters.ORACLES}
     lines = []
     add = lines.append
@@ -329,8 +315,7 @@ def emit(tetraCells, oracleResults, oracleLive, facts, ladder, reps, withFloerGr
         f"**absent this run:** {', '.join(absent) or 'none'}")
     add(f"- **Knot ladder:** {', '.join(n for n, _k in ladder)} "
         f"(timings are the median across the ladder)")
-    add(f"- **Timing:** best-of-{reps} wall seconds per knot, reported in milliseconds"
-        + ("" if withFloerGrid else "; grid Floer engine timing deferred to a CT 250 run") + "")
+    add(f"- **Timing:** best-of-{reps} wall seconds per knot, reported in milliseconds")
     add(f"- **Generated:** {facts['when']}\n")
 
     for group in spec.GROUPS:
@@ -410,15 +395,12 @@ def main():
     parser.add_argument("--knots", nargs="+", default=DEFAULT_LADDER, help="tabulated knot ladder")
     parser.add_argument("--out", default=os.path.join(REPO_ROOT, "BENCHMARKS.md"),
                         help="output path for the artifact")
-    parser.add_argument("--with-floer-grid", action="store_true",
-                        help="also time the multi-core grid Floer engine (provisioned box only)")
     args = parser.parse_args()
 
     ladder = adapters.buildLadder(args.knots)
     facts = hostFacts()
-    tetraCells, oracleResults, oracleLive = measure(ladder, args.reps, args.with_floer_grid)
-    markdown = emit(tetraCells, oracleResults, oracleLive, facts, ladder, args.reps,
-                    args.with_floer_grid)
+    tetraCells, oracleResults, oracleLive = measure(ladder, args.reps)
+    markdown = emit(tetraCells, oracleResults, oracleLive, facts, ladder, args.reps)
 
     with open(args.out, "w") as handle:
         handle.write(markdown)

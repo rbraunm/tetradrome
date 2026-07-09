@@ -57,10 +57,7 @@ class HFKValidator:
         """
         if invariant not in _COVERED or not knot.pd_code:
             return None
-        import knot_floer_homology as kfh
-
-        pd = [list(crossing) for crossing in knot.pd_code]
-        out = kfh.pd_to_hfk(pd)
+        out = raw_hfk(knot)
         if invariant == "knot_floer_homology":
             # kfh keys ranks (Alexander, Maslov); canonicalize to (Maslov, Alexander).
             return {
@@ -68,3 +65,16 @@ class HFKValidator:
                 for (alexander, maslov), rank in out["ranks"].items()
             }
         return out[_KFH_SCALAR[invariant]]
+
+
+def raw_hfk(knot) -> dict:
+    """One kfh ``pd_to_hfk`` call on the knot's PD, returned raw (kfh's own field names,
+    ranks keyed ``(Alexander, Maslov)``).
+
+    The single place the library is invoked: the validator above and the comparison
+    layer's measurement adapter (``scripts/comparison/adapters.kfhRun``) both delegate
+    here, so the PD conversion and the call itself cannot drift apart.
+    """
+    import knot_floer_homology as kfh
+
+    return kfh.pd_to_hfk([list(crossing) for crossing in knot.pd_code])

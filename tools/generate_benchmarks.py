@@ -17,7 +17,7 @@ or out-of-date git never wastes a benchmark and the final push fast-forwards. Ev
 loud with a clear next step; nothing is swallowed and there is no silent fallback.
 
     python tools/generate_benchmarks.py
-    python tools/generate_benchmarks.py --reps 5 --with-floer-grid
+    python tools/generate_benchmarks.py --reps 5
     python tools/generate_benchmarks.py --ref claude --no-push
 
 The CT 250 path knobs (--ctid, --ref, --src, --python) default to the known box layout.
@@ -160,21 +160,20 @@ def sync_with_remote(branch: str) -> None:
 
 # --- remote run -----------------------------------------------------------------------------
 
-def build_remote_command(src: str, python: str, ref: str, reps: int, with_floer: bool) -> str:
+def build_remote_command(src: str, python: str, ref: str, reps: int) -> str:
     """One remote shell line. Each step gates the next with &&. The generator's console output
     goes to a log; the artifact is returned base64-encoded between sentinels so non-ASCII content
     (the status emoji) survives transport through any console codepage."""
     src = src.rstrip("/")
     out = src + "/BENCHMARKS.md"
-    floer = " --with-floer-grid" if with_floer else ""
     return (
         "cd {src} && "
         "git fetch --depth 1 origin {ref} && "
         "git reset --hard FETCH_HEAD && "
-        "{python} scripts/comparison/generate.py --reps {reps}{floer} --out {out} "
+        "{python} scripts/comparison/generate.py --reps {reps} --out {out} "
         "> /dev/null 2> {log} && "
         "printf '{begin}\\n' && base64 -w0 {out} && printf '\\n{end}\\n'"
-    ).format(src=src, ref=ref, python=python, reps=reps, floer=floer,
+    ).format(src=src, ref=ref, python=python, reps=reps,
              out=out, log=REMOTE_LOG, begin=BEGIN, end=END)
 
 
@@ -201,10 +200,9 @@ def fetch_remote_log(ctid: int) -> str:
 
 
 def generate_on_ct(ctid: int, src: str, python: str, ref: str,
-                   reps: int, with_floer: bool, timeout: int) -> str:
-    remote = build_remote_command(src, python, ref, reps, with_floer)
-    note("running generator on CT %d (ref %s, reps %d%s)..."
-         % (ctid, ref, reps, ", with floer grid" if with_floer else ""))
+                   reps: int, timeout: int) -> str:
+    remote = build_remote_command(src, python, ref, reps)
+    note("running generator on CT %d (ref %s, reps %d)..." % (ctid, ref, reps))
     result = ct_exec(ctid, remote, timeout)
 
     text = result.stdout or ""
@@ -305,8 +303,6 @@ def main(argv=None) -> int:
     parser.add_argument("--python", default="/opt/tetradrome/venv/bin/python",
                         help="python interpreter on CT 250")
     parser.add_argument("--reps", type=int, default=3, help="best-of-N timing repeats")
-    parser.add_argument("--with-floer-grid", action="store_true",
-                        help="also time the multi-core grid Floer engine")
     parser.add_argument("--out", default=os.path.join(REPO_ROOT, "BENCHMARKS.md"),
                         help="local artifact path to write and commit")
     parser.add_argument("--remote-timeout", type=int, default=3600,
@@ -318,7 +314,7 @@ def main(argv=None) -> int:
     branch = preflight_git()
     sync_with_remote(branch)
     markdown = generate_on_ct(args.ctid, args.src, args.python, args.ref,
-                              args.reps, args.with_floer_grid, args.remote_timeout)
+                              args.reps, args.remote_timeout)
 
     with open(args.out, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(markdown)

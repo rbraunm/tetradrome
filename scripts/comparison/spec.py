@@ -46,7 +46,7 @@ class Invariant:
     outputs: str
     status: str                 # one of the flags above
     knotinfo: str               # yes | partial | no
-    tetra: tuple | None         # ("compute", name) | ("floer", None) | None (not implemented)
+    tetra: tuple | None         # ("compute", name) | None (not implemented)
 
 
 # Ordered so the chart reads from the most-grounded groups to the most-aspirational.
@@ -116,13 +116,13 @@ INVARIANTS = [
     # ---- knot Floer (kfh group) -------------------------------------------------------------
     Invariant("hfk", "HFK-hat (ranks / polynomial)", "kfh",
               "Grid (MOS) knot Floer homology; bigraded ranks, Euler char = Alexander.",
-              "PD / grid", "bigraded ranks, HFK polynomial", "landing", "yes", ("floer", None)),
+              "PD / grid", "bigraded ranks, HFK polynomial", "done", "yes", ("compute", "knot_floer_homology")),
     Invariant("tau", "Ozsvath-Szabo tau", "kfh",
               "tau from the Alexander filtration on grid homology (concordance, |tau| <= g4).",
-              "PD / grid", "integer", "landing", "yes", None),
+              "PD / grid", "integer", "done", "yes", ("compute", "ozsvath_szabo_tau")),
     Invariant("seifert_genus", "Seifert genus (via HFK)", "kfh",
               "Top Alexander grading with nonzero HFK (HFK detects genus).",
-              "PD / grid", "integer", "landing", "yes", None),
+              "PD / grid", "integer", "done", "yes", ("compute", "three_genus")),
     Invariant("fibered", "Fibered-ness (via HFK)", "kfh",
               "HFK detects fibredness (Ni): top Alexander grading has rank 1.",
               "PD / grid", "bool", "near", "yes", None),

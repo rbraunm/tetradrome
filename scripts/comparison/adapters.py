@@ -69,15 +69,31 @@ def pdAsList(knot):
 # ---- Tetradrome side ----------------------------------------------------------------------
 
 def measureTetradrome(knot, computeName, reps):
-    """Time ``invariants.compute(knot, computeName)`` and capture its validation verdict."""
+    """Time ``invariants.compute(knot, computeName)`` and capture its validation verdict.
+
+    A wired computed oracle missing from this host is a provisioning failure of the artifact
+    run itself, not a per-cell state -- fail loud before timing anything (ADR 0004). Soft mode
+    then tolerates only the honestly-recorded gaps: oracles not yet wired, or wired ones that
+    cannot check this input. The agree verdict prefers a computed oracle's pass over KnotInfo's.
+    """
     from tetradrome import invariants
+    from tetradrome.backends import registry
+    missing = [v.name for v in registry.wired_validators(computeName) if not v.is_available()]
+    if missing:
+        raise RuntimeError(
+            f"{computeName}: computed oracle(s) {', '.join(missing)} are wired but not installed "
+            f"on this host -- run scripts/install_oracles.sh before generating the artifact."
+        )
     try:
         result, seconds = _best(lambda: invariants.compute(knot, computeName, validate="soft"), reps)
     except Exception as error:                       # an engine that cannot run on this knot
         return Measurement(value=f"error: {type(error).__name__}", seconds=None,
                            note=str(error)[:60], agree="n/a")
-    verdict = result.validation.verdict("knotinfo")
-    agree = {"pass": "pass", "not_run": "no-oracle"}.get(verdict, verdict)
+    if any(v.verdict == "pass" for v in result.validation.validators if v.oracle != "knotinfo"):
+        agree = "pass"
+    else:
+        verdict = result.validation.verdict("knotinfo")
+        agree = {"pass": "pass", "not_run": "no-oracle"}.get(verdict, verdict)
     return Measurement(value=_shortValue(result.value), seconds=seconds, agree=agree)
 
 
@@ -85,45 +101,6 @@ def _shortValue(value):
     text = repr(value)
     return text if len(text) <= 40 else text[:37] + "..."
 
-
-# ---- native grid (knot Floer) engine ------------------------------------------------------
-
-_MACHINE = None
-
-
-def _machine():
-    global _MACHINE
-    if _MACHINE is None:
-        from tetradrome.scheduler import detect_machine
-        _MACHINE = detect_machine()
-    return _MACHINE
-
-
-def measureFloerGrid(knotName, reps):
-    """Time Tetradrome's native grid (knot Floer) engine end to end for a tabulated knot: build
-    the grid, build the Poincare graph, run it through the scheduler. The engine is expensive and
-    deterministic, so a single timed run is taken (``reps`` is intentionally not applied here).
-    Fails loud on an infeasible or failed run rather than reporting a partial time. The scheduler
-    spawns worker processes, so this must run from a real module with a __main__ guard (the
-    generator is); it will hang if driven from a REPL or a stdin heredoc."""
-    from tetradrome.engines.floer import GridDiagram
-    from tetradrome.engines.floer.scheduling import whole_knot_graph
-    from tetradrome.scheduler import Scheduler
-    machine = _machine()
-    grid = GridDiagram.from_knotinfo(knotName)
-    start = time.perf_counter()
-    graph, key = whole_knot_graph(grid, backend="bitint")
-    report = Scheduler(machine).run(graph)
-    seconds = time.perf_counter() - start
-    if report.infeasible:
-        return Measurement(value="infeasible", seconds=None,
-                           note=str(report.infeasible[0])[:60], agree="n/a")
-    if report.failures:
-        return Measurement(value="failed", seconds=None,
-                           note=str(report.failures[0])[:60], agree="n/a")
-    # The support count is recorded for a future HFK-rank cross-check (confirmed on the box, not
-    # here); the artifact does not yet claim a live rank match for Floer, so agree stays neutral.
-    return Measurement(value=f"support={len(report.results[key])}", seconds=seconds, agree="n/a")
 
 
 # ---- knot_floer_homology (real) -----------------------------------------------------------
@@ -148,12 +125,12 @@ KFH_FIELDS = {
 
 
 def kfhRun(knot, reps):
-    """One timed pd_to_hfk call; returns {invariantName: Measurement}. The HFK ranks carry the
-    measured time; the scalar invariants come from the SAME call and are noted as such."""
-    kfh = importlib.import_module("knot_floer_homology")
-    pd = pdAsList(knot)
+    """One timed kfh call, delegated to the src ``hfk_adapter.raw_hfk`` (the single caller of
+    the library); returns {invariantName: Measurement}. The HFK ranks carry the measured time;
+    the scalar invariants come from the SAME call and are noted as such."""
+    from tetradrome.backends import hfk_adapter
     try:
-        out, seconds = _best(lambda: kfh.pd_to_hfk(pd), reps)
+        out, seconds = _best(lambda: hfk_adapter.raw_hfk(knot), reps)
     except Exception as error:
         miss = Measurement(value=f"error: {type(error).__name__}", seconds=None,
                            note=str(error)[:60], agree="n/a")
