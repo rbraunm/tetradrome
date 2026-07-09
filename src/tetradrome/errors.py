@@ -23,4 +23,4 @@ class BackendUnavailable(TetradromeError):
 
 
 class UnvalidatedResult(TetradromeError):
-    """A result could not be validated and validate=True (decisions/0004)."""
+    """A result could not be validated under validate="strict" or "soft" (decisions/0004)."""

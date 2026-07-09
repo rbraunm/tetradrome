@@ -41,20 +41,20 @@ def test_crossing_number_unavailable_for_braid_only():
 
 def test_from_braid_with_identity_validates():
     k = knots.from_braid([1, 1, 1], identity="3_1")
-    det = invariants.compute(k, "determinant")  # validate=True
-    sig = invariants.compute(k, "signature")
+    det = invariants.compute(k, "determinant", validate="soft")
+    sig = invariants.compute(k, "signature", validate="soft")
     assert det.value == 3 and det.validation.verdict("knotinfo") == "pass"
     assert sig.value == -2 and sig.validation.verdict("knotinfo") == "pass"
     assert det.provenance.inputs == "braid_word"
 
 
-# --- off-table: no oracle, so validate=True must refuse ---------------------
+# --- off-table: no oracle, so strict and soft must refuse -------------------
 
 def test_offtable_requires_opt_in():
     k = knots.from_braid(torus(2, 15))  # 15-crossing torus knot, not in KnotInfo
     with pytest.raises(UnvalidatedResult):
-        invariants.compute(k, "determinant")  # validate=True
-    out = invariants.compute(k, "determinant", validate=False)
+        invariants.compute(k, "determinant")  # strict is the default
+    out = invariants.compute(k, "determinant", validate="off")
     assert out.validation.verdict("knotinfo") == "not_run"
     assert out.knot == "(braid word)"
 
@@ -66,7 +66,7 @@ def test_compute_needs_braid_or_identity():
     pd_code = knots.from_name("3_1").pd_code
     k = knots.from_pd(pd_code)  # identity=None, braid=None
     with pytest.raises(UnknownKnot):
-        invariants.compute(k, "determinant", validate=False)
+        invariants.compute(k, "determinant", validate="off")
 
 
 # --- off-table correctness against documented closed forms ------------------
@@ -75,8 +75,8 @@ def test_compute_needs_braid_or_identity():
 def test_offtable_torus_2n_closed_form(n):
     """T(2,n), n odd: determinant = n, signature = -(n-1)."""
     k = knots.from_braid(torus(2, n))
-    det = invariants.compute(k, "determinant", validate=False)
-    sig = invariants.compute(k, "signature", validate=False)
+    det = invariants.compute(k, "determinant", validate="off")
+    sig = invariants.compute(k, "signature", validate="off")
     assert det.value == n
     assert sig.value == -(n - 1)
 
@@ -86,9 +86,9 @@ def test_offtable_torus_symmetry():
     the same invariants. This check needs no formula and no oracle."""
     a = knots.from_braid(torus(4, 5))  # 15 crossings
     b = knots.from_braid(torus(5, 4))  # 16 crossings
-    da = invariants.compute(a, "determinant", validate=False).value
-    db = invariants.compute(b, "determinant", validate=False).value
-    sa = invariants.compute(a, "signature", validate=False).value
-    sb = invariants.compute(b, "signature", validate=False).value
+    da = invariants.compute(a, "determinant", validate="off").value
+    db = invariants.compute(b, "determinant", validate="off").value
+    sa = invariants.compute(a, "signature", validate="off").value
+    sb = invariants.compute(b, "signature", validate="off").value
     assert da == db
     assert sa == sb

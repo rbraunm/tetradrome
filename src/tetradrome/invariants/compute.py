@@ -3,9 +3,12 @@
 
 """Compute a knot invariant and return a validated, provenanced result.
 
-Validate-by-default (decisions/0004): with validate=True a result that has no
-validation path, or that disagrees with the oracle, raises UnvalidatedResult rather
-than being returned.
+Validate-by-default (decisions/0004): ``validate`` is a three-mode enum, default
+"strict". Strict requires a computed oracle wherever one exists anywhere (the registry
+knows), and the raise distinguishes "not installed" from "not yet wired"; soft
+tolerates a computed oracle's absence (falling back to KnotInfo with an info message)
+but never a disagreement; off skips validation entirely while keeping full provenance.
+In every validating mode, ANY oracle that runs and disagrees raises UnvalidatedResult.
 
 Supported invariants: the Seifert-form invariants `determinant`, `signature`, and
 `alexander_polynomial` (from the Collins braid Seifert matrix); `jones_polynomial` (from
@@ -15,18 +18,26 @@ the Kauffman bracket over the resolution cube); and the native homological invar
 tabulated -- the homological oracles are mirrored/sign-flipped to KnotInfo's chirality
 convention (Phase 2c/3c). Seifert-form invariants accept a braid word (from_braid,
 off-table included) or a tabulated knot's KnotInfo braid; the diagrammatic invariants
-need a PD diagram (from_name or from_pd). Off-table results have no oracle, so under
-validate=True they raise.
+need a PD diagram (from_name or from_pd). Off-table results have no KnotInfo oracle,
+so until their computed oracles are wired they raise under strict and soft; pass
+validate="off" to opt in.
 """
 from __future__ import annotations
 
+import logging
+from typing import Literal
+
 from .._version import __version__
-from ..backends import knotinfo_backend
+from ..backends import knotinfo_backend, registry
 from ..diagrams import NormalizedDiagram
 from ..engines import khovanov
 from ..errors import UnknownKnot, UnvalidatedResult
 from . import jones, seifert
 from .schema import InvariantResult, Provenance, ValidationStatus, ValidatorRecord
+
+logger = logging.getLogger(__name__)
+
+_VALIDATE_MODES = ("strict", "soft", "off")
 
 # Invariants read from the braid Seifert matrix (Collins).
 _SEIFERT_INVARIANTS = {
@@ -63,31 +74,69 @@ def _library_versions(used: tuple[str, ...] = ()) -> tuple[tuple[str, str], ...]
     return tuple(versions)
 
 
+def _computed_oracle_gap(invariant, not_installed, could_not_check):
+    """Why no computed oracle checked this result: provisioning gap vs dev gap (ADR 0004)."""
+    parts = []
+    if not_installed:
+        parts.append(
+            f"{', '.join(not_installed)} not installed (run scripts/install_oracles.sh)"
+        )
+    if could_not_check:
+        parts.append(f"{', '.join(could_not_check)} could not cross-check this input")
+    unwired = registry.unwired_oracles(invariant)
+    if unwired:
+        parts.append(f"{', '.join(unwired)} not yet wired")
+    return "; ".join(parts)
+
+
 def _finalize(knot, invariant, value, method, inputs, fallback_label, validate,
               d_squared="not_applicable", libraries: tuple[str, ...] = ()):
-    """Attach the oracle check, provenance, and validation outcome to a value.
+    """Attach the validator verdicts, provenance, and validation outcome to a value.
 
-    ``libraries`` names the third-party computational libraries the computation used, if any; the
-    native core uses none, so it defaults to empty and the result records only the interpreter.
+    Every wired + installed validator covering the invariant is consulted (registry), then
+    KnotInfo rides along as one more record -- an extra cross-check, never the primary
+    validator (ADR 0004). ``libraries`` names the third-party computational libraries the
+    computation used, if any; the native core uses none, so it defaults to empty and the
+    result records only the interpreter.
     """
-    oracle = (
-        knotinfo_backend.known_answer(knot.identity, invariant)
-        if knot.identity is not None
-        else None
-    )
-    if oracle is not None:
-        if invariant == "alexander_polynomial":
-            oracle = seifert.canonical_alexander(oracle)
-        elif invariant == "jones_polynomial":
-            oracle = jones.canonical_laurent(*oracle)
+    records: list[ValidatorRecord] = []
+    known_values: dict[str, object] = {}
+    not_installed: list[str] = []
+    could_not_check: list[str] = []
 
-    # KnotInfo is the only validator wired at this checkpoint; it is recorded as one validator
-    # among what will become many (ADR 0013). No tabulated answer means KnotInfo was not consulted.
-    if oracle is None:
-        validators: tuple[ValidatorRecord, ...] = ()
-    else:
-        verdict = "pass" if value == oracle else "fail"
-        validators = (ValidatorRecord("knotinfo", knotinfo_backend.version(), verdict),)
+    if validate != "off":
+        for validator in registry.wired_validators(invariant):
+            if not validator.is_available():
+                not_installed.append(validator.name)
+                continue
+            version = registry.flat_version(validator)
+            known = validator.known_value(knot, invariant)
+            if known is None:
+                # Consulted, but it cannot check this input -- honest record, never a guess.
+                records.append(ValidatorRecord(validator.name, version, "not_run"))
+                could_not_check.append(validator.name)
+                continue
+            known_values[validator.name] = known
+            records.append(
+                ValidatorRecord(validator.name, version, "pass" if value == known else "fail")
+            )
+
+        oracle = (
+            knotinfo_backend.known_answer(knot.identity, invariant)
+            if knot.identity is not None
+            else None
+        )
+        if oracle is not None:
+            if invariant == "alexander_polynomial":
+                oracle = seifert.canonical_alexander(oracle)
+            elif invariant == "jones_polynomial":
+                oracle = jones.canonical_laurent(*oracle)
+            known_values["knotinfo"] = oracle
+            records.append(
+                ValidatorRecord(
+                    "knotinfo", knotinfo_backend.version(), "pass" if value == oracle else "fail"
+                )
+            )
 
     result = InvariantResult(
         knot=knot.identity or fallback_label,
@@ -100,24 +149,65 @@ def _finalize(knot, invariant, value, method, inputs, fallback_label, validate,
             inputs=inputs,
             library_versions=_library_versions(libraries),
         ),
-        validation=ValidationStatus(validators=validators, d_squared_check=d_squared),
+        validation=ValidationStatus(validators=tuple(records), d_squared_check=d_squared),
     )
 
-    if validate and result.validation.has_disagreement:
-        disagreeing = next(v for v in validators if v.verdict == "fail")
+    if validate == "off":
+        return result
+
+    # Strict and soft alike: ANY oracle that ran and disagrees raises. Soft tolerates
+    # absence, never disagreement (ADR 0004).
+    if result.validation.has_disagreement:
+        disagreeing = next(v for v in records if v.verdict == "fail")
         raise UnvalidatedResult(
             f"{invariant} for {result.knot}: computed {value!r} disagrees with "
-            f"{disagreeing.oracle} {disagreeing.version} oracle {oracle!r}."
+            f"{disagreeing.oracle} {disagreeing.version} oracle "
+            f"{known_values[disagreeing.oracle]!r}."
         )
-    if validate and not result.validation.is_validated:
+
+    if any(v.verdict == "pass" and v.oracle != "knotinfo" for v in records):
+        return result  # a computed oracle passed: validated in every mode
+
+    knotinfo_passed = result.validation.verdict("knotinfo") == "pass"
+    if not registry.computed_oracle_exists(invariant):
+        # No computed oracle exists anywhere: KnotInfo is the fallback of last resort.
+        if knotinfo_passed:
+            return result
         raise UnvalidatedResult(
             f"{invariant} for {result.knot}: no validator passed "
-            f"(validators={validators})."
+            f"(validators={tuple(records)})."
         )
-    return result
+
+    gap = _computed_oracle_gap(invariant, not_installed, could_not_check)
+    if validate == "strict":
+        raise UnvalidatedResult(
+            f"{invariant} for {result.knot}: strict validation requires a computed "
+            f"oracle; {gap}."
+        )
+    # soft: the computed oracle's absence is tolerated; KnotInfo must carry the result.
+    if knotinfo_passed:
+        logger.info(
+            "%s for %s: soft validation passed on KnotInfo only; strict would have "
+            "raised (%s).",
+            invariant, result.knot, gap,
+        )
+        return result
+    raise UnvalidatedResult(
+        f"{invariant} for {result.knot}: no computed oracle ran ({gap}) and KnotInfo "
+        f"has no value for it."
+    )
 
 
-def compute(knot: NormalizedDiagram, invariant: str, validate: bool = True) -> InvariantResult:
+def compute(
+    knot: NormalizedDiagram,
+    invariant: str,
+    validate: Literal["strict", "soft", "off"] = "strict",
+) -> InvariantResult:
+    if validate not in _VALIDATE_MODES:
+        raise ValueError(
+            f"validate must be one of {_VALIDATE_MODES}, got {validate!r}; the boolean "
+            f"form is gone (True -> 'strict', False -> 'off')."
+        )
     if invariant in _SEIFERT_INVARIANTS:
         if knot.braid is not None:
             braid = list(knot.braid)

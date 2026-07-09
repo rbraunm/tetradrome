@@ -41,12 +41,12 @@ SWEEP = ["3_1", "4_1", "5_1", "5_2", "6_1", "6_2", "6_3", "7_4", "8_19", "9_42",
 
 @pytest.mark.parametrize("name", SWEEP)
 def test_jones_validates_against_knotinfo(name):
-    result = invariants.compute(knots.from_name(name), "jones_polynomial")
+    result = invariants.compute(knots.from_name(name), "jones_polynomial", validate="soft")
     assert result.validation.verdict("knotinfo") == "pass"
 
 
 def test_jones_via_compute_value_and_provenance():
-    result = invariants.compute(knots.from_name("3_1"), "jones_polynomial")
+    result = invariants.compute(knots.from_name("3_1"), "jones_polynomial", validate="soft")
     assert result.value == (1, (1, 0, 1, -1))
     assert result.provenance.method == "kauffman_bracket"
     assert result.provenance.inputs == "pd_code"
@@ -55,4 +55,4 @@ def test_jones_via_compute_value_and_provenance():
 def test_jones_needs_a_pd_diagram():
     k = knots.from_braid([1, 1, 1])  # braid-only, no PD
     with pytest.raises(UnknownKnot):
-        invariants.compute(k, "jones_polynomial", validate=False)
+        invariants.compute(k, "jones_polynomial", validate="off")

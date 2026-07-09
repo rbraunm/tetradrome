@@ -72,7 +72,7 @@ def measureTetradrome(knot, computeName, reps):
     """Time ``invariants.compute(knot, computeName)`` and capture its validation verdict."""
     from tetradrome import invariants
     try:
-        result, seconds = _best(lambda: invariants.compute(knot, computeName), reps)
+        result, seconds = _best(lambda: invariants.compute(knot, computeName, validate="soft"), reps)
     except Exception as error:                       # an engine that cannot run on this knot
         return Measurement(value=f"error: {type(error).__name__}", seconds=None,
                            note=str(error)[:60], agree="n/a")
@@ -235,7 +235,7 @@ def _verdict(oracleValue, nativeValue, mirror):
 
 def _nativeValue(knot, computeName):
     from tetradrome import invariants
-    return invariants.compute(knot, computeName).value
+    return invariants.compute(knot, computeName, validate="soft").value
 
 
 def _agreeGroups(knot, computeName, oracleGroups):

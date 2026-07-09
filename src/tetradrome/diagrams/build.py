@@ -44,7 +44,7 @@ def from_braid(braid, identity: str | None = None) -> NormalizedDiagram:
     `identity` is optional. Set it to a KnotInfo name when the braid presents a
     tabulated knot (it is canonicalized and enables oracle validation); leave it None
     for a knot KnotInfo does not contain, in which case computed invariants come back
-    unvalidated (validate=True will raise; pass validate=False to opt in). Raises
+    unvalidated (strict and soft raise; pass validate="off" to opt in). Raises
     ValueError on a malformed braid word.
     """
     word = [int(v) for v in braid]
