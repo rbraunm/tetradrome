@@ -69,12 +69,16 @@ def pdAsList(knot):
 # ---- Tetradrome side ----------------------------------------------------------------------
 
 def measureTetradrome(knot, computeName, reps):
-    """Time ``invariants.compute(knot, computeName)`` and capture its validation verdict.
+    """Time the native computation and capture its validation verdict -- separately.
 
-    A wired computed oracle missing from this host is a provisioning failure of the artifact
-    run itself, not a per-cell state -- fail loud before timing anything (ADR 0004). Soft mode
-    then tolerates only the honestly-recorded gaps: oracles not yet wired, or wired ones that
-    cannot check this input. The agree verdict prefers a computed oracle's pass over KnotInfo's.
+    The timed call runs validate="off" so the artifact's native timing claim contains no
+    oracle time (a knotjob subprocess inside the timed lambda would skew a 10ms Khovanov
+    cell by 20x); the verdicts come from one untimed soft call, and the two values must
+    agree or this raises. A wired computed oracle missing from this host is a provisioning
+    failure of the artifact run itself, not a per-cell state -- fail loud before timing
+    anything (ADR 0004). Soft mode then tolerates only the honestly-recorded gaps: oracles
+    not yet wired, or wired ones that cannot check this input. The agree verdict prefers a
+    computed oracle's pass over KnotInfo's.
     """
     from tetradrome import invariants
     from tetradrome.backends import registry
@@ -85,16 +89,21 @@ def measureTetradrome(knot, computeName, reps):
             f"on this host -- run scripts/install_oracles.sh before generating the artifact."
         )
     try:
-        result, seconds = _best(lambda: invariants.compute(knot, computeName, validate="soft"), reps)
+        result, seconds = _best(lambda: invariants.compute(knot, computeName, validate="off"), reps)
+        # Verdicts come from ONE untimed soft call, so oracle consultations (e.g. the
+        # knotjob subprocess) never contaminate the native timing the artifact claims.
+        validated = invariants.compute(knot, computeName, validate="soft")
     except Exception as error:                       # an engine that cannot run on this knot
         return Measurement(value=f"error: {type(error).__name__}", seconds=None,
                            note=str(error)[:60], agree="n/a")
-    if any(v.verdict == "pass" for v in result.validation.validators if v.oracle != "knotinfo"):
+    if validated.value != result.value:
+        raise RuntimeError(f"{computeName}: nondeterministic native value across runs")
+    if any(v.verdict == "pass" for v in validated.validation.validators if v.oracle != "knotinfo"):
         agree = "pass"
     else:
-        verdict = result.validation.verdict("knotinfo")
+        verdict = validated.validation.verdict("knotinfo")
         agree = {"pass": "pass", "not_run": "no-oracle"}.get(verdict, verdict)
-    return Measurement(value=_shortValue(result.value), seconds=seconds, agree=agree)
+    return Measurement(value=_shortValue(validated.value), seconds=seconds, agree=agree)
 
 
 def _shortValue(value):
@@ -211,8 +220,11 @@ def _verdict(oracleValue, nativeValue, mirror):
 
 
 def _nativeValue(knot, computeName):
+    """The native value as an untimed reference for judging an oracle's output. Validation
+    of the native value itself is the tetra cell's job, so no validators are consulted here
+    (they would only add oracle subprocesses to every agreement judgment)."""
     from tetradrome import invariants
-    return invariants.compute(knot, computeName, validate="soft").value
+    return invariants.compute(knot, computeName, validate="off").value
 
 
 def _agreeGroups(knot, computeName, oracleGroups):
