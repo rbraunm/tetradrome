@@ -40,7 +40,7 @@ def test_determinant_and_signature_match_knotinfo(name, det, sig):
 def test_homological_invariants_validate_against_knotinfo(invariant, name):
     # The native cube/Lee computation must match KnotInfo's oracle (mirrored to our
     # chirality in the backend), and the d^2 = 0 check must have run.
-    r = invariants.compute(knots.from_name(name), invariant, validate="soft")
+    r = invariants.compute(knots.from_name(name), invariant)  # strict: knotjob cross-checks
     assert r.validation.verdict("knotinfo") == "pass"
     assert r.validation.is_validated
     assert r.validation.d_squared_check == "pass"
@@ -49,17 +49,21 @@ def test_homological_invariants_validate_against_knotinfo(invariant, name):
 
 def test_rasmussen_s_values():
     # s of KnotInfo's PD (the mirror of its tabulated value): left trefoil -2, T(3,4) -6.
-    assert invariants.compute(knots.from_name("3_1"), "rasmussen_s", validate="soft").value == -2
-    assert invariants.compute(knots.from_name("8_19"), "rasmussen_s", validate="soft").value == -6
+    assert invariants.compute(knots.from_name("3_1"), "rasmussen_s").value == -2
+    assert invariants.compute(knots.from_name("8_19"), "rasmussen_s").value == -6
 
 
-def test_offtable_pd_homological_is_unvalidated():
-    raw = knots.from_pd(knots.from_name("5_2").pd_code)  # identity is None -> no oracle
-    with pytest.raises(UnvalidatedResult):
-        invariants.compute(raw, "khovanov_homology")
-    # validate="off" returns the computed value, with no validators consulted.
-    r = invariants.compute(raw, "khovanov_homology", validate="off")
+def test_offtable_pd_homological_validates_via_computed_oracle():
+    # A computed oracle needs no table: knotjob checks the raw PD directly, so an
+    # off-table knot now validates under strict -- KnotInfo was never consulted.
+    raw = knots.from_pd(knots.from_name("5_2").pd_code)  # identity is None
+    r = invariants.compute(raw, "khovanov_homology")  # strict
+    assert r.validation.verdict("knotjob") == "pass"
     assert r.validation.verdict("knotinfo") == "not_run"
+    assert r.validation.is_validated
+    # validate="off" still returns the computed value with no validators consulted.
+    r = invariants.compute(raw, "khovanov_homology", validate="off")
+    assert r.validation.validators == ()
 
 
 def test_diagrammatic_invariant_needs_a_pd():

@@ -33,6 +33,7 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from .hfk_adapter import HFKValidator
+from .knotjob_adapter import KnotJobValidator
 from .regina_adapter import ReginaValidator
 
 
@@ -52,7 +53,7 @@ class Validator(Protocol):
 
 
 # The validator instances actually wired into compute(). Order is consultation order.
-_WIRED: tuple[Validator, ...] = (HFKValidator(), ReginaValidator())
+_WIRED: tuple[Validator, ...] = (HFKValidator(), ReginaValidator(), KnotJobValidator())
 
 # Computed oracles that exist in the world but are NOT yet wired as validators, per
 # canonical invariant name (sourced from SPEC 12.3 / docs/backend_matrix.md and the
@@ -66,9 +67,9 @@ _UNWIRED: dict[str, tuple[str, ...]] = {
     "signature": ("sage",),
     "alexander_polynomial": ("sage",),
     "jones_polynomial": ("sage",),
-    "khovanov_homology": ("knotjob", "javakh", "khoca"),
-    "rational_khovanov_homology": ("knotjob", "javakh", "khoho", "khoca"),
-    "rasmussen_s": ("knotjob", "khoca"),
+    "khovanov_homology": ("javakh", "khoca"),
+    "rational_khovanov_homology": ("javakh", "khoho", "khoca"),
+    "rasmussen_s": ("khoca",),
 }
 
 
