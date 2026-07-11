@@ -24,8 +24,8 @@ HOMOLOGICAL = ["khovanov_homology", "rational_khovanov_homology", "rasmussen_s"]
 @pytest.mark.parametrize("name,det,sig", CASES)
 def test_determinant_and_signature_match_knotinfo(name, det, sig):
     k = knots.from_name(name)
-    d = invariants.compute(k, "determinant", validate="soft")
-    s = invariants.compute(k, "signature", validate="soft")
+    d = invariants.compute(k, "determinant")  # strict: regina cross-checks
+    s = invariants.compute(k, "signature", validate="soft")  # no computed oracle until sage (CT 250)
     assert d.value == det
     assert s.value == sig
     assert d.validation.verdict("knotinfo") == "pass"

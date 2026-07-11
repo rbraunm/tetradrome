@@ -28,7 +28,7 @@ def test_canonicalization_handles_unit_and_sign():
 def test_alexander_evaluated_at_minus_one_is_determinant():
     # |Delta(-1)| == knot determinant, for a few knots.
     for name, det in [("3_1", 3), ("4_1", 5), ("5_2", 7), ("6_1", 9)]:
-        coeffs = invariants.compute(knots.from_name(name), "alexander_polynomial", validate="soft").value
+        coeffs = invariants.compute(knots.from_name(name), "alexander_polynomial").value
         val = sum(c * (-1) ** i for i, c in enumerate(coeffs))
         assert abs(val) == det
 
@@ -38,14 +38,14 @@ SWEEP = ["3_1", "4_1", "5_1", "5_2", "6_1", "6_2", "6_3", "7_4", "8_19", "9_42",
 
 @pytest.mark.parametrize("name", SWEEP)
 def test_alexander_validates_against_knotinfo(name):
-    result = invariants.compute(knots.from_name(name), "alexander_polynomial", validate="soft")
+    result = invariants.compute(knots.from_name(name), "alexander_polynomial")
     assert result.validation.verdict("knotinfo") == "pass"
 
 
 def test_conway_knot_alexander_is_trivial():
     # The Conway knot 11n34 has Alexander polynomial 1 -- this is exactly why it is
     # hard: the Alexander polynomial (and determinant) cannot see it.
-    result = invariants.compute(knots.from_name("K11n34"), "alexander_polynomial", validate="soft")
+    result = invariants.compute(knots.from_name("K11n34"), "alexander_polynomial")
     assert result.value == (1,)
     assert result.validation.verdict("knotinfo") == "pass"
 

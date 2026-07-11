@@ -16,16 +16,27 @@ from tetradrome import invariants, knots
 from tetradrome.backends import registry
 from tetradrome.errors import UnvalidatedResult
 
-SEVEN = [
-    "determinant", "signature", "alexander_polynomial", "jones_polynomial",
+REGINA_COVERED = ["determinant", "alexander_polynomial", "jones_polynomial"]
+STRICT_UNWIRED = [
+    "signature",
     "khovanov_homology", "rational_khovanov_homology", "rasmussen_s",
 ]
 
 
-# --- the seven under strict: computed oracles exist but none is wired yet ---
+# --- regina-covered invariants pass strict with a computed oracle on record ---
 
-@pytest.mark.parametrize("invariant", SEVEN)
-def test_seven_raise_under_strict_naming_every_unwired_oracle(invariant):
+@pytest.mark.parametrize("invariant", REGINA_COVERED)
+def test_regina_covered_invariants_pass_under_strict(invariant):
+    result = invariants.compute(knots.from_name("3_1"), invariant)  # strict default
+    assert result.validation.verdict("regina") == "pass"
+    assert result.validation.verdict("knotinfo") == "pass"
+    assert result.validation.is_validated
+
+
+# --- invariants with no wired computed oracle still raise under strict ---
+
+@pytest.mark.parametrize("invariant", STRICT_UNWIRED)
+def test_unwired_invariants_raise_under_strict_naming_every_unwired_oracle(invariant):
     k = knots.from_name("3_1")
     with pytest.raises(UnvalidatedResult) as excinfo:
         invariants.compute(k, invariant)  # strict is the default
@@ -40,8 +51,8 @@ def test_seven_raise_under_strict_naming_every_unwired_oracle(invariant):
 def test_soft_falls_back_to_knotinfo_with_info_message(caplog):
     k = knots.from_name("3_1")
     with caplog.at_level(logging.INFO, logger="tetradrome.invariants.compute"):
-        result = invariants.compute(k, "determinant", validate="soft")
-    assert result.value == 3
+        result = invariants.compute(k, "signature", validate="soft")
+    assert result.value == -2
     assert result.validation.verdict("knotinfo") == "pass"
     assert result.validation.is_validated
     messages = [record.getMessage() for record in caplog.records]
@@ -172,8 +183,14 @@ def test_registry_reports_kfh_wired_for_the_floer_invariants():
         assert registry.computed_oracle_exists(invariant)
 
 
-def test_registry_reports_the_seven_unwired():
-    for invariant in SEVEN:
+def test_registry_reports_regina_wired_for_the_classical_three():
+    for invariant in REGINA_COVERED:
+        assert "regina" in [v.name for v in registry.wired_validators(invariant)]
+        assert registry.unwired_oracles(invariant) == ("sage",)
+
+
+def test_registry_reports_the_rest_unwired():
+    for invariant in STRICT_UNWIRED:
         assert registry.wired_validators(invariant) == ()
         assert registry.unwired_oracles(invariant) != ()
         assert registry.computed_oracle_exists(invariant)

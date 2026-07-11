@@ -36,7 +36,8 @@ SWEEP = [
 @pytest.mark.parametrize("name", SWEEP)
 def test_compute_validates_against_knotinfo(name):
     k = knots.from_name(name)
-    for inv in ("determinant", "signature"):
-        # soft raises if the computed value disagrees with KnotInfo.
-        result = invariants.compute(k, inv, validate="soft")
+    # determinant is strict (regina cross-checks); signature stays soft until a
+    # sage validator lands (no computed signature oracle exists in the sandbox).
+    for inv, mode in (("determinant", "strict"), ("signature", "soft")):
+        result = invariants.compute(k, inv, validate=mode)
         assert result.validation.verdict("knotinfo") == "pass"
