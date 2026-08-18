@@ -1,24 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Randy Braunm
 
-"""Sage as a SPEC 12.1 validator -- GATED until its conventions are verified on CT 250.
+"""Sage as a SPEC 12.1 validator: the classical four plus Khovanov Q/F2 cross-checks.
 
-Sage is provisioned only on CT 250 (apt sagemath, INSTALL_SAGE=1), so the empirical
-convention verification this project requires before wiring any oracle cannot run in
-the sandbox. This module therefore ships in a deliberately unusable state:
+Sage is provisioned only on CT 250 (apt sagemath, INSTALL_SAGE=1), so on other hosts
+this validator is wired-but-not-installed: strict raises the provisioning gap for any
+invariant no other installed oracle covers (signature is the one such invariant), and
+the artifact preflight refuses to generate. That is deliberate -- absence is loud,
+never silently skipped.
 
-- ``_VERIFIED_VERDICTS`` is None. Every ``known_value`` call raises until a CONSISTENT
-  run of ``scripts/verify_sage_conventions.py`` on CT 250 has its verdicts transcribed
-  there (one label per invariant, matching the probe's printed output).
-- ``SageValidator`` is NOT in the registry's ``_WIRED`` tuple.
-
-The probe imports its sage invocation and candidate transforms from THIS module, so
-what the probe verifies is literally the code that gets wired -- there is no
-transcription step between verification and wiring except the verdict labels
-themselves. The candidate labels are pre-seeded from the comparison layer's measured
-knowledge (sageRun: signature and Jones read as mirror; determinant and Khovanov are
-direct; Alexander is up to canonicalization), but nothing here trusts that knowledge:
-the probe must confirm it per knot on a chiral sweep first.
+CONVENTIONS ARE VERIFIED, not assumed. ``scripts/verify_sage_conventions.py`` -- which
+imports THIS module's sage invocation and transforms, so what it verifies is literally
+the code wired here -- returned CONSISTENT on CT 250 (SageMath version 9.5) on
+2026-08-17 over the chiral+amphichiral sweep 3_1/4_1/5_2/8_19/10_124 (Khovanov fields:
+minus 10_124, untested in sage there). The verdicts below are that run's transcription;
+re-run the probe after any sage upgrade before trusting a changed environment.
 
 Self-contained with respect to the comparison layer by design (the operator's call,
 same as regina_adapter and knotjob_adapter -- do not unify with sageRun). Cross-package
@@ -38,10 +34,17 @@ _COVERED = {
     "rational_khovanov_homology", "khovanov_homology",
 }
 
-# The probe's verdict per invariant, transcribed from a CONSISTENT run of
-# scripts/verify_sage_conventions.py on CT 250. None = unverified: every path through
-# the validator fails loud, and it must not be added to registry._WIRED.
-_VERIFIED_VERDICTS: dict[str, str] | None = None
+# The probe's verdict per invariant, transcribed verbatim from the CONSISTENT
+# CT 250 run of scripts/verify_sage_conventions.py (SageMath version 9.5, 2026-08-17;
+# signature/jones read as mirror, everything else direct up to canonicalization).
+_VERIFIED_VERDICTS: dict[str, str] = {
+    "signature": "NEGATED",
+    "determinant": "DIRECT",
+    "alexander_polynomial": "CANONICAL",
+    "jones_polynomial": "NEGATED_EXPONENTS",
+    "rational_khovanov_homology": "DIRECT",
+    "khovanov_homology": "DIRECT",
+}
 
 # ---- sage invocation (single source: the probe imports these) -----------------------
 
@@ -177,8 +180,8 @@ def candidate_labels(invariant: str) -> tuple[str, ...]:
 
 
 class SageValidator:
-    """Read-only cross-check against Sage (SPEC 12.1, ADR 0006) -- unusable until
-    ``_VERIFIED_VERDICTS`` is filled from a CONSISTENT CT 250 probe run."""
+    """Read-only cross-check against Sage (SPEC 12.1, ADR 0006), transforms verified
+    on CT 250 (see the module docstring for the run's provenance)."""
 
     name = "sage"
     covered_invariants = _COVERED
@@ -196,14 +199,8 @@ class SageValidator:
         return {"sage": line.split(",", 1)[0].strip()}
 
     def known_value(self, knot, invariant: str):
-        """Sage's value under the verified convention -- raises while unverified."""
-        if _VERIFIED_VERDICTS is None:
-            raise RuntimeError(
-                "SageValidator is unverified: run scripts/verify_sage_conventions.py "
-                "on CT 250 and transcribe a CONSISTENT run's verdicts into "
-                "sage_adapter._VERIFIED_VERDICTS before wiring (ADR 0004: conventions "
-                "are verified empirically before an oracle is trusted)."
-            )
+        """Sage's value under the verified convention, or None when sage cannot check
+        this input (uncovered invariant, or a knot with no PD)."""
         if invariant not in _COVERED or not knot.pd_code:
             return None
         label = _VERIFIED_VERDICTS[invariant]

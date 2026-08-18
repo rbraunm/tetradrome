@@ -74,19 +74,22 @@ def measureTetradrome(knot, computeName, reps):
     The timed call runs validate="off" so the artifact's native timing claim contains no
     oracle time (a knotjob subprocess inside the timed lambda would skew a 10ms Khovanov
     cell by 20x); the verdicts come from one untimed soft call, and the two values must
-    agree or this raises. A wired computed oracle missing from this host is a provisioning
-    failure of the artifact run itself, not a per-cell state -- fail loud before timing
-    anything (ADR 0004). Soft mode then tolerates only the honestly-recorded gaps: oracles
-    not yet wired, or wired ones that cannot check this input. The agree verdict prefers a
-    computed oracle's pass over KnotInfo's.
+    agree or this raises. An invariant whose wired computed oracles are ALL missing from
+    this host is a provisioning failure of the artifact run itself, not a per-cell state --
+    fail loud before timing anything (ADR 0004). A partially-provisioned invariant is fine:
+    strict's own rule is >= 1 computed pass, so regina alone validates a classical cell on a
+    sage-less host. Soft mode then tolerates only the honestly-recorded gaps. The agree
+    verdict prefers a computed oracle's pass over KnotInfo's.
     """
     from tetradrome import invariants
     from tetradrome.backends import registry
-    missing = [v.name for v in registry.wired_validators(computeName) if not v.is_available()]
-    if missing:
+    wired = registry.wired_validators(computeName)
+    if wired and not any(v.is_available() for v in wired):
+        missing = ", ".join(v.name for v in wired)
         raise RuntimeError(
-            f"{computeName}: computed oracle(s) {', '.join(missing)} are wired but not installed "
-            f"on this host -- run scripts/install_oracles.sh before generating the artifact."
+            f"{computeName}: no wired computed oracle is installed on this host "
+            f"({missing} all missing) -- run scripts/install_oracles.sh before "
+            f"generating the artifact."
         )
     try:
         result, seconds = _best(lambda: invariants.compute(knot, computeName, validate="off"), reps)

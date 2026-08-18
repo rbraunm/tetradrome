@@ -25,7 +25,7 @@ HOMOLOGICAL = ["khovanov_homology", "rational_khovanov_homology", "rasmussen_s"]
 def test_determinant_and_signature_match_knotinfo(name, det, sig):
     k = knots.from_name(name)
     d = invariants.compute(k, "determinant")  # strict: regina cross-checks
-    s = invariants.compute(k, "signature", validate="soft")  # no computed oracle until sage (CT 250)
+    s = invariants.compute(k, "signature", validate="soft")  # sage, its only oracle, is CT 250-only
     assert d.value == det
     assert s.value == sig
     assert d.validation.verdict("knotinfo") == "pass"

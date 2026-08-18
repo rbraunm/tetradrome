@@ -35,6 +35,7 @@ from typing import Any, Protocol
 from .hfk_adapter import HFKValidator
 from .knotjob_adapter import KnotJobValidator
 from .regina_adapter import ReginaValidator
+from .sage_adapter import SageValidator
 
 
 class Validator(Protocol):
@@ -53,20 +54,15 @@ class Validator(Protocol):
 
 
 # The validator instances actually wired into compute(). Order is consultation order.
-_WIRED: tuple[Validator, ...] = (HFKValidator(), ReginaValidator(), KnotJobValidator())
+_WIRED: tuple[Validator, ...] = (HFKValidator(), ReginaValidator(), KnotJobValidator(), SageValidator())
 
 # Computed oracles that exist in the world but are NOT yet wired as validators, per
 # canonical invariant name (sourced from SPEC 12.3 / docs/backend_matrix.md and the
 # provisioned set in scripts/install_oracles.sh). Floer has no entry: kfh is wired.
-# pip SnapPy is Sage-only for every classical invariant here (verified empirically:
-# Link.determinant/signature/alexander_polynomial/jones_polynomial all raise
-# SageNotAvailable outside Sage), so it is subsumed by the sage entries rather than
-# listed as a standalone oracle. Regina's Link API exposes no signature invariant.
+# The classical four have no entries left: regina and sage are both wired (pip SnapPy
+# is Sage-only for all four -- verified empirically -- so it never was a standalone
+# oracle, and sage subsumes it). Only the Khovanov-family second opinions remain.
 _UNWIRED: dict[str, tuple[str, ...]] = {
-    "determinant": ("sage",),
-    "signature": ("sage",),
-    "alexander_polynomial": ("sage",),
-    "jones_polynomial": ("sage",),
     "khovanov_homology": ("javakh", "khoca"),
     "rational_khovanov_homology": ("javakh", "khoho", "khoca"),
     "rasmussen_s": ("khoca",),

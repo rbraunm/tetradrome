@@ -9,6 +9,7 @@ full provenance. The stub validator stands in for an external oracle at the regi
 boundary -- the mode logic in _finalize runs for real against it.
 """
 import logging
+import shutil
 
 import pytest
 
@@ -18,7 +19,6 @@ from tetradrome.errors import UnvalidatedResult
 
 REGINA_COVERED = ["determinant", "alexander_polynomial", "jones_polynomial"]
 KNOTJOB_COVERED = ["khovanov_homology", "rational_khovanov_homology", "rasmussen_s"]
-STRICT_UNWIRED = ["signature"]
 
 
 # --- regina-covered invariants pass strict with a computed oracle on record ---
@@ -39,21 +39,19 @@ def test_knotjob_covered_invariants_pass_under_strict(invariant):
     assert result.validation.is_validated
 
 
-# --- invariants with no wired computed oracle still raise under strict ---
+# --- signature off CT 250: its only oracle (sage) is wired but not installed ---
 
-@pytest.mark.parametrize("invariant", STRICT_UNWIRED)
-def test_unwired_invariants_raise_under_strict_naming_every_unwired_oracle(invariant):
-    k = knots.from_name("3_1")
-    with pytest.raises(UnvalidatedResult) as excinfo:
-        invariants.compute(k, invariant)  # strict is the default
-    message = str(excinfo.value)
-    assert "not yet wired" in message
-    for oracle in registry.unwired_oracles(invariant):
-        assert oracle in message
+@pytest.mark.skipif(shutil.which("sage") is not None,
+                    reason="pins the sage-less host's strict diagnosis")
+def test_signature_strict_names_missing_sage_off_ct250():
+    with pytest.raises(UnvalidatedResult, match="sage not installed"):
+        invariants.compute(knots.from_name("3_1"), "signature")
 
 
 # --- soft: KnotInfo carries the result, with an info message naming the gap ---
 
+@pytest.mark.skipif(shutil.which("sage") is not None,
+                    reason="on a sage host, signature passes on sage with no fallback")
 def test_soft_falls_back_to_knotinfo_with_info_message(caplog):
     k = knots.from_name("3_1")
     with caplog.at_level(logging.INFO, logger="tetradrome.invariants.compute"):
@@ -63,7 +61,7 @@ def test_soft_falls_back_to_knotinfo_with_info_message(caplog):
     assert result.validation.is_validated
     messages = [record.getMessage() for record in caplog.records]
     assert any(
-        "strict would have raised" in m and "not yet wired" in m for m in messages
+        "strict would have raised" in m and "sage not installed" in m for m in messages
     )
 
 
@@ -192,7 +190,7 @@ def test_registry_reports_kfh_wired_for_the_floer_invariants():
 def test_registry_reports_regina_wired_for_the_classical_three():
     for invariant in REGINA_COVERED:
         assert "regina" in [v.name for v in registry.wired_validators(invariant)]
-        assert registry.unwired_oracles(invariant) == ("sage",)
+        assert registry.unwired_oracles(invariant) == ()
 
 
 def test_registry_reports_knotjob_wired_for_the_homological_three():
@@ -200,13 +198,6 @@ def test_registry_reports_knotjob_wired_for_the_homological_three():
         assert "knotjob" in [v.name for v in registry.wired_validators(invariant)]
         assert "knotjob" not in registry.unwired_oracles(invariant)
         assert registry.unwired_oracles(invariant) != ()  # javakh/khoho/khoca remain
-
-
-def test_registry_reports_the_rest_unwired():
-    for invariant in STRICT_UNWIRED:
-        assert registry.wired_validators(invariant) == ()
-        assert registry.unwired_oracles(invariant) != ()
-        assert registry.computed_oracle_exists(invariant)
 
 
 def test_registry_reports_nothing_for_an_unknown_invariant():
