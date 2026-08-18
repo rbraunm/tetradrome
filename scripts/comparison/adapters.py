@@ -404,6 +404,56 @@ def khohoRun(knot, reps):
         agree=_agreeGroups(knot, "rational_khovanov_homology", groups))}
 
 
+# ---- Khoca (rational + F2 Khovanov, natively per coefficient ring) -------------------------
+
+def _khocaGroups(pd, ring):
+    """Unreduced sl(2) homology over a FIELD coefficient ring (1 = Q, 2 = F2) -> {(h, q): dim}
+    in KnotInfo's q-convention. Khoca's own quantum grading is negated relative to KnotInfo's
+    (verified empirically on 3_1/4_1/5_2/8_19/10_124: q-negation matched 10/10 across both
+    rings; direct and full mirror matched 0/10), so q is negated here as a fixed, documented
+    normalization. Rows are [t, q, torsionOrder, multiplicity] and the output is
+    [reduced, unreduced]; a field ring must never produce a torsion row or a negative
+    aggregate, and both fail loud."""
+    import khoca
+    out = khoca.InteractiveCalculator(coefficient_ring=ring)(pd)
+    groups = {}
+    for t, q, torsion, multiplicity in out[1]:
+        if torsion != 0:
+            raise ValueError(f"field ring produced torsion row {(t, q, torsion, multiplicity)}")
+        key = (t, -q)
+        groups[key] = groups.get(key, 0) + multiplicity
+    groups = {key: rank for key, rank in groups.items() if rank}
+    if any(rank < 0 for rank in groups.values()):
+        raise ValueError(f"negative aggregate rank in khoca output: {groups}")
+    return groups
+
+
+def khocaRun(knot, reps):
+    """Khovanov over Q (coefficient ring 1) and over F2 (ring 2), each computed natively by
+    khoca from the PD -- no UCT derivation, unlike the KnotJob path. Each ring's call carries
+    its own measured time. Values are normalized to KnotInfo's q-convention (_khocaGroups), so
+    agreement is judged direct rather than up to mirror."""
+    try:
+        pd = pdAsList(knot)
+        rational, secondsQ = _best(lambda: _khocaGroups(pd, 1), reps)
+        f2, secondsF2 = _best(lambda: _khocaGroups(pd, 2), reps)
+    except Exception as error:
+        miss = Measurement(value=f"error: {type(error).__name__}", seconds=None,
+                           note=str(error)[:80], agree="n/a")
+        return {name: miss for name in
+                ("rational_khovanov_homology", "khovanov_homology")}
+    return {
+        "rational_khovanov_homology": Measurement(
+            value=f"total_rank={sum(rational.values())}", seconds=secondsQ,
+            note="khoca ring Q; q-grading normalized",
+            agree=_agreeGroups(knot, "rational_khovanov_homology", rational)),
+        "khovanov_homology": Measurement(
+            value=f"total_rank={sum(f2.values())}", seconds=secondsF2,
+            note="khoca ring F2 (native, no UCT); q-grading normalized",
+            agree=_agreeGroups(knot, "khovanov_homology", f2)),
+    }
+
+
 # ---- SnapPy (hyperbolic volume) ------------------------------------------------------------
 
 def snappyRun(knot, reps):
@@ -796,5 +846,5 @@ ORACLES = [
     Oracle("javakh", javakhAvailable, javakhRun, javakhVersion),
     Oracle("khoho", khohoAvailable, khohoRun, khohoVersion),
     Oracle("sage", sageAvailable, sageRun, sageVersion),
-    Oracle("khoca", khocaAvailable, None, khocaVersion),
+    Oracle("khoca", khocaAvailable, khocaRun, khocaVersion),
 ]
