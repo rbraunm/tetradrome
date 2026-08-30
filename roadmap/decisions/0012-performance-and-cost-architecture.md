@@ -55,7 +55,8 @@ looser than it appears.
   model exposes two named aggregations: the **per-complex peak** (max over a grading's
   degrees -- the per-unit price the scheduler packs against and the single-unit
   feasibility test) and the **worst-case co-resident sum** (all gradings at once -- the
-  unbounded-concurrency figure, no longer the feasibility criterion now that waves exist).
+  unbounded-concurrency figure, informational only -- the feasibility criterion is the
+  per-complex peak, because the scheduler runs the remainder in memory-bounded waves).
 
 - **Dissolve the grab-bag.** Generation (serial and parallel) is colocated in one engine
   module, ending the mutual lazy import. The synthetic staircase grid moves to the grid
@@ -68,14 +69,13 @@ step, which is the migration's correctness gate.
 
 ## Consequences
 
-- The memory guard's feasibility test refines: with memory-bounded waves, a knot is
-  infeasible only when its **largest single grading** exceeds the budget (fail loud),
-  not when the co-resident sum does -- the scheduler runs the remainder in waves. Wiring
-  the guard to the per-complex-peak criterion is a follow-up.
-- Correcting `dense_reduction_bytes` tightens the OOM fence (it was under-counting by up
-  to ~2x). Previously reported projections that used it (e.g. the n=11 figure) shift
-  upward accordingly; the qualitative conclusions -- negligible through n=9, dominant by
-  n=10, past any single machine by n=11 -- are unchanged.
+- The memory guard's feasibility test is the **largest single grading** against the
+  budget: a knot is infeasible (fail loud) only when that exceeds it, since the scheduler
+  runs the remainder in memory-bounded waves. Wiring the guard to the per-complex-peak
+  criterion is a follow-up.
+- Because the OOM fence carries the pivot term, it does not under-count, and any
+  projection is read off the pivot-inclusive formula. The size profile is negligible
+  through n=9, dominant by n=10, and past any single machine by n=11.
 - Reversible. This is an organizational decision (SPEC names no module layout); it can be
   rearranged again if a later engine wants a different cut. What is not reversible by fiat
   is the agreement discipline the moves run under.

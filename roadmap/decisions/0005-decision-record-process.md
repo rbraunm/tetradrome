@@ -24,10 +24,14 @@ Consequences**, one decision per file, prose, numbered, kept in
 
 - **Proposed** — under discussion; not yet in force.
 - **Accepted** — in force; amend freely by editing the file in place. **An ADR body
-  states the current decision only.** Do not append amendment, revision, or changelog
-  sections, and do not retain superseded wording for contrast — edit the text so it
-  reads as though the current decision were the only one ever made. Why it changed
-  belongs in the commit message or the PR, either of which is the audit trail.
+  states what is in force, never how it got there.** Do not append amendment, revision,
+  or changelog sections, and do not narrate a superseded decision for contrast ("we used
+  to do X, now we do Y because of Z") — edit the text so it reads as though the current
+  decision were the only one ever made. Why it changed belongs in the commit message or
+  the PR, either of which is the audit trail. This does not constrain Context:
+  describing the problem or situation that motivates a decision is that section's job,
+  and is backward-looking by nature. Nor does it stop a Decision from mandating a
+  change; the prohibition is on carrying the old decision forward as narration.
 - **Locked** — in force and load-bearing enough that reversing or materially changing
   it requires an explicit "are you sure?" confirmation step, with the rationale
   recorded in the commit or the PR that makes the change. **Locked is not immutable.** A
