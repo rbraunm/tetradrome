@@ -44,7 +44,8 @@ own rules. (It is a natural candidate to be Locked once stable, which would mean
 that changing *how ADRs work* gets the same are-you-sure gate as any other locked
 decision.)
 
-Existing ADRs 0001–0004 are Accepted under this scheme; no status change is needed.
+Each ADR carries its own status in its header; there is no separate index to keep in
+sync.
 
 ## Consequences
 

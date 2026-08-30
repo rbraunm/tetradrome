@@ -490,8 +490,8 @@ Each phase is validated before the next begins. Reductions and acceleration are 
   **F2 before ℚ**, per ADR 0003.
   **A free self-check with no oracle:** reduced Khovanov is independent of the basepoint, so
   computing at two basepoints and asserting equality is a real assertion about the engine.
-  **Oracles are already provisioned**, which is unusual for a Tier 2 item — ADR 0006's
-  amendment requires a *computed* oracle for strict mode, and three exist, ranked by cost:
+  **Oracles are already provisioned**, which is unusual for a Tier 2 item — ADR 0006
+  requires a *computed* oracle for strict mode, and three exist, ranked by cost:
   1. **khoca** — returns `[reduced, unreduced]` and `scripts/comparison/adapters.py::_khocaGroups`
      already takes `out[1]` and discards `out[0]`. The reduced data is computed today and
      thrown away; wiring it costs no new provisioning. Verified on 3_1 (both rings), giving
