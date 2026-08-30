@@ -27,10 +27,10 @@ Consequences**, one decision per file, prose, numbered, kept in
   states the current decision only.** Do not append amendment, revision, or changelog
   sections, and do not retain superseded wording for contrast — edit the text so it
   reads as though the current decision were the only one ever made. Why it changed
-  belongs in the commit message and the PR, which are the audit trail.
+  belongs in the commit message or the PR, either of which is the audit trail.
 - **Locked** — in force and load-bearing enough that reversing or materially changing
   it requires an explicit "are you sure?" confirmation step, with the rationale
-  recorded in the commit and PR that make the change. **Locked is not immutable.** A
+  recorded in the commit or the PR that makes the change. **Locked is not immutable.** A
   locked ADR remains fully reviewable and reversible at any time; the lock is friction
   against casual or accidental reversal, nothing more.
 - **Superseded by NNNN** — replaced; the body stays for the historical trail and
@@ -52,7 +52,7 @@ sync.
 - "Locked" buys stability without ossification: the gate prevents drift while keeping
   every decision open to new evidence.
 - Git history is the audit trail. An ADR body always reflects the current decision and
-  nothing else; the reasoning behind a change lives in the commit and PR that made it,
+  nothing else; the reasoning behind a change lives in the commit or the PR that made it,
   never in the record itself. A reader should never have to reconcile a decision with
   its own history to know what is in force.
 - No ADR is ever a closed door. The project can revisit any call when the math or the
