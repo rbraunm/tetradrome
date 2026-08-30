@@ -500,6 +500,10 @@ Each phase is validated before the next begins. Reductions and acceleration are 
   3. **kht++** — computes the reduced theory natively, but is blocked behind a PD→Morse-word
      input encoder (its only documented inputs are an interactive dialogue or a `.kht` file),
      so it is the most expensive of the three despite being the most natural fit.
+
+  Full discovery for the last two, including the H=0 route to reduced Khovanov and the
+  empirical Shumakovitch check over F2, is in `roadmap/research/khtpp.md` and
+  `roadmap/research/knotkit.md`.
   Note on vocabulary: "reduced" is overloaded in this repo. Here and in `coverage-map.md` it
   means the **basepoint-reduced theory**; in §4/§7 Phase 4 and ADR 0007 `raw == reduced` means
   the **Gaussian-cancelled complex**, an optimization; `four-manifold-objectives.md` uses
