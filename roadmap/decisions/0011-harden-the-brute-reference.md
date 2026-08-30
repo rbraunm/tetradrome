@@ -101,9 +101,5 @@ cost — and the standing question of whether to harden it at all.
   0008 (memory gate) and 0010 (deferred GPU kernel) continue to govern their areas, and
   the deferred kernel is simply a (B)-class accelerator that still earns its place only
   by `== reference`, never by being fast.
-- **Locked (0005), with recorded rationale.** Locked at the owner's request: the
-  "should we invest in the brute path, and can we beat the floor" question tends to be
-  reopened by default whenever a new engine or a tempting shortcut appears, and the lock
-  makes reopening it a deliberate, recorded act rather than a casual one. Per 0005 the
-  lock is friction against accidental drift, not immutability — the decision stays fully
-  reviewable and reversible on new evidence.
+- **Locked (0005).** Reversing or materially changing this decision takes an explicit
+  confirmation step; it remains fully reviewable and reversible on new evidence.

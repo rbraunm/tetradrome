@@ -29,10 +29,10 @@ Consequences**, one decision per file, prose, numbered, kept in
   reads as though the current decision were the only one ever made. Why it changed
   belongs in the commit message and the PR, which are the audit trail.
 - **Locked** — in force and load-bearing enough that reversing or materially changing
-  it requires an explicit "are you sure?" confirmation step and a recorded rationale
-  in the ADR. **Locked is not immutable.** A locked ADR remains fully reviewable and
-  reversible at any time; the lock is friction against casual or accidental reversal,
-  nothing more.
+  it requires an explicit "are you sure?" confirmation step, with the rationale
+  recorded in the commit and PR that make the change. **Locked is not immutable.** A
+  locked ADR remains fully reviewable and reversible at any time; the lock is friction
+  against casual or accidental reversal, nothing more.
 - **Superseded by NNNN** — replaced; the body stays for the historical trail and
   points to its successor.
 
