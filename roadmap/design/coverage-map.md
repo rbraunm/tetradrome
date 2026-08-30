@@ -77,7 +77,7 @@ Real engines or real algebra, but bounded and well-defined.
 | Column(s) | Method / engine |
 |---|---|
 | `khovanov_unreduced_integral_*` | integral Khovanov (Z coefficients incl. torsion) — extends the F2/ℚ engine |
-| `khovanov_reduced_*` (Z, Q, mod2) | reduced Khovanov complex |
+| `khovanov_reduced_*` (Z, Q, mod2) | reduced Khovanov complex — basepoint-constrained front end, back end untouched; path in `homology-engine.md` §7 Phase 9. Cheapest Tier 2 entry: three computed oracles already provisioned |
 | `khovanov_odd_*` (Z, Q, mod2) | odd Khovanov homology (Ozsváth–Rasmussen–Szabó) — a sibling engine |
 | `width` | homological width of (integral) Khovanov |
 | `turaev_genus` | Turaev surface from the diagram (combinatorial) |

@@ -18,7 +18,8 @@ the SPEC table had wrong or short.
 
 Canonical names are `lower_snake_case`, use the term a topologist recognizes from
 the literature, and use the attributed full form where the invariant is standardly
-attributed. The frozen v1 set:
+attributed. The frozen v1 set (one entry renamed and one added since — see the
+Amendment below; this table is retained as the original record):
 
 | Canonical name | Notes |
 |---|---|
@@ -59,3 +60,51 @@ differ from a naive guess:
 - The normalizer is the single place backend spellings live; adding a backend
   means extending the mapping, not touching the canonical set.
 - Renaming a canonical term later touches only the normalizer and the docs.
+
+## Amendment (2026-08-29): reconcile the frozen set with the shipped surface
+
+**Status:** Accepted (amends the Decision above).
+
+An audit against the code found the frozen v1 table and the names `compute()` actually
+accepts had diverged. The table was never updated as the native engines landed, so a
+reader following this ADR would write a call that raises. The authoritative set is the
+`compute()` dispatch; this amendment brings the record onto it.
+
+**Corrections to the v1 table:**
+
+- `rasmussen_invariant` → **`rasmussen_s`**. The shipped name is `rasmussen_s`
+  (21 call sites); `rasmussen_invariant` is rejected by `compute()`. This is a stated
+  exception to the "attributed full form" rule above: the literature overwhelmingly
+  writes the invariant as *s*, and `rasmussen_s` keeps the attribution while matching
+  usage. `rasmussen_invariant` survives legitimately as the **KnotInfo column name** in
+  `backends/knotinfo_backend.py` and its tests — that is backend spelling, owned by the
+  normalizer, and is not affected.
+- **`rational_khovanov_homology` is added** to the canonical set. It was in `compute()`
+  and had 43 call sites while being absent from this record entirely.
+
+**Coefficient field in canonical names.** The pair above encodes the field
+asymmetrically: `khovanov_homology` means Khovanov over **F2**, and the rational lane
+carries its own name. This was implicit and is now stated, because ADR 0003 defers
+integral coefficients to a later engine and the next variant needs a rule rather than a
+precedent to copy. The rule: **F2 is the unmarked default** (it is the first native
+field, per 0003) and any other coefficient ring is named explicitly. A future integral
+Khovanov is therefore `integral_khovanov_homology`, not a bare or suffixed variant.
+The same rule governs the reduced theory when it lands
+(`roadmap/design/homology-engine.md` §7, Phase 9).
+
+**Comparison-layer row keys are not canonical names.** `scripts/comparison/spec.py`
+uses `l_space` as a row key while the canonical name is `l_space_knot`, with
+`adapters.py` mapping between them. That is legitimate — the comparison artifact has its
+own presentation vocabulary — but it is a second namespace and is recorded here so the
+mismatch is not read as drift. The rule: a name reaching `InvariantResult` or the roster
+export is canonical; a name that only labels an artifact row is not.
+
+**One claim in the Status line above is withdrawn.** It asserts that changing a
+canonical spelling "is a normalizer edit, not a cross-codebase change." The
+`rasmussen_s` case falsifies it: the name appears at 21 sites across `src/`, `scripts/`,
+and `tests/`. Canonical renames are cross-codebase and should be costed as such. The
+decision remains reversible; it is not as cheap to reverse as originally written.
+
+**Consequence for the audit that produced this.** The divergence was invisible because
+nothing checks the record against the code. A test pinning `compute()`'s supported set
+against this table would have caught it, and is the natural follow-up.

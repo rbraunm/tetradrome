@@ -470,6 +470,42 @@ Each phase is validated before the next begins. Reductions and acceleration are 
   threshold, or unify on packed everywhere (the latter is cleaner but loses the human-readable
   permutation in the auditable complex — which Phase 7 may want, so decide jointly with 7(a)).
 
+- **Phase 9 — Reduced Khovanov (front-end variant).** *Planned.* `khovanov_reduced_*` is
+  listed in `coverage-map.md` Tier 2 but had no implementation path recorded here, which is
+  how it stayed invisible in planning. It is a **front-end-only change** and the cheapest
+  Tier 2 entry by some margin — the shared back end (§2) is untouched, because a reduced
+  complex is still just a graded complex.
+  The construction: fix a basepoint arc; in every resolution exactly one circle contains it;
+  the reduced complex is the subcomplex spanned by enhanced states labeling that circle `-1`
+  (the *x* generator), which is closed under the existing differential. Concretely
+  `engines/khovanov/gradings.py::enhanced_generators` currently yields
+  `itertools.product((1, -1), repeat=len(circles))` over every labeling, and `circles` is
+  already a tuple of arc-label frozensets — so locating the basepoint circle and constraining
+  its label is a local edit to that one function. `differential.py` restricts rather than
+  gaining new math; `homology.py`, `complex.py`, and every acceleration tier are unchanged.
+  Grading: the reduced theory carries a *q*-shift, pinned **empirically** against KnotInfo's
+  `khovanov_reduced_mod2_vector` (ADR 0003 records that KnotInfo supplies reduced *and*
+  unreduced mod-2 vectors), the same way the unreduced gradings were pinned against the Jones
+  Euler characteristic in Phase 2.
+  **F2 before ℚ**, per ADR 0003.
+  **A free self-check with no oracle:** reduced Khovanov is independent of the basepoint, so
+  computing at two basepoints and asserting equality is a real assertion about the engine.
+  **Oracles are already provisioned**, which is unusual for a Tier 2 item — ADR 0006's
+  amendment requires a *computed* oracle for strict mode, and three exist, ranked by cost:
+  1. **khoca** — returns `[reduced, unreduced]` and `scripts/comparison/adapters.py::_khocaGroups`
+     already takes `out[1]` and discards `out[0]`. The reduced data is computed today and
+     thrown away; wiring it costs no new provisioning. Verified on 3_1 (both rings), giving
+     (0,2), (2,6), (3,8) in KnotInfo's *q*-convention.
+  2. **knotkit** — `kk kh -r -f {Q,Z2}`; works, emits LaTeX carrying `\rank Kh`.
+  3. **kht++** — computes the reduced theory natively, but is blocked behind a PD→Morse-word
+     input encoder (its only documented inputs are an interactive dialogue or a `.kht` file),
+     so it is the most expensive of the three despite being the most natural fit.
+  Note on vocabulary: "reduced" is overloaded in this repo. Here and in `coverage-map.md` it
+  means the **basepoint-reduced theory**; in §4/§7 Phase 4 and ADR 0007 `raw == reduced` means
+  the **Gaussian-cancelled complex**, an optimization; `four-manifold-objectives.md` uses
+  "reduced filtered complex" for CFK^∞. Three unrelated senses — check which one a passage
+  means before wiring anything.
+
 Ordering rationale: general and faithful first (Phases 0–3 produce correct answers
 with the reference reducer), exact reductions second (Phase 4, still answer-identical
 and individually validated), acceleration last (Phase 5, validated against the
