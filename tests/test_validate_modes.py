@@ -197,7 +197,19 @@ def test_registry_reports_knotjob_wired_for_the_homological_three():
     for invariant in KNOTJOB_COVERED:
         assert "knotjob" in [v.name for v in registry.wired_validators(invariant)]
         assert "knotjob" not in registry.unwired_oracles(invariant)
-        assert registry.unwired_oracles(invariant) != ()  # javakh/khoho/khoca remain
+
+
+def test_unwired_map_is_exactly_the_known_remaining_oracles():
+    """Exact pin on the unwired map. Each checkpoint that wires an oracle edits one
+    line here, so the 'not yet wired' set strict reports can never drift silently.
+
+    khoca is absent because it is wired. khtpp is absent because it computes the
+    reduced theory, which has no canonical invariant name yet (Phase 9)."""
+    assert registry._UNWIRED == {
+        "khovanov_homology": ("javakh", "knotkit"),
+        "rational_khovanov_homology": ("javakh", "khoho", "knotkit"),
+        "rasmussen_s": ("knotkit",),
+    }
 
 
 def test_registry_reports_nothing_for_an_unknown_invariant():

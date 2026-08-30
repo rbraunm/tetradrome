@@ -33,6 +33,7 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from .hfk_adapter import HFKValidator
+from .khoca_adapter import KhocaValidator
 from .knotjob_adapter import KnotJobValidator
 from .regina_adapter import ReginaValidator
 from .sage_adapter import SageValidator
@@ -54,7 +55,9 @@ class Validator(Protocol):
 
 
 # The validator instances actually wired into compute(). Order is consultation order.
-_WIRED: tuple[Validator, ...] = (HFKValidator(), ReginaValidator(), KnotJobValidator(), SageValidator())
+_WIRED: tuple[Validator, ...] = (
+    HFKValidator(), ReginaValidator(), KnotJobValidator(), SageValidator(), KhocaValidator(),
+)
 
 # Computed oracles that exist in the world but are NOT yet wired as validators, per
 # canonical invariant name (sourced from SPEC 12.3 / docs/backend_matrix.md and the
@@ -62,10 +65,13 @@ _WIRED: tuple[Validator, ...] = (HFKValidator(), ReginaValidator(), KnotJobValid
 # The classical four have no entries left: regina and sage are both wired (pip SnapPy
 # is Sage-only for all four -- verified empirically -- so it never was a standalone
 # oracle, and sage subsumes it). Only the Khovanov-family second opinions remain.
+# khtpp is provisioned but deliberately absent: it computes the REDUCED theory, which has
+# no canonical invariant name until homology-engine.md section 7 Phase 9 builds a native
+# reduced engine. See roadmap/research/khtpp.md.
 _UNWIRED: dict[str, tuple[str, ...]] = {
-    "khovanov_homology": ("javakh", "khoca"),
-    "rational_khovanov_homology": ("javakh", "khoho", "khoca"),
-    "rasmussen_s": ("khoca",),
+    "khovanov_homology": ("javakh", "knotkit"),
+    "rational_khovanov_homology": ("javakh", "khoho", "knotkit"),
+    "rasmussen_s": ("knotkit",),
 }
 
 
