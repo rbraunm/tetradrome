@@ -45,34 +45,39 @@ input: knot / link / braid (name / PD / DT / Gauss / braid)
 
 - **Canonical names are the mathematics, not any tool.** Invariants are referred to by their standard names from the literature; an alignment table maps each backend's spelling onto them, so the normalizer's only job is a rename (`SPEC.md` §12.4).
 - **Every result carries provenance and validation status.** Nothing is returned as a bare value (`SPEC.md` §11).
-- **Downstream consumers depend on a frozen, content-hashed export.** A validated roster of knots can be built once and read forever, with no backend touched at read time.
+- **Downstream consumers will depend on a frozen, content-hashed export.** A validated roster of knots is built once and read forever, with no backend touched at read time. Specified in `SPEC.md` §13.10; not yet implemented.
 
-## Using it (shape of the public API)
+## Using it
 
 ```python
 import tetradrome as td
 
-k = td.knots.from_name("K11n34")                      # the Conway knot
-s = td.invariants.compute(k, "rasmussen_invariant")   # typed result, with provenance
-verdict = td.concordance.slice_status(k)
-print(verdict.smoothly_slice, verdict.certificate.via)
+k = td.knots.from_name("K11n34")                 # the Conway knot
+s = td.invariants.compute(k, "rasmussen_s")     # strict by default: typed result, with provenance
+print(s.value)                                  # 0
+print([(v.oracle, v.verdict) for v in s.validation.validators])
 
 # off-table: present a knot by braid word (here T(2,15), beyond the 13-crossing tables)
 t = td.knots.from_braid([1] * 15)
-det = td.invariants.compute(t, "determinant", validate=False)   # -> 15 (no oracle off-table)
-
-# build a validated, content-hashed roster others can depend on
-roster = td.export.build(["K11n34", "4_1", "3_1"], validate=True)
-td.export.save(roster, "roster-v1.json")
+det = td.invariants.compute(t, "determinant", validate="off")   # -> 15, empty validation record
 ```
 
-Full public surface: `SPEC.md` §13.10.
+Validation is a mode: `"strict"` (the default) requires a computed oracle wherever one
+exists and raises rather than return an unchecked value; `"soft"` falls back to KnotInfo
+when the computed oracle is absent; `"off"` skips validation but still records that it
+did (decision 0004). The off-table call above needs `"off"` unless SageMath is
+installed: a braid word has no PD, Regina reads only PDs, and KnotInfo has no row for
+T(2,15), so under strict or soft it raises `UnvalidatedResult` naming the missing
+oracle. Knots can also be presented as PD codes with `td.knots.from_pd`.
+
+The concordance verdicts (`td.concordance`) and the content-hashed export roster
+(`td.export`) are specified in `SPEC.md` §13.10 and not yet implemented.
 
 ## Requirements
 
 - Python 3.11+ (3.13 targeted). The compute path is pure Python.
 - Runtime data: `database_knotinfo` (the KnotInfo tables, used as the offline validation oracle and for name resolution).
-- Optional validators (authoring-time, never required to compute): KnotJob (Java) for Khovanov homology and the Rasmussen *s*-invariant, `knot_floer_homology` / HFKcalc for Floer, SageMath, Khoca. Spherogram/SnapPy is an optional interop target, not the diagram parser.
+- Optional validators (never required to compute; the default strict mode requires a computed oracle wherever one exists): `knot_floer_homology` / HFKcalc for Floer, Regina for Jones / Alexander / determinant, KnotJob (Java) for Khovanov homology and the Rasmussen *s*-invariant, Khoca for Khovanov homology, SageMath for the classical invariants and Khovanov. `scripts/install_oracles.sh` provisions them. Spherogram/SnapPy is an optional interop target, not the diagram parser.
 
 Packaging is in progress; until then, treat the list above as the environment Tetradrome expects.
 
