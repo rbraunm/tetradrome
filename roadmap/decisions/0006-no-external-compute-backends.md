@@ -55,8 +55,8 @@ deciding axes are portability, license, and "our math," not how good the tool is
 
 "Not installed on this box" is never grounds for silent KnotInfo substitution. It is a
 provisioning gap (`scripts/install_oracles.sh`), or — for oracles too heavy for the
-sandbox, such as Sage and Khoca — a reason to run validation on CT 250 or other
-provisioned compute.
+sandbox, such as Sage — a reason to run validation on CT 250 or other provisioned
+compute.
 
 The three validation modes that carry this requirement to callers (`strict`, `soft`,
 `off`) are defined in decision 0004.
