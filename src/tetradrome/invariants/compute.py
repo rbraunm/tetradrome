@@ -71,6 +71,12 @@ _FLOER_INVARIANTS = {
 }
 
 
+def _supported() -> list[str]:
+    """Every invariant name compute() accepts -- the single source for that set, read by
+    the unsupported-name error below and by the tests pinning the canonical-name record."""
+    return sorted(_SEIFERT_INVARIANTS) + sorted(_PD_INVARIANTS) + sorted(_FLOER_INVARIANTS)
+
+
 def _library_versions(used: tuple[str, ...] = ()) -> tuple[tuple[str, str], ...]:
     """Versions of the computational libraries a result depends on (ADR 0013).
 
@@ -265,5 +271,4 @@ def compute(
             knot, invariant, value, method, "knotinfo:grid_notation", "(grid)", validate
         )
 
-    supported = sorted(_SEIFERT_INVARIANTS) + sorted(_PD_INVARIANTS) + sorted(_FLOER_INVARIANTS)
-    raise ValueError(f"compute does not support {invariant!r}; supported: {supported}")
+    raise ValueError(f"compute does not support {invariant!r}; supported: {_supported()}")
