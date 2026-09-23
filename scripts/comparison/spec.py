@@ -149,7 +149,7 @@ INVARIANTS = [
               "PD", "even integer", "done", "yes", ("compute", "rasmussen_s")),
     Invariant("lee_homology", "Lee homology (Q)", "knotjob",
               "Lee deformation of Khovanov over Q (2-dim for a knot); the source of s.",
-              "PD", "filtered homology", "done", "partial", None),
+              "PD", "filtered homology", "near", "partial", None),
     Invariant("khovanov_integral", "Khovanov homology (Z, torsion)", "knotjob",
               "Integral Khovanov including torsion; extends the F2/Q engine.",
               "PD", "bigraded groups + torsion", "build", "yes", None),
