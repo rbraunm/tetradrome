@@ -153,6 +153,10 @@ INVARIANTS = [
     Invariant("khovanov_integral", "Khovanov homology (Z, torsion)", "knotjob",
               "Integral Khovanov including torsion; extends the F2/Q engine.",
               "PD", "bigraded groups + torsion", "build", "yes", None),
+    Invariant("khovanov_reduced", "Khovanov homology (reduced)", "knotjob",
+              "Basepoint-reduced Khovanov; a front-end variant of the F2/Q engine "
+              "(homology-engine.md section 7, Phase 9).",
+              "PD", "bigraded groups", "build", "yes", None),
     Invariant("khovanov_odd", "Odd Khovanov homology", "knotjob",
               "Odd Khovanov (Ozsvath-Rasmussen-Szabo), a sibling engine.",
               "PD", "bigraded groups", "build", "yes", None),

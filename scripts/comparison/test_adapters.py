@@ -101,16 +101,6 @@ def test_verdict_pass_mirror_mismatch():
     assert adapters._verdict(3, -2, negate) == "mismatch"
 
 
-def test_field_after_colon():
-    text = ("Knot 1\n"
-            "S-Invariant mod 0 : 2\n"
-            "Integral unreduced Khovanov Homology : q + q^3 + t^2 q^5 + t^3 q^9\n"
-            "Torsion of order 2 : t^3 q^7\n")
-    assert adapters._fieldAfterColon(text, "S-Invariant mod 0") == "2"
-    assert adapters._fieldAfterColon(text, "Torsion of order 2") == "t^3 q^7"
-    assert adapters._fieldAfterColon(text, "not present") is None
-
-
 # JavaKh -Q output (quoted q^a*t^b string) on Tetradrome PD, captured on CT 250.
 JAVAKH = {
     "3_1": '"q^1*t^0 + q^3*t^0 + q^5*t^2 + q^9*t^3 "',
@@ -393,3 +383,90 @@ def test_knotkit_s_reads_exactly_one_line():
     for text in ("", "s(3_1; Q) = 2\ns(3_1; Q) = 2\n", "nothing here\n"):
         with pytest.raises(ValueError, match="expected one s line"):
             adapters._parseKnotkitS(text)
+
+
+# ---- KnotJob sectioned output (integral, reduced, width, odd, sl(3)) ------------------------
+# Real knotjob output captured in the sandbox from knots.from_name(...).pd_code.
+
+KJ_KB_5_2 = """Knot 1
+S-Invariant mod 0 : 2
+Integral unreduced Khovanov Homology : q + q^3 + t q^3 + t^2 q^5 + t^2 q^7 + t^3 q^9 + t^4 q^9 + t^5 q^13
+Torsion of order 2 : t^2 q^5 + t^3 q^7 + t^5 q^11
+Integral reduced Khovanov Homology : q^2 + t q^4 + 2 t^2 q^6 + t^3 q^8 + t^4 q^10 + t^5 q^12
+"""
+
+KJ_KB_8_19 = """Knot 1
+S-Invariant mod 0 : 6
+Integral unreduced Khovanov Homology : q^5 + q^7 + t^2 q^9 + t^3 q^13 + t^4 q^11 + t^4 q^13 + t^5 q^15 + t^5 q^17
+Torsion of order 2 : t^3 q^11
+Integral reduced Khovanov Homology : q^6 + t^2 q^10 + t^3 q^12 + t^4 q^12 + t^5 q^16
+"""
+
+KJ_KO_5_2 = """Knot 1
+Odd integral Khovanov Homology : q^2 + t q^4 + 2 t^2 q^6 + t^3 q^8 + t^4 q^10 + t^5 q^12
+"""
+
+KJ_KS_3_1 = """Knot 1
+Unreduced integral sl_3 Homology : t^-3 q^12 + t^-3 q^14 + t^-2 q^6 + t^-2 q^8 + q^2 + q^4 + q^6
+Torsion of order 3 : t^-2 q^10
+Reduced integral sl_3 Homology : t^-3 q^12 + t^-2 q^8 + q^4
+"""
+
+UNREDUCED = "Integral unreduced Khovanov Homology"
+REDUCED = "Integral reduced Khovanov Homology"
+
+
+def test_knotjob_sections_keep_torsion_with_the_homology_it_follows():
+    sections, scalars = adapters._knotjobSections(KJ_KB_8_19)
+    assert set(sections) == {UNREDUCED, REDUCED}
+    assert scalars == {"S-Invariant mod 0": "6"}
+    assert sections[UNREDUCED]["torsion"] == {2: {(3, 11): 1}}
+    assert sections[REDUCED]["torsion"] == {}
+    assert sum(sections[REDUCED]["free"].values()) == 5
+
+
+def test_knotjob_torsion_order_is_read_not_assumed():
+    sections, _ = adapters._knotjobSections(KJ_KS_3_1)
+    assert sections["Unreduced integral sl_3 Homology"]["torsion"] == {3: {(-2, 10): 1}}
+    assert sections["Reduced integral sl_3 Homology"]["torsion"] == {}
+
+
+def test_f2_counts_every_even_order_torsion_and_no_odd():
+    """Z/2 and Z/4 each contribute to F2 by UCT; Z/3 contributes nothing."""
+    section = {"free": {(0, 1): 1},
+               "torsion": {2: {(2, 5): 1}, 4: {(3, 7): 1}, 3: {(4, 9): 1}}}
+    assert adapters._evenTorsion(section) == {(2, 5): 1, (3, 7): 1}
+    f2 = adapters._f2FromIntegral(section["free"], adapters._evenTorsion(section))
+    assert f2 == {(0, 1): 1, (2, 5): 1, (1, 5): 1, (3, 7): 1, (2, 7): 1}
+
+
+def test_khovanov_width_thin_and_thick():
+    """5_2 is alternating, so thin (two diagonals); 8_19 = T(3,4) is Khovanov-thick."""
+    thin, _ = adapters._knotjobSections(KJ_KB_5_2)
+    thick, _ = adapters._knotjobSections(KJ_KB_8_19)
+    assert adapters._khovanovWidth(thin[UNREDUCED]) == 2
+    assert adapters._khovanovWidth(thick[UNREDUCED]) == 3
+
+
+def test_khovanov_width_rejects_mixed_parity_support():
+    with pytest.raises(ValueError, match="mixed-parity"):
+        adapters._khovanovWidth({"free": {(0, 1): 1, (0, 2): 1}, "torsion": {}})
+
+
+def test_integral_summary_counts_free_rank_and_each_torsion_order():
+    sections, _ = adapters._knotjobSections(KJ_KB_5_2)
+    assert adapters._integralSummary(sections[UNREDUCED]) == "free=8 Z/2x3"
+    assert adapters._integralSummary(sections[REDUCED]) == "free=7"
+    odd, _ = adapters._knotjobSections(KJ_KO_5_2)
+    assert adapters._integralSummary(odd["Odd integral Khovanov Homology"]) == "free=7"
+
+
+def test_knotjob_torsion_before_any_homology_raises():
+    with pytest.raises(ValueError, match="before any homology"):
+        adapters._knotjobSections("Knot 1\nTorsion of order 2 : t q^3\n")
+
+
+def test_knotjob_missing_section_raises():
+    sections, _ = adapters._knotjobSections(KJ_KO_5_2)
+    with pytest.raises(ValueError, match="no 'Integral reduced"):
+        adapters._knotjobSection(sections, REDUCED)

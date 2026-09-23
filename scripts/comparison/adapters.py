@@ -241,68 +241,177 @@ def _agreeScalar(knot, computeName, oracleValue, mirror=lambda v: -v):
     return _verdict(oracleValue, _nativeValue(knot, computeName), mirror)
 
 
-def _fieldAfterColon(text, marker):
-    """Text after ``:`` on the first line containing ``marker``, or None."""
-    for line in text.splitlines():
-        if marker in line:
-            return line.split(":", 1)[1].strip()
-    return None
+# ---- KnotJob (Khovanov family, Rasmussen s, sl(3)) -----------------------------------------
+
+_KNOTJOB_TORSION = re.compile(r"^Torsion of order (\d+)$")
 
 
-# ---- KnotJob (rational + F2 Khovanov, Rasmussen s) -----------------------------------------
+def _knotjobSections(text):
+    """KnotJob output -> ({heading: {"free": groups, "torsion": {order: groups}}}, {scalar: str}).
 
-def knotjobRun(knot, reps):
-    """One ``knotjob -kb0 -s0`` call (PD file in, results file out) yields rational Khovanov (the
-    integral free part), F2 Khovanov (that free part plus the order-2 torsion via UCT), and
-    Rasmussen s. KnotJob reads Tetradrome's PD in the mirror convention, so each is judged up to
-    mirror. The Khovanov call carries the measured time; the others come from the same call."""
+    A ``<heading> : <polynomial>`` line whose heading names a Homology opens a section, and every
+    ``Torsion of order N : <polynomial>`` line after it belongs to that section -- KnotJob prints
+    torsion per section and per order, so reading only the first ``Torsion of order 2`` line would
+    silently drop reduced-section torsion and any 2^k-torsion. Other ``name : value`` lines
+    (``S-Invariant mod 0``) are scalars; the ``Knot 1`` label carries no colon. A torsion line
+    with no section above it raises."""
+    sections, scalars, current = {}, {}, None
+    for line in (raw.strip() for raw in text.splitlines()):
+        if ":" not in line:
+            continue
+        name, value = (part.strip() for part in line.split(":", 1))
+        torsion = _KNOTJOB_TORSION.match(name)
+        if torsion:
+            if current is None:
+                raise ValueError(f"knotjob torsion line before any homology: {line!r}")
+            sections[current]["torsion"][int(torsion.group(1))] = _parseKhovanovPoly(value)
+        elif "Homology" in name:
+            current = name
+            sections[current] = {"free": _parseKhovanovPoly(value), "torsion": {}}
+        else:
+            scalars[name] = value
+    return sections, scalars
+
+
+def _knotjobSection(sections, heading):
+    if heading not in sections:
+        raise ValueError(f"no {heading!r} in knotjob output (have {sorted(sections)})")
+    return sections[heading]
+
+
+def _evenTorsion(section):
+    """Every torsion summand of even order, merged: each Z/N with N even contributes to F2 by the
+    universal coefficient theorem (Z/N (x) F2 = Tor(Z/N, F2) = F2), and odd orders contribute
+    nothing."""
+    merged = {}
+    for order, groups in section["torsion"].items():
+        if order % 2 == 0:
+            for key, count in groups.items():
+                merged[key] = merged.get(key, 0) + count
+    return merged
+
+
+def _integralSummary(section):
+    """``free=R`` plus ``Z/N x k`` per torsion order -- a mirror-independent summary for cells
+    with no native value to compare against."""
+    parts = [f"free={sum(section['free'].values())}"]
+    for order in sorted(section["torsion"]):
+        parts.append(f"Z/{order}x{sum(section['torsion'][order].values())}")
+    return " ".join(parts)
+
+
+def _khovanovWidth(section):
+    """Homological width: the number of diagonals delta = q - 2h carrying any generator, free or
+    torsion. For a knot every delta has the same parity, so width = (max - min) / 2 + 1; a
+    mixed-parity support means the groups were mis-parsed, and raises."""
+    keys = set(section["free"])
+    for groups in section["torsion"].values():
+        keys |= set(groups)
+    if not keys:
+        raise ValueError("no Khovanov support to take the width of")
+    deltas = [q - 2 * h for h, q in keys]
+    span = max(deltas) - min(deltas)
+    if span % 2:
+        raise ValueError(f"Khovanov support spans mixed-parity diagonals: {sorted(set(deltas))}")
+    return span // 2 + 1
+
+
+def _knotjobCall(bracket, flags, outputName, reps):
+    """One timed knotjob run in a fresh scratch directory, returning (output text, seconds).
+    Each rep gets its own directory because ``-ks`` writes its result over the input file."""
     import os
-    import subprocess
     import tempfile
-    try:
-        bracket = _bracketPD(knot)
+
+    def call():
         with tempfile.TemporaryDirectory() as work:
             with open(os.path.join(work, "knot.txt"), "w") as handle:
                 handle.write(bracket + "\n")
+            subprocess.run(["knotjob", "knot.txt", *flags], cwd=work, check=True,
+                           capture_output=True, text=True)
+            out = os.path.join(work, outputName)
+            with open(out) as handle:
+                text = handle.read()
+            if "Homology" not in text:
+                raise RuntimeError(f"knotjob {' '.join(flags)} wrote no homology to {outputName}")
+            return text
 
-            def call():
-                subprocess.run(["knotjob", "knot.txt", "-kb0", "-s0"], cwd=work,
-                               check=True, capture_output=True, text=True)
-                out = os.path.join(work, "knot.txt_s0_kb0")
-                if not os.path.exists(out):
-                    raise RuntimeError("knotjob wrote no knot.txt_s0_kb0 output file")
-                with open(out) as handle:
-                    return handle.read()
+    return _best(call, reps)
 
-            text, seconds = _best(call, reps)
 
-        freeText = _fieldAfterColon(text, "Integral unreduced Khovanov Homology")
-        sText = _fieldAfterColon(text, "S-Invariant mod 0")
-        if freeText is None or sText is None:
-            raise ValueError("no Khovanov / s lines in knotjob output")
-        torsionText = _fieldAfterColon(text, "Torsion of order 2")
-        free = _parseKhovanovPoly(freeText)
-        torsion = _parseKhovanovPoly(torsionText) if torsionText else {}
-        f2 = _f2FromIntegral(free, torsion)
-        s = int(sText)
+def _knotjobMiss(names, error):
+    miss = Measurement(value=f"error: {type(error).__name__}", seconds=None,
+                       note=str(error)[:80], agree="n/a")
+    return {name: miss for name in names}
+
+
+def knotjobRun(knot, reps):
+    """Three KnotJob runs, each timed. KnotJob reads Tetradrome's PD in the mirror convention.
+
+    ``-kb0 -s0`` yields rational Khovanov (the integral free part), F2 Khovanov (that free part
+    plus all even-order torsion via UCT), and Rasmussen s -- native rows, judged up to mirror --
+    plus integral Khovanov with torsion, the reduced theory, and the homological width, which
+    have no native engine yet and so are oracle-only cells. ``-ko0`` is odd Khovanov and
+    ``-ks0`` is sl(3) homology, both oracle-only. The -kb0 call carries its measured time; the
+    other rows from it say "same call"."""
+    rows = {}
+    bracket = _bracketPD(knot)
+    evenNames = ("rational_khovanov_homology", "khovanov_homology", "rasmussen_s",
+                 "khovanov_integral", "khovanov_reduced", "khovanov_width")
+    try:
+        text, seconds = _knotjobCall(bracket, ["-kb0", "-s0"], "knot.txt_s0_kb0", reps)
+        sections, scalars = _knotjobSections(text)
+        unreduced = _knotjobSection(sections, "Integral unreduced Khovanov Homology")
+        reduced = _knotjobSection(sections, "Integral reduced Khovanov Homology")
+        if "S-Invariant mod 0" not in scalars:
+            raise ValueError("no S-Invariant mod 0 line in knotjob output")
+        s = int(scalars["S-Invariant mod 0"])
+        free = unreduced["free"]
+        f2 = _f2FromIntegral(free, _evenTorsion(unreduced))
+        width = _khovanovWidth(unreduced)
     except Exception as error:
-        miss = Measurement(value=f"error: {type(error).__name__}", seconds=None,
-                           note=str(error)[:80], agree="n/a")
-        return {name: miss for name in
-                ("rational_khovanov_homology", "khovanov_homology", "rasmussen_s")}
-
-    return {
-        "rational_khovanov_homology": Measurement(
-            value=f"total_rank={sum(free.values())}", seconds=seconds, note="knotjob -kb0 -s0",
-            agree=_agreeGroups(knot, "rational_khovanov_homology", free)),
-        "khovanov_homology": Measurement(
-            value=f"total_rank={sum(f2.values())}", seconds=None,
-            note="F2 via UCT from integral + torsion; same call",
-            agree=_agreeGroups(knot, "khovanov_homology", f2)),
-        "rasmussen_s": Measurement(
-            value=str(s), seconds=None, note="same call",
-            agree=_agreeScalar(knot, "rasmussen_s", s)),
-    }
+        rows.update(_knotjobMiss(evenNames, error))
+    else:
+        same = "same knotjob -kb0 -s0 call"
+        rows.update({
+            "rational_khovanov_homology": Measurement(
+                value=f"total_rank={sum(free.values())}", seconds=seconds,
+                note="knotjob -kb0 -s0",
+                agree=_agreeGroups(knot, "rational_khovanov_homology", free)),
+            "khovanov_homology": Measurement(
+                value=f"total_rank={sum(f2.values())}", seconds=None,
+                note=f"{same}; F2 via UCT from all even-order torsion",
+                agree=_agreeGroups(knot, "khovanov_homology", f2)),
+            "rasmussen_s": Measurement(
+                value=f"s={s}", seconds=None, note=same,
+                agree=_agreeScalar(knot, "rasmussen_s", s)),
+            "khovanov_integral": Measurement(
+                value=_integralSummary(unreduced), seconds=None, note=same, agree="oracle"),
+            "khovanov_reduced": Measurement(
+                value=_integralSummary(reduced), seconds=None, note=f"{same}; integral",
+                agree="oracle"),
+            "khovanov_width": Measurement(
+                value=f"width={width}", seconds=None,
+                note=f"{same}; diagonals of integral Khovanov, torsion included", agree="oracle"),
+        })
+    try:
+        text, seconds = _knotjobCall(bracket, ["-ko0"], "knot.txt_ko0", reps)
+        odd = _knotjobSection(_knotjobSections(text)[0], "Odd integral Khovanov Homology")
+    except Exception as error:
+        rows.update(_knotjobMiss(("khovanov_odd",), error))
+    else:
+        rows["khovanov_odd"] = Measurement(
+            value=_integralSummary(odd), seconds=seconds, note="knotjob -ko0; integral",
+            agree="oracle")
+    try:
+        text, seconds = _knotjobCall(bracket, ["-ks0"], "knot.txt", reps)
+        sl3 = _knotjobSection(_knotjobSections(text)[0], "Unreduced integral sl_3 Homology")
+    except Exception as error:
+        rows.update(_knotjobMiss(("sl_n_homology",), error))
+    else:
+        rows["sl_n_homology"] = Measurement(
+            value=_integralSummary(sl3), seconds=seconds,
+            note="knotjob -ks0; N = 3, unreduced, integral", agree="oracle")
+    return rows
 
 
 # ---- JavaKh (rational Khovanov) ------------------------------------------------------------
