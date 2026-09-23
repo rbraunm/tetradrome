@@ -44,12 +44,12 @@ Reference: Lisa Piccirillo, "The Conway knot is not slice," Annals of Mathematic
 This maps directly onto the public schema (SPEC 13.10): the Conway entry has an
 `obstruction_profile` with `all_vanish = True`, and its `SliceCertificate` has
 `via = "trace_sibling"`, `sibling = K'`, and a `witness` recording
-`rasmussen_invariant(K')`.
+`rasmussen_s(K')`.
 
 ## What the reproducer does and does not establish
 
 **Does:** normalize the catalog inputs; compute / look up the relevant invariants
-(`rasmussen_invariant`, `ozsvath_szabo_tau`, ...) for the Conway knot, the
+(`rasmussen_s`, `ozsvath_szabo_tau`, ...) for the Conway knot, the
 Kinoshita-Terasaka knot, and -- given a reliably encoded `K'` -- for `K'`;
 cross-check them against KnotInfo and an independent backend; and, given `K'` as
 input, re-derive the nonzero-`s` witness and present it with full provenance.

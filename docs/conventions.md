@@ -13,13 +13,11 @@ KnotInfo enum accept -- and Rolfsen (`3_1`, `4_1`, `10_124`) for 10 or fewer
 
 ## Canonical invariant names
 
-Defined and frozen in `roadmap/decisions/0001-canonical-invariant-names.md`. The
-canonical name is chosen on the mathematics; each backend's spelling is mapped onto
-it by the normalizer. The set: `alexander_polynomial`, `jones_polynomial`,
-`signature`, `determinant`, `arf_invariant`, `three_genus`, `smooth_four_genus`,
-`topological_four_genus`, `rasmussen_invariant`, `ozsvath_szabo_tau`, `epsilon`,
-`nu`, `fibered`, `l_space_knot`, `khovanov_homology`, `knot_floer_homology`,
-`smoothly_slice`, `topologically_slice`.
+Defined in `roadmap/decisions/0001-canonical-invariant-names.md`, which is the only
+list of them -- it is not repeated here, because copies drift. The canonical name is
+chosen on the mathematics; each backend's spelling is mapped onto it by the
+normalizer. `invariants.compute()` is the authoritative surface for the names that are
+implemented.
 
 Confirmed backend-spelling mappings live in that decision record and in
 `docs/backend_matrix.md` (notably KnotInfo's `ozsvath_szabo_tau_invariant` and the

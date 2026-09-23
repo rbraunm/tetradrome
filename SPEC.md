@@ -375,7 +375,7 @@ Good:
 
 ```python
 k = td.knots.from_name("K11n34")
-result = td.invariants.compute(k, "rasmussen_invariant")   # native, validated
+result = td.invariants.compute(k, "rasmussen_s")           # native, validated
 report = td.report(result)
 ```
 
@@ -383,7 +383,7 @@ Also good — off-table, by braid:
 
 ```python
 k = td.knots.from_braid([1] * 15)                          # T(2,15)
-result = td.invariants.compute(k, "determinant", validate=False)
+result = td.invariants.compute(k, "determinant", validate="off")
 ```
 
 Bad:
@@ -417,7 +417,7 @@ knot:
   pd_code_hash: ...
 
 computation:
-  invariant: rasmussen_invariant
+  invariant: rasmussen_s
   backend: tetradrome-native
   backend_version: ...
   coefficient_field: ...
@@ -547,7 +547,7 @@ The native column is the producer; the rest are validators that can cross-check 
 
 The §12.3 matrix says *which* native engine produces an invariant and which tools can validate it. This table fixes the *names*. The left column is Tetradrome's canonical name — the standard term for the object in the knot-theory literature, chosen on the mathematics and independent of any tool. The remaining columns record how each tool happens to spell that same object, so one normalizer can read a validator's output for comparison. Listing a tool's spelling here is interop, not adoption: the right columns tell the normalizer how to read each validator; the canonical column stands on the mathematics. Where these coincide with KnotInfo's column names, it is because KnotInfo also uses the standard literature names — not because Tetradrome takes them from it.
 
-The exact canonical spelling is a deliberate open design decision, localized to the normalizer (§13.3), not a commitment baked across the code. Where the literature gives more than one proper name for the same object — the symbol `tau` versus the attributed `ozsvath_szabo_tau`, or `three_genus` versus `seifert_genus` — either is mathematically legitimate; pick one in the normalizer and every result and export follows, with no effect on the mathematics or on any consumer.
+The canonical spelling is fixed by decision 0001. Where the literature gives more than one proper name for the same object — the symbol `tau` versus the attributed `ozsvath_szabo_tau`, or `three_genus` versus `seifert_genus` — either is mathematically legitimate, and 0001 records which one Tetradrome uses. F2 is the unmarked coefficient field; every other ring is named explicitly. A canonical name appears at every call site, so renaming one is a cross-codebase change, not a normalizer edit.
 
 | Tetradrome (canonical) | KnotInfo column | Sage `Knot`/`Link` | `knot_floer_homology` key | Spherogram / KnotJob |
 |---|---|---|---|---|
@@ -559,13 +559,14 @@ The exact canonical spelling is a deliberate open design decision, localized to 
 | `three_genus` | `three_genus` | `.genus()` | `seifert_genus` | — |
 | `smooth_four_genus` | `smooth_four_genus` | — | — | — |
 | `topological_four_genus` | `topological_four_genus` | — | — | — |
-| `rasmussen_invariant` | `rasmussen_invariant` | — | — | KnotJob (Khovanov / Lee → s) |
+| `rasmussen_s` | `rasmussen_invariant` | — | — | KnotJob (Khovanov / Lee → s) |
 | `ozsvath_szabo_tau` | `ozsvath_szabo_tau` | — | `tau` | — |
 | `epsilon` | (HFK data) | — | `epsilon` | — |
 | `nu` | (HFK data) | — | `nu` | — |
 | `fibered` | `fibered` | — | `fibered` | — |
 | `l_space_knot` | (HFK data) | — | `L_space_knot` | — |
-| `khovanov_homology` | `khovanov_*` | — | — | KnotJob (reduced / unreduced) |
+| `khovanov_homology` (F2) | `khovanov_unreduced_integral_vector` (mod 2 via UCT) | — | — | KnotJob (reduced / unreduced) |
+| `rational_khovanov_homology` | `khovanov_unreduced_integral_vector` (free part) | — | — | KnotJob (integral free part) |
 | `knot_floer_homology` | `hfk_*` | — | `ranks` / `total_rank` | — |
 | `smoothly_slice` | `smoothly_slice` | — | — | — |
 | `topologically_slice` | `topologically_slice` | — | — | — |
@@ -752,7 +753,7 @@ class Knot:                       # the public handle; wraps a normalized KnotDi
 @dataclass(frozen=True)
 class ObstructionOutcome:
     name: str                     # "fox_milnor" | "signature" | "arf_invariant"
-                                  #   | "rasmussen_invariant" | "ozsvath_szabo_tau"
+                                  #   | "rasmussen_s" | "ozsvath_szabo_tau"
     obstructs: bool               # does it obstruct sliceness? (False == vanishes / "looks ordinary")
     value: Any
     provenance: Provenance
@@ -792,7 +793,7 @@ class SliceCertificate:
     knot: str
     via: str                      # "direct" | "trace_sibling" | "topological"
     sibling: Optional[str]        # K' with shared trace, when via == "trace_sibling"
-    witness: dict                 # e.g. {"rasmussen_invariant(K')": 2}
+    witness: dict                 # e.g. {"rasmussen_s(K')": 2}
     references: list[str]
 
 @dataclass(frozen=True)
@@ -822,8 +823,8 @@ knots.normalize(knot); knots.mirror(knot)
 
 # tetradrome.invariants — native compute; always returns a typed InvariantResult (§11.1)
 invariants.list()
-invariants.compute(knot, name, *, validate=True) -> InvariantResult
-invariants.compute_all(knot, *, validate=True) -> dict[str, InvariantResult]
+invariants.compute(knot, name, *, validate="strict") -> InvariantResult
+invariants.compute_all(knot, *, validate="strict") -> dict[str, InvariantResult]
 
 # tetradrome.concordance — sliceness / obstructions
 concordance.obstruction_profile(knot) -> ObstructionProfile
@@ -839,28 +840,28 @@ traces.slice_certificate(knot) -> Optional[SliceCertificate]
 catalog.names(); catalog.get(name) -> Knot
 
 # tetradrome.export — build / load the validated consumption contract (promotes catalog/ + validation/)
-export.build(names=None, *, validate=True) -> RosterExport
+export.build(names=None, *, validate="strict") -> RosterExport
 export.save(roster, path); export.load(path) -> RosterExport   # verifies content_hash
 
 # tetradrome.validators — opt-in cross-checks (authoring-time; §12)
 validators.available(); validators.capabilities(); validators.require(name)
 ```
 
-**The consumption contract.** A downstream consumer depends on exactly one artifact: a `RosterExport`, produced offline by `export.build(..., validate=True)`, saved, and content-hashed. At read time nothing external is touched; any validator (KnotJob, HFK, Sage) is consulted only at authoring time, and only as a cross-check — never to produce a value. Every value reachable through the export carries its `Provenance` and `ValidationStatus`, so a consumer can assert validation and refuse to proceed otherwise. This boundary is what keeps consumers thin and the mathematics pure: the consumer reads knot-math facts and never reaches into computation.
+**The consumption contract.** A downstream consumer depends on exactly one artifact: a `RosterExport`, produced offline by `export.build(..., validate="strict")`, saved, and content-hashed. At read time nothing external is touched; any validator (KnotJob, HFK, Sage) is consulted only at authoring time, and only as a cross-check — never to produce a value. Every value reachable through the export carries its `Provenance` and `ValidationStatus`, so a consumer can assert validation and refuse to proceed otherwise. This boundary is what keeps consumers thin and the mathematics pure: the consumer reads knot-math facts and never reaches into computation.
 
 ```python
 roster = export.load("roster-vN.json")            # verifies hash; raises on mismatch
 e = roster.entries["K11n34"]
-e.invariants["rasmussen_invariant"].value          # verified, with provenance
+e.invariants["rasmussen_s"].value          # verified, with provenance
 e.sliceness.smoothly_slice                         # False
 e.sliceness.topologically_slice                    # True
 e.sliceness.obstruction_profile.all_vanish         # True — ordinary by every cheap measure
 e.sliceness.certificate.via                        # "trace_sibling"
 e.sliceness.certificate.sibling                    # K' with the shared 0-trace
-e.sliceness.certificate.witness                    # {"rasmussen_invariant(K')": ...}
+e.sliceness.certificate.witness                    # {"rasmussen_s(K')": ...}
 ```
 
-**Errors (all loud):** `UnknownKnot`, `BackendUnavailable`, `UnvalidatedResult` (raised when `validate=True` but no oracle or cross-backend agreement exists), `ConventionMismatch`, `ExportHashMismatch`.
+**Errors (all loud):** `UnknownKnot`, `BackendUnavailable`, `UnvalidatedResult` (raised when a result has no oracle match and no cross-backend agreement, or when strict validation's required computed oracle is absent (decision 0004)), `ConventionMismatch`, `ExportHashMismatch`.
 
 **Stability.** Public / stable: the functions and types above, plus the `RosterExport` schema. Internal / unstable: `native/*`, `algebra/*`, individual backend adapters. New public modules vs. §9: `traces` and `export`, which promote `experiments/piccirillo_trace_notes.md`, `catalog/`, and `validation/claim_ledger.py` into stable, queryable surfaces; `concordance` is promoted from `invariants/concordance.py` to a documented public module.
 
