@@ -4,7 +4,8 @@
 """Tetradrome: a reproducible, audit-friendly workbench for knot invariants.
 
 See SPEC.md for the full design. Public surface grows as components land; today it
-exposes the knot input layer (`tetradrome.knots`).
+exposes the knot input layer (`tetradrome.knots`) and native, validated compute
+(`tetradrome.invariants`).
 """
 from ._version import __version__
 from . import invariants, knots
