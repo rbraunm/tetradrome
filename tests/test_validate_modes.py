@@ -203,12 +203,13 @@ def test_unwired_map_is_exactly_the_known_remaining_oracles():
     """Exact pin on the unwired map. Each checkpoint that wires an oracle edits one
     line here, so the 'not yet wired' set strict reports can never drift silently.
 
-    khoca is absent because it is wired. khtpp is absent because it computes the
-    reduced theory, which has no canonical invariant name yet (Phase 9)."""
+    khoca is absent because it is wired. knotkit is wired for rasmussen_s only; its
+    Khovanov is measured in the benchmark but deliberately not a validator, since those
+    invariants already have three. khtpp is absent because it computes the reduced
+    theory, which has no canonical invariant name yet (Phase 9)."""
     assert registry._UNWIRED == {
         "khovanov_homology": ("javakh", "knotkit"),
         "rational_khovanov_homology": ("javakh", "khoho", "knotkit"),
-        "rasmussen_s": ("knotkit",),
     }
 
 

@@ -20,9 +20,14 @@ Two sources of truth, deliberately split (derive, don't duplicate):
    ``is_available`` / ``version_info``, the SPEC 12.1 contract). Nothing is restated
    statically.
 2. Unwired exists-anywhere is STATIC. ``_UNWIRED`` names computed oracles that exist in
-   the world but that no validator wires yet -- exactly the set strict names in its
+   the world but that no validator wires -- exactly the set strict names in its
    "not yet wired" message. An entry is DELETED the day its oracle is wired; from then
    on the truth lives in that validator's ``covered_invariants``.
+
+Wiring standard: at least two independent computed validators for an invariant wherever
+two exist. Every provisioned oracle is measured in the benchmark, but a validator runs
+inside every strict ``compute()`` call, so an oracle beyond that standard stays
+measured-only and listed in ``_UNWIRED`` rather than added to strict's hot path.
 
 This registry is the validation path only. The comparison layer keeps its own oracle
 list (``scripts/comparison/adapters.ORACLES``) for the benchmark artifact -- that is a
@@ -35,6 +40,7 @@ from typing import Any, Protocol
 from .hfk_adapter import HFKValidator
 from .khoca_adapter import KhocaValidator
 from .knotjob_adapter import KnotJobValidator
+from .knotkit_adapter import KnotkitValidator
 from .regina_adapter import ReginaValidator
 from .sage_adapter import SageValidator
 
@@ -57,21 +63,24 @@ class Validator(Protocol):
 # The validator instances actually wired into compute(). Order is consultation order.
 _WIRED: tuple[Validator, ...] = (
     HFKValidator(), ReginaValidator(), KnotJobValidator(), SageValidator(), KhocaValidator(),
+    KnotkitValidator(),
 )
 
-# Computed oracles that exist in the world but are NOT yet wired as validators, per
+# Computed oracles that exist in the world but are NOT wired as validators, per
 # canonical invariant name (sourced from SPEC 12.3 / docs/backend_matrix.md and the
 # provisioned set in scripts/install_oracles.sh). Floer has no entry: kfh is wired.
 # The classical four have no entries left: regina and sage are both wired (pip SnapPy
 # is Sage-only for all four -- verified empirically -- so it never was a standalone
-# oracle, and sage subsumes it). Only the Khovanov-family second opinions remain.
+# oracle, and sage subsumes it). Only the Khovanov-family second opinions remain, and
+# they stay measured-only under the wiring standard above: khovanov_homology and
+# rational_khovanov_homology already have three validators each (knotjob, sage, khoca).
+# knotkit is wired for rasmussen_s, the one invariant it brought to two.
 # khtpp is provisioned but deliberately absent: it computes the REDUCED theory, which has
 # no canonical invariant name until homology-engine.md section 7 Phase 9 builds a native
 # reduced engine. See roadmap/research/khtpp.md.
 _UNWIRED: dict[str, tuple[str, ...]] = {
     "khovanov_homology": ("javakh", "knotkit"),
     "rational_khovanov_homology": ("javakh", "khoho", "knotkit"),
-    "rasmussen_s": ("knotkit",),
 }
 
 
