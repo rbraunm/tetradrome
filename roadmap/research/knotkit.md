@@ -54,9 +54,11 @@ so knotkit's Rolfsen table and our PD agree on chirality.
   `q` label -- and each generator is a `\fill (x, y) circle (.15);` at its cell centre.
   Rational trefoil example: fills at (0.5,0.5), (0.5,1.5), (2.5,2.5), (3.5,4.5) decode
   through the labels to `(t,q)` = (0,1), (0,3), (2,5), (3,9), with `\rank Kh = 4`.
-  **Unverified**: how a cell of rank greater than 1 is drawn. The trefoil has none; the
-  7g parser must find a knot that does before trusting the decoding, and fail loud on
-  any grid element it does not recognise.
+  A cell of **rank N > 1** is drawn as `\draw (x, y) node {$N$};` at its centre instead
+  of a circle (seen on 6_1, 7_4, 8_20, 9_42 and 10_132; 7_4 over Z2 has rank-3 cells).
+  The measurement parser (`_parseKnotkitGrid` in `scripts/comparison/adapters.py`)
+  accounts for every line of the picture, raises on any element it does not recognise,
+  and requires the decoded ranks to sum to kk's own `\rank Kh` total.
 
 ## Conventions
 
@@ -72,12 +74,16 @@ the negation of native's: `s -> -s`, the same convention as knotjob.
 | `10_124` | -8 | 8 | 8 |
 
 Negation matched 10/10 cells; direct matched 2/10 (only the amphichiral `4_1`, which
-cannot discriminate). 7h can wire `s` on this evidence.
+cannot discriminate). Wired as a validator over Q (`backends/knotkit_adapter.py`),
+since native `s` is Rasmussen's original, read off Lee homology over Q.
 
-**`kh` -- hypothesis.** On the trefoil over Q, knotkit's groups (0,1), (0,3), (2,5),
-(3,9) are exactly native's (0,-1), (0,-3), (-2,-5), (-3,-9) under the full mirror
-`(h,q) -> (-h,-q)`, consistent with the `s` result. One knot is not a probe; 7h must
-sweep both fields before wiring.
+**`kh` -- verified on the chiral sweep plus 6_1 and 7_4, both fields.** Knotkit's
+Khovanov is the full mirror of native's, `(h,q) -> (-h,-q)`, consistent with the `s`
+result: full mirror matched 14/14 cells, direct 2/14 (only amphichiral `4_1`), and
+q-negation 0/14. 6_1 and 7_4 were added to the sweep so the rank > 1 cells are
+exercised in both fields. Measured in the benchmark; not wired as a validator, because
+Khovanov over F2 and Q already has three independent validators and each added one runs
+inside every strict compute (the wiring standard in `backends/registry.py`).
 
 ## Coefficient field
 

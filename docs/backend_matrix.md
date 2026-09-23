@@ -31,7 +31,7 @@ compute it but no convention probe has run, so nothing may be wired on it yet.
 | SageMath | `INSTALL_SAGE=1`, CT 250 only | PD, braid | `alexander_polynomial`, `determinant`, `signature`, `jones_polynomial`, `khovanov_homology`, `rational_khovanov_homology` -- verified | The only computed signature oracle provisioned. Re-verification tool: `scripts/verify_sage_conventions.py`. |
 | KnotJob | install script (jar) | PD | `khovanov_homology` (via UCT from integral), `rational_khovanov_homology`, `rasmussen_s` -- verified | Its output also carries integral Khovanov with torsion. |
 | Khoca | pip | PD | `khovanov_homology`, `rational_khovanov_homology` -- verified | Each field computed natively. Also returns the reduced theory (unused; see homology-engine.md Phase 9) and integral via ring 0. |
-| knotkit (`kk`) | install script (source) | PD, name, DT, braid | `rasmussen_s` -- verified; `khovanov_homology`, `rational_khovanov_homology` -- unprobed | Details: `roadmap/research/knotkit.md`. |
+| knotkit (`kk`) | install script (source) | PD, name, DT, braid | `rasmussen_s`, `khovanov_homology`, `rational_khovanov_homology` -- verified | Details: `roadmap/research/knotkit.md`. |
 | JavaKh | install script (source) | PD | `rational_khovanov_homology` -- unprobed as a validator | Integral / mod-2 mode not yet probed. |
 | KhoHo | install script (source, PARI/gp) | torus(2,n) only today | `rational_khovanov_homology` for T(2,n) -- unprobed as a validator | A general input path is unprobed. |
 | kht++ (`khtpp`) | install script (source) | `.kht` Morse word only | none today | Computes the reduced theory, which has no canonical name until homology-engine.md Phase 9. Details: `roadmap/research/khtpp.md`. |

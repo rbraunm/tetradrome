@@ -454,6 +454,115 @@ def khocaRun(knot, reps):
     }
 
 
+# ---- knotkit (Rasmussen s, Khovanov over F2 and Q) ------------------------------------------
+
+_KNOTKIT_AXIS_T = re.compile(r"\\draw \(([-\d.]+),-\.2\) node\[below\] \{\$(-?\d+)\$\};")
+_KNOTKIT_AXIS_Q = re.compile(r"\\draw \(-\.2,([-\d.]+)\) node\[left\] \{\$(-?\d+)\$\};")
+_KNOTKIT_FILL = re.compile(r"\\fill \(([-\d.]+), ([-\d.]+)\) circle \(\.15\);")
+_KNOTKIT_NODE = re.compile(r"\\draw \(([-\d.]+), ([-\d.]+)\) node \{\$(\d+)\$\};")
+_KNOTKIT_FURNITURE = re.compile(
+    r"\\draw\[->\]|\\draw\[step=|\\draw \([-\d.]+,-0\.8\) node\[below\]")
+_KNOTKIT_RANK = re.compile(r"\\rank Kh = (\d+)")
+_KNOTKIT_S = re.compile(r"^s\(.*\) = (-?\d+)$")
+
+
+def _parseKnotkitGrid(latex):
+    """``kk kh`` stdout -- a standalone LaTeX document -> {(t, q): rank}, RAW convention.
+
+    The TikZ grid's axis labels map cell centres to gradings; a generator is a filled circle
+    (rank 1) or a ``node {$N$}`` (rank N) at its cell centre. Every line of the picture must be
+    one of those or known furniture, and the parsed ranks must sum to kk's own ``\rank Kh``
+    total: an unfamiliar drawing element raises rather than silently dropping generators."""
+    if r"\begin{tikzpicture}" not in latex:
+        raise ValueError("no tikzpicture in kk kh output")
+    body = latex.split(r"\begin{tikzpicture}", 1)[1].split("\n", 1)[1]
+    body = body.split(r"\end{tikzpicture}", 1)[0]
+    tAt, qAt, cells = {}, {}, []
+    for line in (raw.strip() for raw in body.splitlines()):
+        if not line:
+            continue
+        axisT = _KNOTKIT_AXIS_T.fullmatch(line)
+        axisQ = _KNOTKIT_AXIS_Q.fullmatch(line)
+        fill = _KNOTKIT_FILL.fullmatch(line)
+        node = _KNOTKIT_NODE.fullmatch(line)
+        if axisT:
+            tAt[axisT.group(1)] = int(axisT.group(2))
+        elif axisQ:
+            qAt[axisQ.group(1)] = int(axisQ.group(2))
+        elif fill:
+            cells.append((fill.group(1), fill.group(2), 1))
+        elif node:
+            cells.append((node.group(1), node.group(2), int(node.group(3))))
+        elif not _KNOTKIT_FURNITURE.search(line):
+            raise ValueError(f"unrecognised element in kk kh grid: {line!r}")
+    groups = {}
+    for x, y, rank in cells:
+        if x not in tAt or y not in qAt:
+            raise ValueError(f"kk kh generator at ({x}, {y}) has no axis label")
+        key = (tAt[x], qAt[y])
+        groups[key] = groups.get(key, 0) + rank
+    total = _KNOTKIT_RANK.search(latex)
+    if not total:
+        raise ValueError(r"no \rank Kh line in kk kh output")
+    if sum(groups.values()) != int(total.group(1)):
+        raise ValueError(f"kk kh grid sums to {sum(groups.values())}, "
+                         f"but kk reports rank {total.group(1)}")
+    if not groups:
+        raise ValueError("empty Khovanov homology from kk (never zero for a knot)")
+    return groups
+
+
+def _parseKnotkitS(text):
+    """``kk s`` stdout -> s, RAW convention. Exactly one ``s(...) = n`` line or it raises."""
+    matches = [_KNOTKIT_S.match(line.strip()) for line in text.splitlines()]
+    values = [int(match.group(1)) for match in matches if match]
+    if len(values) != 1:
+        raise ValueError(f"expected one s line in kk s output, found {len(values)}: {text[:80]!r}")
+    return values[0]
+
+
+def _knotkit(arguments):
+    return subprocess.run(["kk", *arguments], check=True, capture_output=True, text=True).stdout
+
+
+def knotkitRun(knot, reps):
+    """Rasmussen s over Q, and Khovanov over F2 and over Q, each one ``kk`` call on the bracket
+    PD with its own measured time. Conventions verified on the chiral sweep before wiring (see
+    roadmap/research/knotkit.md): s is negated relative to native (10/10, both fields) and
+    Khovanov is the full mirror (h, q) -> (-h, -q) (14/14, both fields, rank > 1 cells
+    included). The transforms are applied here, so agreement is judged direct -- this is a
+    genuine mirror, unlike khoca's q-negation. s uses Q because native s is Rasmussen's
+    original, read off Lee homology over Q; kk's own default field is Z2."""
+    try:
+        bracket = _bracketPD(knot)
+        rawS, secondsS = _best(lambda: _parseKnotkitS(_knotkit(["s", "-f", "Q", bracket])), reps)
+        rawQ, secondsQ = _best(lambda: _parseKnotkitGrid(_knotkit(["kh", "-f", "Q", bracket])),
+                               reps)
+        rawF2, secondsF2 = _best(lambda: _parseKnotkitGrid(_knotkit(["kh", "-f", "Z2", bracket])),
+                                 reps)
+    except Exception as error:
+        miss = Measurement(value=f"error: {type(error).__name__}", seconds=None,
+                           note=str(error)[:80], agree="n/a")
+        return {name: miss for name in
+                ("rasmussen_s", "rational_khovanov_homology", "khovanov_homology")}
+    s = -rawS
+    rational = _mirrorKhovanov(rawQ)
+    f2 = _mirrorKhovanov(rawF2)
+    return {
+        "rasmussen_s": Measurement(
+            value=f"s={s}", seconds=secondsS, note="kk s -f Q; negated to canonical",
+            agree=_agreeScalar(knot, "rasmussen_s", s)),
+        "rational_khovanov_homology": Measurement(
+            value=f"total_rank={sum(rational.values())}", seconds=secondsQ,
+            note="kk kh -f Q; mirrored to canonical",
+            agree=_agreeGroups(knot, "rational_khovanov_homology", rational)),
+        "khovanov_homology": Measurement(
+            value=f"total_rank={sum(f2.values())}", seconds=secondsF2,
+            note="kk kh -f Z2 (native, no UCT); mirrored to canonical",
+            agree=_agreeGroups(knot, "khovanov_homology", f2)),
+    }
+
+
 # ---- SnapPy (hyperbolic volume) ------------------------------------------------------------
 
 def snappyRun(knot, reps):
@@ -742,6 +851,10 @@ def knotjobAvailable():
     return _probeBinary("knotjob", "KnotJob")
 
 
+def knotkitAvailable():
+    return _probeBinary("kk", "knotkit")
+
+
 def sageAvailable():
     return _probeBinary("sage", "SageMath")
 
@@ -817,6 +930,10 @@ def khohoVersion():
     return _gitShaVersion("khoho")
 
 
+def knotkitVersion():
+    return _gitShaVersion("knotkit")
+
+
 def sageVersion():
     exe = shutil.which("sage")
     if not exe:
@@ -847,4 +964,5 @@ ORACLES = [
     Oracle("khoho", khohoAvailable, khohoRun, khohoVersion),
     Oracle("sage", sageAvailable, sageRun, sageVersion),
     Oracle("khoca", khocaAvailable, khocaRun, khocaVersion),
+    Oracle("knotkit", knotkitAvailable, knotkitRun, knotkitVersion),
 ]

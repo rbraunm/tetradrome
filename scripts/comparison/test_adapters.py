@@ -12,6 +12,8 @@ wrappers that call ``invariants.compute`` are covered by a full artifact run on 
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import adapters  # noqa: E402
 
@@ -259,3 +261,135 @@ if __name__ == "__main__":
             traceback.print_exc()
     print("\n%d/%d passed" % (len(tests) - failures, len(tests)))
     sys.exit(1 if failures else 0)
+
+
+# ---- knotkit (kk kh LaTeX grid, kk s line) ----------------------------------------------------
+# Real kk output captured in the sandbox from knots.from_name(...).pd_code: the trefoil over Q
+# draws only filled circles; 7_4 over Z2 exercises the rank-N ``node {$N$}`` cells.
+
+KK_KH_3_1_Q = r"""\documentclass{article}
+\usepackage{amsmath, tikz, hyperref}
+\DeclareMathOperator{\rank}{rank}
+\setlength{\parindent}{0pt}
+
+\begin{document}
+\pagestyle{empty}
+\sloppy
+Kh = $Kh(\verb~PD[X[1,5,2,4],X[3,1,4,6],X[5,3,6,2]]~; \verb~Q~)$:\\
+$\rank Kh = 4$\\
+\begin{tikzpicture}[scale=.66]
+  \draw[->] (0,0) -- (4.5,0) node[right] {$t$};
+  \draw[->] (0,0) -- (0,5.5) node[above] {$q$};
+  \draw[step=1] (0,0) grid (4,5);
+  \draw (2.250,-0.8) node[below] {$Kh$};
+  \draw (0.5,-.2) node[below] {$0$};
+  \draw (1.5,-.2) node[below] {$1$};
+  \draw (2.5,-.2) node[below] {$2$};
+  \draw (3.5,-.2) node[below] {$3$};
+  \draw (-.2,0.5) node[left] {$1$};
+  \draw (-.2,1.5) node[left] {$3$};
+  \draw (-.2,2.5) node[left] {$5$};
+  \draw (-.2,3.5) node[left] {$7$};
+  \draw (-.2,4.5) node[left] {$9$};
+  \fill (0.5, 0.5) circle (.15);
+  \fill (0.5, 1.5) circle (.15);
+  \fill (2.5, 2.5) circle (.15);
+  \fill (3.5, 4.5) circle (.15);
+\end{tikzpicture}
+\end{document}
+"""
+
+KK_KH_7_4_Z2 = r"""\documentclass{article}
+\usepackage{amsmath, tikz, hyperref}
+\DeclareMathOperator{\rank}{rank}
+\setlength{\parindent}{0pt}
+
+\begin{document}
+\pagestyle{empty}
+\sloppy
+Kh = $Kh(\verb~PD[X[2,10,3,9],X[4,12,5,11],X[6,14,7,13],X[8,4,9,3],X[10,2,11,1],X[12,8,13,7],X[14,6,1,5]]~; \verb~Z2~)$:\\
+$\rank Kh = 30$\\
+\begin{tikzpicture}[scale=.66]
+  \draw[->] (0,0) -- (8.5,0) node[right] {$t$};
+  \draw[->] (0,0) -- (0,9.5) node[above] {$q$};
+  \draw[step=1] (0,0) grid (8,9);
+  \draw (4.250,-0.8) node[below] {$Kh$};
+  \draw (0.5,-.2) node[below] {$0$};
+  \draw (1.5,-.2) node[below] {$1$};
+  \draw (2.5,-.2) node[below] {$2$};
+  \draw (3.5,-.2) node[below] {$3$};
+  \draw (4.5,-.2) node[below] {$4$};
+  \draw (5.5,-.2) node[below] {$5$};
+  \draw (6.5,-.2) node[below] {$6$};
+  \draw (7.5,-.2) node[below] {$7$};
+  \draw (-.2,0.5) node[left] {$1$};
+  \draw (-.2,1.5) node[left] {$3$};
+  \draw (-.2,2.5) node[left] {$5$};
+  \draw (-.2,3.5) node[left] {$7$};
+  \draw (-.2,4.5) node[left] {$9$};
+  \draw (-.2,5.5) node[left] {$11$};
+  \draw (-.2,6.5) node[left] {$13$};
+  \draw (-.2,7.5) node[left] {$15$};
+  \draw (-.2,8.5) node[left] {$17$};
+  \fill (0.5, 0.5) circle (.15);
+  \fill (0.5, 1.5) circle (.15);
+  \draw (1.5, 1.5) node {$2$};
+  \draw (1.5, 2.5) node {$2$};
+  \draw (2.5, 2.5) node {$3$};
+  \draw (2.5, 3.5) node {$3$};
+  \draw (3.5, 3.5) node {$2$};
+  \draw (3.5, 4.5) node {$2$};
+  \draw (4.5, 4.5) node {$3$};
+  \draw (4.5, 5.5) node {$3$};
+  \draw (5.5, 5.5) node {$2$};
+  \draw (5.5, 6.5) node {$2$};
+  \fill (6.5, 6.5) circle (.15);
+  \fill (6.5, 7.5) circle (.15);
+  \fill (7.5, 7.5) circle (.15);
+  \fill (7.5, 8.5) circle (.15);
+\end{tikzpicture}
+\end{document}
+"""
+
+NATIVE_F2_7_4 = {
+    (-7, -17): 1, (-7, -15): 1, (-6, -15): 1, (-6, -13): 1, (-5, -13): 2, (-5, -11): 2,
+    (-4, -11): 3, (-4, -9): 3, (-3, -9): 2, (-3, -7): 2, (-2, -7): 3, (-2, -5): 3,
+    (-1, -5): 2, (-1, -3): 2, (0, -3): 1, (0, -1): 1,
+}
+
+
+def test_knotkit_grid_decodes_filled_circles_to_the_mirror_of_native():
+    assert adapters._mirrorKhovanov(adapters._parseKnotkitGrid(KK_KH_3_1_Q)) == NATIVE_RATIONAL["3_1"]
+
+
+def test_knotkit_grid_decodes_rank_nodes_to_the_mirror_of_native():
+    groups = adapters._parseKnotkitGrid(KK_KH_7_4_Z2)
+    assert max(groups.values()) == 3
+    assert adapters._mirrorKhovanov(groups) == NATIVE_F2_7_4
+
+
+def test_knotkit_grid_rejects_an_unrecognised_element():
+    tampered = KK_KH_3_1_Q.replace(
+        r"\end{tikzpicture}", "  \\draw (1,1) -- (2,2);\n\\end{tikzpicture}")
+    with pytest.raises(ValueError, match="unrecognised element"):
+        adapters._parseKnotkitGrid(tampered)
+
+
+def test_knotkit_grid_rejects_a_rank_total_that_does_not_reconcile():
+    tampered = KK_KH_3_1_Q.replace(r"\rank Kh = 4", r"\rank Kh = 5")
+    with pytest.raises(ValueError, match="grid sums to 4"):
+        adapters._parseKnotkitGrid(tampered)
+
+
+def test_knotkit_grid_rejects_a_generator_off_the_labelled_axes():
+    tampered = KK_KH_3_1_Q.replace(r"\fill (0.5, 0.5)", r"\fill (9.5, 0.5)")
+    with pytest.raises(ValueError, match="no axis label"):
+        adapters._parseKnotkitGrid(tampered)
+
+
+def test_knotkit_s_reads_exactly_one_line():
+    assert adapters._parseKnotkitS("s(PD[X[1,5,2,4]]; Q) = 2\n") == 2
+    assert adapters._parseKnotkitS("s(10_124; Q) = -8\n") == -8
+    for text in ("", "s(3_1; Q) = 2\ns(3_1; Q) = 2\n", "nothing here\n"):
+        with pytest.raises(ValueError, match="expected one s line"):
+            adapters._parseKnotkitS(text)
