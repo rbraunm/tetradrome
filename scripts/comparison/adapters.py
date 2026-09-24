@@ -992,11 +992,11 @@ print("KHOVANOV", kh)
 _SAGE_TAGS = ("JONES", "ALEXANDER", "SIGNATURE", "DETERMINANT", "KHOVANOV")
 
 
-def _parseSageFields(text):
-    """Pull the tagged structured lines the sage script prints into {tag: value}."""
+def _parseSageFields(text, tags=None):
+    """Pull the tagged structured lines a sage script prints into {tag: value}."""
     fields = {}
     for line in text.splitlines():
-        for tag in _SAGE_TAGS:
+        for tag in (_SAGE_TAGS if tags is None else tags):
             if line.startswith(tag + " "):
                 fields[tag] = ast.literal_eval(line[len(tag) + 1:])
     return fields
@@ -1040,7 +1040,7 @@ def _agreeAlexander(knot, oracleAlexander):
     return "pass" if _canonicalAlexander(oracleAlexander) == _nativeAlexanderDict(knot) else "mismatch"
 
 
-def sageRun(knot, reps):
+def _sageNativeRun(knot, reps):
     """One sage run per knot -> Jones, Alexander, determinant, signature, and rational + F2
     Khovanov (F2 via UCT from the invariant factors). Sage shares native's PD convention, so
     Khovanov and determinant are direct, Alexander is up to canonicalization, and Jones/signature
@@ -1098,6 +1098,109 @@ def sageRun(knot, reps):
             note="F2 via UCT from invariant factors; same run",
             agree=_agreeGroups(knot, "khovanov_homology", f2)),
     }
+
+
+# ---- SageMath target rows (no native engine) ------------------------------------------------
+#
+# Probed on CT 250 (scripts/probe_sage_targets.py, SageMath 9.5): homfly_polynomial,
+# omega_signature and Knot.arf_invariant exist; conway_polynomial, kauffman_polynomial,
+# signature_function, algebraic_concordance_order and braid_index do not. These rows get their
+# own sage run so the native-row cells' times are not inflated, and each operation is timed
+# INSIDE sage (best of reps), because a whole-subprocess time here would be almost entirely the
+# runtime boot rather than the computation a future engine has to beat.
+
+_SAGE_TARGET_SCRIPT = """import time
+L = Link(%(pd)s)
+K = Knot(%(pd)s)
+def _timed(f):
+    best = None
+    for _ in range(%(reps)d):
+        start = time.perf_counter()
+        value = f()
+        elapsed = time.perf_counter() - start
+        best = elapsed if best is None or elapsed < best else best
+    return value, float(best)
+H, tH = _timed(lambda: L.homfly_polynomial())
+print("HOMFLY", repr(str(H)))
+print("HOMFLY_SECONDS", tH)
+W, tW = _timed(lambda: [int(L.omega_signature(exp(2*pi*I*k/12))) for k in range(1, 7)])
+print("OMEGA_SIGNATURE", W)
+print("OMEGA_SECONDS", tW)
+print("SIGNATURE", int(L.signature()))
+A, tA = _timed(lambda: int(K.arf_invariant()))
+print("ARF", A)
+print("ARF_SECONDS", tA)
+"""
+_SAGE_TARGET_TAGS = ("HOMFLY", "HOMFLY_SECONDS", "OMEGA_SIGNATURE", "OMEGA_SECONDS", "SIGNATURE",
+                     "ARF", "ARF_SECONDS")
+_SAGE_ABSENT = ("conway_polynomial", "kauffman_polynomial", "algebraic_concordance_order",
+                "braid_index")
+
+
+def _canonicalSignatureFunction(samples, signature):
+    """Sage's Levine-Tristram samples at e^(2 pi i k/12), k = 1..6, in the canonical sign.
+
+    Sage's signature is the negation of native's (verified by scripts/verify_sage_conventions.py),
+    and omega_signature is the same form evaluated at omega, so the same negation applies -- but
+    only after checking the sample at omega = -1 (k = 6) IS sage's own signature(). If it is not,
+    the samples are not what this assumes and it raises."""
+    if len(samples) != 6:
+        raise ValueError(f"expected 6 Levine-Tristram samples, got {samples!r}")
+    if samples[-1] != signature:
+        raise ValueError(f"omega_signature(-1) = {samples[-1]} but signature() = {signature}")
+    return [-value for value in samples]
+
+
+def _sageTargetRun(knot, reps):
+    """One sage run for the Sage-group target rows: HOMFLY-PT, the Levine-Tristram signature
+    function (sampled at e^(2 pi i k/12), k = 1..6, canonical sign), and Arf. All oracle-only.
+    The rows SageMath 9.5 lacks report n/a with that reason rather than 'adapter pending'."""
+    import os
+    import tempfile
+    rows = {name: Measurement(value="n/a", seconds=None,
+                              note="not in SageMath 9.5 (probed); no provisioned oracle has it",
+                              agree="n/a")
+            for name in _SAGE_ABSENT}
+    try:
+        script = _SAGE_TARGET_SCRIPT % {"pd": repr(pdAsList(knot)), "reps": max(reps, 1)}
+        with tempfile.TemporaryDirectory() as work:
+            path = os.path.join(work, "targets.sage")
+            with open(path, "w") as handle:
+                handle.write(script)
+            out = subprocess.run(["sage", path], check=True, capture_output=True, text=True).stdout
+        fields = _parseSageFields(out, _SAGE_TARGET_TAGS)
+        missing = [tag for tag in _SAGE_TARGET_TAGS if tag not in fields]
+        if missing:
+            raise ValueError("sage target output missing %s" % ", ".join(missing))
+        levineTristram = _canonicalSignatureFunction(fields["OMEGA_SIGNATURE"], fields["SIGNATURE"])
+    except Exception as error:
+        miss = Measurement(value=f"error: {type(error).__name__}", seconds=None,
+                           note=str(error)[:80], agree="n/a")
+        rows.update({name: miss for name in
+                     ("homfly_polynomial", "signature_function", "arf_invariant")})
+        return rows
+    inside = "timed inside sage, runtime boot excluded"
+    rows.update({
+        "homfly_polynomial": Measurement(
+            value=fields["HOMFLY"][:40], seconds=fields["HOMFLY_SECONDS"],
+            note=f"sage homfly_polynomial() in (L, M); {inside}", agree="oracle"),
+        "signature_function": Measurement(
+            value=f"k=1..6: {levineTristram}", seconds=fields["OMEGA_SECONDS"],
+            note=f"sage omega_signature at e^(2 pi i k/12), negated to canonical; {inside}",
+            agree="oracle"),
+        "arf_invariant": Measurement(
+            value=str(fields["ARF"]), seconds=fields["ARF_SECONDS"],
+            note=f"sage Knot.arf_invariant(); {inside}", agree="oracle"),
+    })
+    return rows
+
+
+def sageRun(knot, reps):
+    """Both sage runs: the native rows (one run, whole-subprocess time) and the target rows
+    (a second run, each operation timed inside sage)."""
+    rows = _sageNativeRun(knot, reps)
+    rows.update(_sageTargetRun(knot, reps))
+    return rows
 
 
 # ---- probe-only oracles (timed calls land once a host has them) ---------------------------

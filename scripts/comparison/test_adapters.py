@@ -557,3 +557,38 @@ def test_determinant_is_alexander_at_minus_one_in_absolute_value():
              "x^6 - x^5 + x^3 - x + 1": 3, "x^8 - x^7 + x^5 - x^4 + x^3 - x + 1": 1}
     for text, determinant in cases.items():
         assert adapters._determinantFromAlexander(adapters._parseLaurent(text, "x")) == determinant
+
+
+# ---- SageMath target rows -----------------------------------------------------------------
+# Values from scripts/probe_sage_targets.py on CT 250 (SageMath 9.5). The probe sampled
+# omega_signature at k = 1..5; k = 6 (omega = -1) is the guard sample added in the adapter.
+
+def test_signature_function_is_negated_after_the_omega_minus_one_guard():
+    samples = [0, 1, 2, 2, 2, 2]          # 3_1: probe's k=1..5, then omega = -1
+    assert adapters._canonicalSignatureFunction(samples, 2) == [0, -1, -2, -2, -2, -2]
+
+
+def test_signature_function_guard_rejects_a_sample_that_is_not_the_signature():
+    with pytest.raises(ValueError, match="omega_signature"):
+        adapters._canonicalSignatureFunction([0, 1, 2, 2, 2, 2], -2)
+    with pytest.raises(ValueError, match="6 Levine-Tristram samples"):
+        adapters._canonicalSignatureFunction([0, 1, 2, 2, 2], 2)
+
+
+def test_sage_target_fields_parse_from_tagged_output():
+    out = ("HOMFLY '-L^4 + L^2*M^2 - 2*L^2'\nHOMFLY_SECONDS 0.1345\n"
+           "OMEGA_SIGNATURE [0, 1, 2, 2, 2, 2]\nOMEGA_SECONDS 1.1867\nSIGNATURE 2\n"
+           "ARF 1\nARF_SECONDS 0.0164\nnoise line\n")
+    fields = adapters._parseSageFields(out, adapters._SAGE_TARGET_TAGS)
+    assert set(fields) == set(adapters._SAGE_TARGET_TAGS)
+    assert fields["HOMFLY"] == "-L^4 + L^2*M^2 - 2*L^2"
+    assert fields["OMEGA_SIGNATURE"] == [0, 1, 2, 2, 2, 2]
+    assert fields["ARF"] == 1
+
+
+def test_sage_target_script_compiles_as_python():
+    """Sage's preparser accepts a superset of Python, so a syntax error here would also
+    break on CT 250 -- the one check possible without sage."""
+    script = adapters._SAGE_TARGET_SCRIPT % {"pd": "[[1, 5, 2, 4], [3, 1, 4, 6], [5, 3, 6, 2]]",
+                                             "reps": 1}
+    compile(script, "targets.sage", "exec")
