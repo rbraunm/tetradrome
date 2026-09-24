@@ -420,29 +420,87 @@ def javakhAvailable():
     return _probeBinary("javakh", "JavaKh")
 
 
+_JAVAKH_TERM = re.compile(r"^(?:(\d+)\*)?q\^(-?\d+)\*t\^(-?\d+)\*Z\[([\d,]+)\]$")
+
+
+def _parseJavakhIntegral(text):
+    """``javakh -Z`` output -> {"free": groups, "torsion": {order: groups}}, RAW convention.
+
+    Each term is ``q^a*t^b*Z[o1,o2,...]`` with one entry per cyclic summand at that bidegree:
+    0 is a free Z and n is Z/n, so ``Z[0,0,2]`` is Z^2 + Z/2. An optional leading ``c*``
+    multiplies the term. Any term that does not match raises rather than being skipped."""
+    body = text.strip().strip('"').strip()
+    if not body:
+        raise ValueError("empty javakh -Z output")
+    free, torsion = {}, {}
+    for term in (piece.strip() for piece in body.split(" + ")):
+        match = _JAVAKH_TERM.match(term)
+        if not match:
+            raise ValueError(f"unparseable javakh -Z term: {term!r}")
+        count = int(match.group(1) or 1)
+        key = (int(match.group(3)), int(match.group(2)))
+        for order in (int(entry) for entry in match.group(4).split(",")):
+            bucket = free if order == 0 else torsion.setdefault(order, {})
+            bucket[key] = bucket.get(key, 0) + count
+    return {"free": free, "torsion": torsion}
+
+
+def _javakh(flag, bracket):
+    return subprocess.run(["javakh", flag], input=bracket + "\n",
+                          check=True, capture_output=True, text=True).stdout
+
+
 def javakhRun(knot, reps):
-    """One ``javakh -Q`` call (bracket PD on stdin) -> rational Khovanov as a quoted
-    ``q^a*t^b`` string. JavaKh reads Tetradrome PD in the mirror convention, judged up to mirror."""
-    import subprocess
+    """Two JavaKh calls on the bracket PD (stdin), each timed. JavaKh reads Tetradrome PD in the
+    mirror convention.
+
+    ``-Q`` gives rational Khovanov as a quoted ``q^a*t^b`` string, judged up to mirror.
+    ``-Z`` gives integral Khovanov with torsion, which fills three more rows. F2 comes from it by
+    UCT applied to the RAW groups and then mirrored -- that order reproduces native F2 on 3_1,
+    4_1, 5_2, 6_1, 7_4, 8_19 and 10_124, while mirroring first fails on all seven, because
+    mirroring integral homology also moves torsion one degree. Integral and width are
+    oracle-only cells; width is taken on the raw groups, which is sound since width is
+    mirror-invariant. JavaKh has no reduced theory."""
+    rows = {}
+    bracket = _bracketPD(knot)
     try:
-        bracket = _bracketPD(knot)
-
-        def call():
-            proc = subprocess.run(["javakh", "-Q"], input=bracket + "\n",
-                                  check=True, capture_output=True, text=True)
-            return proc.stdout
-
-        out, seconds = _best(call, reps)
+        out, seconds = _best(lambda: _javakh("-Q", bracket), reps)
         groups = _parseKhovanovPoly(out.replace('"', ""))
         if not groups:
             raise ValueError("no parseable Khovanov terms in javakh output: %r" % out[:80])
     except Exception as error:
-        return {"rational_khovanov_homology": Measurement(
+        rows["rational_khovanov_homology"] = Measurement(
             value=f"error: {type(error).__name__}", seconds=None, note=str(error)[:80],
-            agree="n/a")}
-    return {"rational_khovanov_homology": Measurement(
-        value=f"total_rank={sum(groups.values())}", seconds=seconds, note="javakh -Q",
-        agree=_agreeGroups(knot, "rational_khovanov_homology", groups))}
+            agree="n/a")
+    else:
+        rows["rational_khovanov_homology"] = Measurement(
+            value=f"total_rank={sum(groups.values())}", seconds=seconds, note="javakh -Q",
+            agree=_agreeGroups(knot, "rational_khovanov_homology", groups))
+    try:
+        integral, seconds = _best(lambda: _parseJavakhIntegral(_javakh("-Z", bracket)), reps)
+        f2 = _mirrorKhovanov(_f2FromIntegral(integral["free"], _evenTorsion(integral)))
+        width = _khovanovWidth(integral)
+    except Exception as error:
+        miss = Measurement(value=f"error: {type(error).__name__}", seconds=None,
+                           note=str(error)[:80], agree="n/a")
+        rows.update({name: miss for name in
+                     ("khovanov_homology", "khovanov_integral", "khovanov_width")})
+    else:
+        same = "same javakh -Z call"
+        rows.update({
+            "khovanov_integral": Measurement(
+                value=_integralSummary(integral), seconds=seconds, note="javakh -Z",
+                agree="oracle"),
+            "khovanov_homology": Measurement(
+                value=f"total_rank={sum(f2.values())}", seconds=None,
+                note=f"{same}; F2 via UCT on the raw groups, then mirrored",
+                agree=_agreeGroups(knot, "khovanov_homology", f2)),
+            "khovanov_width": Measurement(
+                value=f"width={width}", seconds=None,
+                note=f"{same}; diagonals of integral Khovanov, torsion included",
+                agree="oracle"),
+        })
+    return rows
 
 
 # ---- KhoHo (rational Khovanov, (2,n) torus knots) ------------------------------------------

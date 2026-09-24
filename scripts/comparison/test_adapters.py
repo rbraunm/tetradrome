@@ -508,3 +508,42 @@ def test_khoca_integral_width_of_the_figure_eight_is_two():
 def test_khoca_integral_negative_aggregate_raises():
     with pytest.raises(ValueError, match="negative aggregate multiplicity"):
         adapters._khocaIntegralSection([[0, 1, 0, 1], [0, 1, 0, -2]])
+
+
+# ---- JavaKh integral (-Z) -----------------------------------------------------------------
+# Real javakh -Z output captured in the sandbox from knots.from_name(...).pd_code.
+JAVAKH_Z_3_1 = '"q^1*t^0*Z[0] + q^3*t^0*Z[0] + q^5*t^2*Z[0] + q^7*t^3*Z[2] + q^9*t^3*Z[0]"'
+JAVAKH_Z_5_2 = ('"q^1*t^0*Z[0] + q^3*t^0*Z[0] + q^3*t^1*Z[0] + q^5*t^2*Z[0,2] + q^7*t^2*Z[0] + '
+                'q^7*t^3*Z[2] + q^9*t^3*Z[0] + q^9*t^4*Z[0] + q^11*t^5*Z[2] + q^13*t^5*Z[0]"')
+
+
+def test_javakh_integral_parses_free_and_torsion_per_bidegree():
+    integral = adapters._parseJavakhIntegral(JAVAKH_Z_3_1)
+    assert integral["free"] == {(0, 1): 1, (0, 3): 1, (2, 5): 1, (3, 9): 1}
+    assert integral["torsion"] == {2: {(3, 7): 1}}
+    assert adapters._integralSummary(adapters._parseJavakhIntegral(JAVAKH_Z_5_2)) == "free=8 Z/2x3"
+
+
+def test_javakh_integral_counts_repeated_entries_and_coefficients():
+    integral = adapters._parseJavakhIntegral('"q^5*t^2*Z[0,2,2] + 2*q^1*t^0*Z[0]"')
+    assert integral["free"] == {(2, 5): 1, (0, 1): 2}
+    assert integral["torsion"] == {2: {(2, 5): 2}}
+
+
+def test_javakh_f2_is_uct_on_raw_groups_then_mirror():
+    """The ordering claim: UCT first, then mirror, is native F2. Mirroring first is not,
+    because the mirror of integral homology also moves torsion one degree."""
+    integral = adapters._parseJavakhIntegral(JAVAKH_Z_3_1)
+    torsion = adapters._evenTorsion(integral)
+    uct_then_mirror = adapters._mirrorKhovanov(adapters._f2FromIntegral(integral["free"], torsion))
+    mirror_then_uct = adapters._f2FromIntegral(adapters._mirrorKhovanov(integral["free"]),
+                                               adapters._mirrorKhovanov(torsion))
+    assert uct_then_mirror == NATIVE_F2["3_1"]
+    assert mirror_then_uct != NATIVE_F2["3_1"]
+
+
+def test_javakh_integral_rejects_unparseable_or_empty_output():
+    with pytest.raises(ValueError, match="unparseable javakh -Z term"):
+        adapters._parseJavakhIntegral('"q^1*t^0*Z[0] + garbage"')
+    with pytest.raises(ValueError, match="empty javakh -Z output"):
+        adapters._parseJavakhIntegral('""')
