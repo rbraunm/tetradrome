@@ -41,10 +41,25 @@ data point, needing a probe).
   A comment line, the Morse word (cup / crossing / cap generators with positions), and
   an orientation line.
 
-**This is the gate.** No output convention can be probed on the chiral sweep until the
-sweep can be expressed as Morse words, and we ship exactly two `.kht` files, both
-examples. Whether a braid word we already carry transcribes mechanically into a Morse
-word is the first question any future kht++ work must answer.
+**The gate opens from braid words (verified).** A braid on n strands, closed as a 1-1
+tangle, transcribes mechanically: nested caps `l1 ... l(n-1)` open the return arcs to the
+right of the braid, each generator becomes a crossing slice at index i-1 (`x` or `y` by
+sign), cups `u(n-1) ... u1` close the arcs, and the single top end points down (`,0`).
+KnotInfo carries braid words for the table knots, so no PD-to-Morse topology code is
+needed. Run on the trefoil (`l1.x0.x0.x0.u1`) and the figure-eight
+(`l1.l2.x0.y1.x0.y1.u2.u1`), kht++ computed both with no orientation complaints and the
+right reduced ranks: C_0 + C_1 = 3 generators, and C_0 + C_1 + C_1 = 5. The C_0 summand
+sat at q = -2 for that (left-handed) trefoil and q = 0 for 4_1, consistent with the
+s-from-C_0 hypothesis below.
+
+Still to pin before wiring: which of `x` / `y` is a positive generator for downward
+strands; whether KnotInfo's braid word has the same chirality as our PD for each knot
+(checkable natively with `knots.from_braid` against `knots.from_name`); and the format of
+the `cxCKh-c2` data file, which is what an adapter should read.
+
+**Path quirk (verified):** kht++ refuses a `.kht` file in the working directory itself
+("Please put your file in a subdirectory") and strips a leading slash from absolute paths,
+so a caller must place the file in a subdirectory and pass a relative path.
 
 ## Output (verified)
 
