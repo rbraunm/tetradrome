@@ -492,10 +492,11 @@ Each phase is validated before the next begins. Reductions and acceleration are 
   computing at two basepoints and asserting equality is a real assertion about the engine.
   **Oracles are already provisioned**, which is unusual for a Tier 2 item — ADR 0006
   requires a *computed* oracle for strict mode, and three exist, ranked by cost:
-  1. **khoca** — returns `[reduced, unreduced]` and `scripts/comparison/adapters.py::_khocaGroups`
-     already takes `out[1]` and discards `out[0]`. The reduced data is computed today and
-     thrown away; wiring it costs no new provisioning. Verified on 3_1 (both rings), giving
-     (0,2), (2,6), (3,8) in KnotInfo's *q*-convention.
+  1. **khoca** — returns `[reduced, unreduced]`; the benchmark's integral (ring 0) call
+     already reports the reduced half in the `khovanov_reduced` row, and the validator does
+     not read it. Wiring it as a validator costs no new provisioning. Verified on 3_1 (both
+     field rings), giving (0,2), (2,6), (3,8) in KnotInfo's *q*-convention, and its integral
+     reduced ranks match KnotJob's on the sweep.
   2. **knotkit** — `kk kh -r -f {Q,Z2}`; works, emits LaTeX carrying `\rank Kh`.
   3. **kht++** — computes the reduced theory natively, but is blocked behind a PD→Morse-word
      input encoder (its only documented inputs are an interactive dialogue or a `.kht` file),

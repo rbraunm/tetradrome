@@ -84,10 +84,10 @@ Default coefficient field is F2 (`-c2`).
 
 ## Cross-oracle corroboration (verified)
 
-khoca's `InteractiveCalculator` returns `[reduced, unreduced]`, and
-`scripts/comparison/adapters.py::_khocaGroups` takes `out[1]` and **discards `out[0]`**.
-The discarded half for the trefoil, both coefficient rings, in KnotInfo's q-convention:
-(0,2), (2,6), (3,8) -- identical to what kht++ prints.
+khoca's `InteractiveCalculator` returns `[reduced, unreduced]`. The field-ring validator
+path reads only the unreduced half; the benchmark's integral call reports the reduced half
+in the `khovanov_reduced` row. The reduced half for the trefoil, both field rings, in
+KnotInfo's q-convention: (0,2), (2,6), (3,8) -- identical to what kht++ prints.
 
 The same probe also settles the reduced-to-unreduced question empirically:
 
@@ -105,7 +105,7 @@ theorem-backed transform, and onto nothing for the Q row.
 
 When a native reduced engine exists and needs a computed oracle (ADR 0006):
 
-1. **khoca** -- already computes the reduced half and throws it away. No new
+1. **khoca** -- already computes the reduced half, and the benchmark measures it. No new
    provisioning at all.
 2. **knotkit** -- `kk kh -r -f {Q,Z2}` works; costs LaTeX parsing.
 3. **kht++** -- the most natural fit mathematically, and the most expensive, because it

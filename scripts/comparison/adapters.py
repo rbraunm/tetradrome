@@ -537,11 +537,40 @@ def _khocaGroups(pd, ring):
     return groups
 
 
+def _khocaIntegralSection(rows):
+    """One half of a ring-0 (integral) khoca result -> {"free": groups, "torsion": {order: groups}}
+    in the canonical convention. Rows are ``[t, q, torsionOrder, multiplicity]`` and may carry
+    zero or negative multiplicities that cancel per key, so they are aggregated before use and a
+    negative aggregate raises. The q-negation is khoca's verified transform. The torsion needs no
+    further shift: F2 derived from these groups by UCT reproduces native F2 exactly (checked on
+    3_1, 4_1, 5_2, 6_1, 7_4, 8_19, 10_124), whereas moving torsion one homological degree fails
+    on all of them."""
+    free, torsion = {}, {}
+    for t, q, order, multiplicity in rows:
+        bucket = free if order == 0 else torsion.setdefault(order, {})
+        bucket[(t, -q)] = bucket.get((t, -q), 0) + multiplicity
+    free = {key: rank for key, rank in free.items() if rank}
+    torsion = {order: {key: count for key, count in groups.items() if count}
+               for order, groups in torsion.items()}
+    torsion = {order: groups for order, groups in torsion.items() if groups}
+    for groups in (free, *torsion.values()):
+        if any(count < 0 for count in groups.values()):
+            raise ValueError(f"negative aggregate multiplicity in khoca integral output: {groups}")
+    return {"free": free, "torsion": torsion}
+
+
 def khocaRun(knot, reps):
     """Khovanov over Q (coefficient ring 1) and over F2 (ring 2), each computed natively by
-    khoca from the PD -- no UCT derivation, unlike the KnotJob path. Each ring's call carries
-    its own measured time. Values are normalized to KnotInfo's q-convention (_khocaGroups), so
-    agreement is judged direct rather than up to mirror."""
+    khoca from the PD -- no UCT derivation, unlike the KnotJob path -- plus one integral call
+    (ring 0) whose unreduced and reduced halves fill the integral, reduced and width target
+    rows. Each call carries its own measured time. Values are normalized to KnotInfo's
+    q-convention, so agreement on the native rows is judged direct rather than up to mirror.
+
+    sl(N) for N > 2 is not measured: khoca's own documentation says PD and braid input are
+    valid only for sl(2) and give nonsensical output otherwise -- sl(N) needs a bipartite knot
+    as a matched diagram, which Tetradrome does not produce. The cell says so rather than
+    showing a number. KnotJob measures sl(3) from the PD."""
+    rows = {}
     try:
         pd = pdAsList(knot)
         rational, secondsQ = _best(lambda: _khocaGroups(pd, 1), reps)
@@ -549,18 +578,50 @@ def khocaRun(knot, reps):
     except Exception as error:
         miss = Measurement(value=f"error: {type(error).__name__}", seconds=None,
                            note=str(error)[:80], agree="n/a")
-        return {name: miss for name in
-                ("rational_khovanov_homology", "khovanov_homology")}
-    return {
-        "rational_khovanov_homology": Measurement(
-            value=f"total_rank={sum(rational.values())}", seconds=secondsQ,
-            note="khoca ring Q; q-grading normalized",
-            agree=_agreeGroups(knot, "rational_khovanov_homology", rational)),
-        "khovanov_homology": Measurement(
-            value=f"total_rank={sum(f2.values())}", seconds=secondsF2,
-            note="khoca ring F2 (native, no UCT); q-grading normalized",
-            agree=_agreeGroups(knot, "khovanov_homology", f2)),
-    }
+        rows.update({name: miss for name in
+                     ("rational_khovanov_homology", "khovanov_homology")})
+    else:
+        rows.update({
+            "rational_khovanov_homology": Measurement(
+                value=f"total_rank={sum(rational.values())}", seconds=secondsQ,
+                note="khoca ring Q; q-grading normalized",
+                agree=_agreeGroups(knot, "rational_khovanov_homology", rational)),
+            "khovanov_homology": Measurement(
+                value=f"total_rank={sum(f2.values())}", seconds=secondsF2,
+                note="khoca ring F2 (native, no UCT); q-grading normalized",
+                agree=_agreeGroups(knot, "khovanov_homology", f2)),
+        })
+    try:
+        import khoca
+        pd = pdAsList(knot)
+        out, secondsZ = _best(lambda: khoca.InteractiveCalculator(coefficient_ring=0)(pd), reps)
+        unreduced = _khocaIntegralSection(out[1])
+        reduced = _khocaIntegralSection(out[0])
+        width = _khovanovWidth(unreduced)
+    except Exception as error:
+        miss = Measurement(value=f"error: {type(error).__name__}", seconds=None,
+                           note=str(error)[:80], agree="n/a")
+        rows.update({name: miss for name in
+                     ("khovanov_integral", "khovanov_reduced", "khovanov_width")})
+    else:
+        same = "same khoca ring-0 call"
+        rows.update({
+            "khovanov_integral": Measurement(
+                value=_integralSummary(unreduced), seconds=secondsZ, note="khoca ring Z",
+                agree="oracle"),
+            "khovanov_reduced": Measurement(
+                value=_integralSummary(reduced), seconds=None, note=f"{same}; integral",
+                agree="oracle"),
+            "khovanov_width": Measurement(
+                value=f"width={width}", seconds=None,
+                note=f"{same}; diagonals of integral Khovanov, torsion included",
+                agree="oracle"),
+        })
+    rows["sl_n_homology"] = Measurement(
+        value="n/a", seconds=None,
+        note="khoca sl(N>2) needs a bipartite matched diagram; PD input is sl(2)-only",
+        agree="n/a")
+    return rows
 
 
 # ---- knotkit (Rasmussen s, Khovanov over F2 and Q) ------------------------------------------

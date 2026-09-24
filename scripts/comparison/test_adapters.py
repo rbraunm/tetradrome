@@ -470,3 +470,41 @@ def test_knotjob_missing_section_raises():
     sections, _ = adapters._knotjobSections(KJ_KO_5_2)
     with pytest.raises(ValueError, match="no 'Integral reduced"):
         adapters._knotjobSection(sections, REDUCED)
+
+
+# ---- khoca integral (ring 0) --------------------------------------------------------------
+# The unreduced half of KH('braidaBaB') -- the figure-eight -- verbatim from khoca's own
+# InteractiveCalculator docstring. Real output carrying zero and negative multiplicities that
+# must cancel per key before anything is read off it.
+KHOCA_Z_4_1_UNREDUCED = [
+    [-2, 3, 0, 1], [-2, 5, 0, 1], [-1, 1, 0, 1], [-1, 3, 0, 1], [0, -1, 0, 1], [0, 1, 0, 1],
+    [1, -3, 0, 1], [1, -1, 0, 1], [2, -5, 0, 1], [2, -3, 0, 1], [-1, 3, 2, 1], [-2, 3, 0, -1],
+    [-1, 3, 0, -1], [-2, 5, 0, 0], [-1, 5, 0, 0], [-1, 1, 0, 0], [0, 1, 0, 0], [-1, 3, 0, 0],
+    [0, 3, 0, 0], [0, -1, 0, 0], [1, -1, 0, 0], [0, 1, 0, 0], [1, 1, 0, 0], [2, -3, 2, 1],
+    [1, -3, 0, -1], [2, -3, 0, -1], [1, -1, 0, 0], [2, -1, 0, 0],
+]
+
+
+def test_khoca_integral_section_cancels_multiplicities_per_key():
+    section = adapters._khocaIntegralSection(KHOCA_Z_4_1_UNREDUCED)
+    assert adapters._integralSummary(section) == "free=6 Z/2x2"
+    assert section["torsion"] == {2: {(-1, -3): 1, (2, 3): 1}}
+
+
+def test_khoca_integral_torsion_gives_native_f2_without_a_degree_shift():
+    """The torsion placement claim: UCT on khoca's q-negated groups, unshifted, is native F2.
+    Moving the torsion one homological degree -- the homology/cohomology confusion -- is not."""
+    section = adapters._khocaIntegralSection(KHOCA_Z_4_1_UNREDUCED)
+    torsion = adapters._evenTorsion(section)
+    assert adapters._f2FromIntegral(section["free"], torsion) == NATIVE_F2["4_1"]
+    shifted = {(h - 1, q): count for (h, q), count in torsion.items()}
+    assert adapters._f2FromIntegral(section["free"], shifted) != NATIVE_F2["4_1"]
+
+
+def test_khoca_integral_width_of_the_figure_eight_is_two():
+    assert adapters._khovanovWidth(adapters._khocaIntegralSection(KHOCA_Z_4_1_UNREDUCED)) == 2
+
+
+def test_khoca_integral_negative_aggregate_raises():
+    with pytest.raises(ValueError, match="negative aggregate multiplicity"):
+        adapters._khocaIntegralSection([[0, 1, 0, 1], [0, 1, 0, -2]])
