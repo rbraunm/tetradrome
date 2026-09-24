@@ -186,8 +186,12 @@ def _monomial(term):
 
 def _parseKhovanovPoly(text):
     """Sum of Khovanov monomials in t, q -> {(h, q): rank} (zeros dropped). Handles ``*`` or
-    juxtaposed factors, negative exponents, and KhoHo's parenthesized (h=0) groups."""
-    text = text.replace("(", "").replace(")", "").replace(" ", "")
+    juxtaposed factors and negative exponents. A parenthesized group raises: a factor such as
+    ``(q^6 + q^4)*t^2`` distributes over the group, and splitting on ``+`` would attach it to one
+    term only -- the total rank survives but the gradings are silently wrong."""
+    if "(" in text or ")" in text:
+        raise ValueError(f"parenthesized Khovanov polynomial is ambiguous here: {text[:80]!r}")
+    text = text.replace(" ", "")
     groups: dict = {}
     for term in text.split("+"):
         if not term:
@@ -503,73 +507,66 @@ def javakhRun(knot, reps):
     return rows
 
 
-# ---- KhoHo (rational Khovanov, (2,n) torus knots) ------------------------------------------
+# ---- KhoHo (rational Khovanov, any PD) ----------------------------------------------------
 
 def khohoAvailable():
     return _probeBinary("khoho", "KhoHo")
 
 
-_TORUS_2N = re.compile(r"^(\d+)_1$")
+# A KhoHo diagram is a PD matrix -- one row per crossing, and KhoHo's writePD prints each row as
+# X[...] -- with KnotTheory's crossing-sign rule, so init_diagr takes Tetradrome's PD as-is. gp
+# itself expands the result into [h, q, rank] rows: KhPol_Q prints a Laurent polynomial as a
+# fraction when exponents go negative, and groups terms as (q^6 + q^4)*t^2, neither of which a
+# term-splitting text parser reads correctly.
+_KHOHO_GP = """D = init_diagr([%s], "tetradrome");
+P = KhPol_Q(D);
+Nu = numerator(P); De = denominator(P);
+a = poldegree(De, q); b = poldegree(De, t);
+L = List();
+for (i = 0, poldegree(Nu, t), c = polcoeff(Nu, i, t); if (c != 0, for (j = 0, poldegree(c, q), m = polcoeff(c, j, q); if (m != 0, listput(L, [i - b, j - a, m])))));
+print("KHOHO_ROWS ", Vec(L));
+"""
 
 
-def _torusParams(identity):
-    """(2, n) for the (2, n) torus knot spelled ``n_1`` with n odd >= 3 (KhoHo's ``torus`` input);
-    None otherwise (a non-torus KhoHo input path is not wired yet -- Wave 2)."""
-    if not identity:
-        return None
-    match = _TORUS_2N.match(identity)
-    if not match:
-        return None
-    n = int(match.group(1))
-    return (2, n) if n >= 3 and n % 2 == 1 else None
-
-
-def _khohoPoly(text):
-    """KhoHo prints gp progress, then the Khovanov polynomial on the final line. Return the last
-    line that is polynomial-only (q, t, digits, exponents, +, *, parens, spaces) and mentions q."""
-    poly = None
-    for line in text.splitlines():
-        stripped = line.strip()
-        if "q" in stripped and re.fullmatch(r"[q t0-9\^\*\+\(\)\-]+", stripped):
-            poly = stripped
-    return poly
+def _parseKhohoRows(out):
+    """The ``KHOHO_ROWS [[h, q, rank], ...]`` line of a KhoHo run -> {(h, q): rank}, RAW. Exactly
+    one such line, a nonempty result and positive ranks, or it raises."""
+    lines = [line for line in out.splitlines() if line.startswith("KHOHO_ROWS ")]
+    if len(lines) != 1:
+        raise ValueError(f"expected one KHOHO_ROWS line in khoho output, found {len(lines)}")
+    groups = {}
+    for h, q, rank in ast.literal_eval(lines[0].split(" ", 1)[1]):
+        if rank <= 0:
+            raise ValueError(f"non-positive KhoHo rank {rank} at {(h, q)}")
+        groups[(h, q)] = groups.get((h, q), 0) + rank
+    if not groups:
+        raise ValueError("empty Khovanov homology from KhoHo (never zero for a knot)")
+    return groups
 
 
 def khohoRun(knot, reps):
-    """One ``KhPol_Q(torus(2,n))`` call via gp (KhoHo) for the (2,n) torus knots -> rational
-    Khovanov. KhoHo's ``torus(2,n)`` is the positive torus knot, the mirror of KnotInfo's n_1, so
-    it is judged up to mirror. Non-torus knots report n/a (no KhoHo input path wired yet)."""
-    params = _torusParams(getattr(knot, "identity", None))
-    if params is None:
-        return {"rational_khovanov_homology": Measurement(
-            value="n/a", seconds=None, note="KhoHo torus input; non-(2,n)-torus knot",
-            agree="n/a")}
-    import subprocess
-    m, n = params
+    """One KhoHo (gp) run on the knot's PD -> rational Khovanov. KhoHo reads Tetradrome's PD in
+    the mirror convention -- verified on 3_1, 4_1, 5_2, 6_1, 7_4, 8_19 and 10_124 (mirror 7/7,
+    direct only on the amphichiral 4_1) -- so the mirror is applied here and agreement is judged
+    direct."""
     try:
-        program = "print(KhPol_Q(torus(%d,%d)));\n" % (m, n)
+        matrix = ";".join(",".join(str(x) for x in crossing) for crossing in pdAsList(knot))
+        program = _KHOHO_GP % matrix
 
         def call():
-            proc = subprocess.run(["khoho"], input=program,
-                                  check=True, capture_output=True, text=True)
-            return proc.stdout
+            return subprocess.run(["khoho"], input=program, check=True, capture_output=True,
+                                  text=True).stdout
 
-        out, seconds = _best(call, reps)
-        polyText = _khohoPoly(out)
-        if polyText is None:
-            raise ValueError("no Khovanov polynomial line in khoho output")
-        groups = _parseKhovanovPoly(polyText)
-        if not groups:
-            raise ValueError("empty Khovanov polynomial from khoho: %r" % polyText)
+        raw, seconds = _best(lambda: _parseKhohoRows(call()), reps)
+        groups = _mirrorKhovanov(raw)
     except Exception as error:
         return {"rational_khovanov_homology": Measurement(
             value=f"error: {type(error).__name__}", seconds=None, note=str(error)[:80],
             agree="n/a")}
     return {"rational_khovanov_homology": Measurement(
         value=f"total_rank={sum(groups.values())}", seconds=seconds,
-        note="KhPol_Q(torus(%d,%d))" % (m, n),
+        note="KhoHo KhPol_Q on the PD; mirrored to canonical",
         agree=_agreeGroups(knot, "rational_khovanov_homology", groups))}
-
 
 # ---- Khoca (rational + F2 Khovanov, natively per coefficient ring) -------------------------
 

@@ -62,9 +62,10 @@ def test_parse_khovanov_poly_free_part():
         (0, 1): 1, (0, 3): 1, (2, 5): 1, (3, 9): 1}
 
 
-def test_parse_khovanov_poly_strips_khoho_parentheses():
-    assert adapters._parseKhovanovPoly("q^9*t^3 + q^5*t^2 + (q^3 + q)") == {
-        (3, 9): 1, (2, 5): 1, (0, 3): 1, (0, 1): 1}
+def test_parse_khovanov_poly_rejects_parenthesized_groups():
+    """``(q^6 + q^4)*t^2`` split on ``+`` keeps the total rank but misplaces a grading."""
+    with pytest.raises(ValueError, match="parenthesized"):
+        adapters._parseKhovanovPoly("q^10*t^4 + (q^6 + q^4)*t^2 + 1")
 
 
 def test_rational_khovanov_matches_native_up_to_mirror():
@@ -115,36 +116,25 @@ def test_javakh_rational_khovanov_matches_native_up_to_mirror():
         assert adapters._mirrorKhovanov(groups) == native, name
 
 
-# KhoHo KhPol_Q(torus(2,n)) final polynomial line, captured on CT 250.
-KHOHO = {
-    "3_1": "q^9*t^3 + q^5*t^2 + (q^3 + q)",
-    "5_1": "q^15*t^5 + q^11*t^4 + q^11*t^3 + q^7*t^2 + (q^5 + q^3)",
-}
+# A KhoHo run's KHOHO_ROWS line for 5_2, captured in the sandbox from knots.from_name(...).pd_code
+# (gp expands the Laurent polynomial itself, so there is no polynomial text to misparse).
+KHOHO_ROWS_5_2 = 'KHOHO_ROWS [[0, 1, 1], [0, 3, 1], [1, 3, 1], [2, 5, 1], [2, 7, 1], [3, 9, 1], [4, 9, 1], [5, 13, 1]]'
+NATIVE_RATIONAL_5_2 = {(-5, -13): 1, (-4, -9): 1, (-3, -9): 1, (-2, -7): 1, (-2, -5): 1, (-1, -3): 1, (0, -3): 1, (0, -1): 1}
 
 
-def test_torus_params_only_odd_n_1():
-    assert adapters._torusParams("3_1") == (2, 3)
-    assert adapters._torusParams("5_1") == (2, 5)
-    assert adapters._torusParams("7_1") == (2, 7)
-    assert adapters._torusParams("4_1") is None      # amphichiral, not a torus knot
-    assert adapters._torusParams("6_1") is None      # even, a twist knot
-    assert adapters._torusParams("K11n34") is None
-    assert adapters._torusParams(None) is None
+def test_khoho_rows_mirror_to_native():
+    groups = adapters._parseKhohoRows("Computing Betti numbers ...\n" + KHOHO_ROWS_5_2 + "\n")
+    assert adapters._mirrorKhovanov(groups) == NATIVE_RATIONAL_5_2
+    assert groups != NATIVE_RATIONAL_5_2          # chiral: the raw value is not canonical
 
 
-def test_khoho_poly_extracts_final_polynomial_line():
-    sample = ("  ***   Warning: new stack size = 512000000 (488.281 Mbytes).\n"
-              "Computing Betti numbers ...\n"
-              "Secondary grading: 9. Reducing the chain complex ... done.\n"
-              "   ... done with computing Betti numbers.\n"
-              "q^9*t^3 + q^5*t^2 + (q^3 + q)\n")
-    assert adapters._khohoPoly(sample) == "q^9*t^3 + q^5*t^2 + (q^3 + q)"
-
-
-def test_khoho_rational_khovanov_matches_native_up_to_mirror():
-    for name in ("3_1", "5_1"):
-        groups = adapters._parseKhovanovPoly(KHOHO[name])
-        assert adapters._mirrorKhovanov(groups) == NATIVE_RATIONAL[name], name
+def test_khoho_rows_reject_missing_duplicate_or_nonpositive():
+    with pytest.raises(ValueError, match="expected one KHOHO_ROWS line"):
+        adapters._parseKhohoRows("no rows here\n")
+    with pytest.raises(ValueError, match="expected one KHOHO_ROWS line"):
+        adapters._parseKhohoRows(KHOHO_ROWS_5_2 + "\n" + KHOHO_ROWS_5_2 + "\n")
+    with pytest.raises(ValueError, match="non-positive KhoHo rank"):
+        adapters._parseKhohoRows("KHOHO_ROWS [[0, 1, 0]]\n")
 
 
 # regina jones() output (Laurent in x = t^1/2) on Tetradrome PD, captured on CT 250.
