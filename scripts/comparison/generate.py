@@ -60,6 +60,7 @@ _ORACLE_COL = {
     "sage": "SageMath",
     "khoca": "Khoca",
     "knotkit": "knotkit",
+    "khtpp": "kht++",
     "snappy": "SnapPy",
     "knotinfo_bounds": "KnotInfo (value)",
     "apex": "(no peer)",

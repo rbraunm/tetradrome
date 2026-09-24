@@ -1,17 +1,16 @@
-# Research: kht++ -- Bar-Natan tangle invariants, and why it is sequenced behind Phase 9
+# Research: kht++ -- Bar-Natan tangle invariants, read through braid words
 
-Empirical discovery for the `khtpp` binary, provisioned by `scripts/install_oracles.sh`
-but deliberately **not** in the comparison roster or the validator registry.
+Empirical discovery for the `khtpp` binary, provisioned by `scripts/install_oracles.sh`.
 
-The short version: kht++ is a coherent, published tool computing the **reduced** theory,
-and our schema has no reduced Khovanov row until `roadmap/design/homology-engine.md`
-section 7, Phase 9 builds one. It is not a dead end -- it is correctly ordered behind a
-native engine that does not exist yet, since ADR 0006 makes an oracle a checker of a
-native computation and never a producer. When Phase 9 lands, kht++ is the third-cheapest
-of three available reduced oracles.
+The short version: kht++ computes the **reduced** Bar-Natan / Khovanov theory of tangles, and
+reads only its own Morse-word tangle format. Braid words transcribe mechanically into that
+format, so it is in the comparison roster: it measures the `khovanov_reduced` target row over
+F2, and -- by the Shumakovitch tensor -- the native `khovanov_homology` (F2) row, verified
+against native. It is not a validator: F2 Khovanov already has three, and the reduced theory
+has no canonical name until `roadmap/design/homology-engine.md` section 7, Phase 9 builds a
+native engine (ADR 0006 makes an oracle a checker of a native computation, never a producer).
 
-Claims are marked **verified** (observed) or **derived** (reasoned from the docs and one
-data point, needing a probe).
+Claims are marked **verified** (observed against native or another oracle) or **derived**.
 
 ## Provisioning (verified)
 
@@ -52,10 +51,17 @@ right reduced ranks: C_0 + C_1 = 3 generators, and C_0 + C_1 + C_1 = 5. The C_0 
 sat at q = -2 for that (left-handed) trefoil and q = 0 for 4_1, consistent with the
 s-from-C_0 hypothesis below.
 
-Still to pin before wiring: which of `x` / `y` is a positive generator for downward
-strands; whether KnotInfo's braid word has the same chirality as our PD for each knot
-(checkable natively with `knots.from_braid` against `knots.from_name`); and the format of
-the `cxCKh-c2` data file, which is what an adapter should read.
+**Wiring conventions (verified).** A positive generator is `x` and a negative one `y`. Fed
+KnotInfo's braid word for each knot, that mapping lands on our knot's own chirality: unreduced
+F2 derived from the output equals native F2 on 3_1, 4_1, 5_2, 6_1, 6_2, 7_4, 7_7, 8_19, 9_42
+and 10_124 (10/10, covering the benchmark ladder), and the swapped mapping gives the mirror --
+which also shows KnotInfo's braid words share our PD's chirality there. For a few knots
+KnotInfo lists alternative braid words as a list of lists (10_136 is the only one through 10
+crossings); the first is used, and on 10_136 it too gives native F2.
+
+A braid-presented knot is not fed its own word: native Khovanov needs a PD, so that route
+could never be checked against native. The adapter reads the `cxCKh-c2` data file, which
+carries the same summand lines as the terminal output without ANSI codes, after a `%` header.
 
 **Path quirk (verified):** kht++ refuses a `.kht` file in the working directory itself
 ("Please put your file in a subdirectory") and strips a leading slash from absolute paths,
@@ -84,18 +90,23 @@ single object with no differential; `C_n` is two objects joined by multiplicatio
 
 Default coefficient field is F2 (`-c2`).
 
-## Derived, not verified
+## The H = 0 expansion (verified)
 
-- **Setting H = 0 recovers reduced Khovanov.** For the trefoil, `C_0` at (0,2) plus
-  `C_1` with source (2,6) gives generators at (0,2), (2,6), (3,8) -- the reduced
-  Khovanov homology of the right-handed trefoil. **Independently corroborated**: khoca's
-  reduced output (see below) is identical.
-- **Target bigrading rule.** Since only the source is printed and `H` preserves `d`
-  while shifting `(h,q)`, a `C_n` summand's target sits at `(h+n, q+2n)`. Consistent
-  with the trefoil's (3,8), but derived from one example.
-- **`s` may be the q-grading of the unique `C_0` summand.** The trefoil's `C_0` is at
-  `q^2` and `s` of the right-handed trefoil is 2. **One data point.** If it holds, kht++
-  is a third `s` oracle.
+- **Setting H = 0 recovers reduced Khovanov.** A `C_0` summand gives one generator at its
+  printed (h, q); a `C_n` summand gives its printed source (h, q) and its target
+  **(h + 1, q + 2n)** -- the differential raises h by exactly one, and H has q-degree -2.
+  Verified by the F2 results above, which include `C_2` summands on 8_19 and 10_124: placing
+  the target at (h + n, q + 2n) instead breaks 8_19 (pinned by a test). Up to 10 crossings,
+  `C_2` appears in 8_19, 10_124, 10_128, 10_139, 10_152, 10_154 and 10_161; no higher n.
+- **Every summand line satisfies kht++'s identity q/2 = h + d**, which the parser enforces.
+
+## Why kht++ has no rasmussen_s cell
+
+The `s` read off the unique `C_0` summand looked plausible on the trefoil and figure-eight,
+but kht++ is trustworthy only over F2 -- its documentation calls the rational arithmetic
+experimental and unchecked for integer overflow -- and s over F2 is a different invariant
+from Rasmussen's s over Q; the two are known to differ on some knots. Measuring it in the
+canonical `rasmussen_s` row would label one invariant with another's name.
 
 ## Cross-oracle corroboration (verified)
 
@@ -123,8 +134,8 @@ When a native reduced engine exists and needs a computed oracle (ADR 0006):
 1. **khoca** -- already computes the reduced half, and the benchmark measures it. No new
    provisioning at all.
 2. **knotkit** -- `kk kh -r -f {Q,Z2}` works; costs LaTeX parsing.
-3. **kht++** -- the most natural fit mathematically, and the most expensive, because it
-   needs a PD-to-Morse-word encoder first.
+3. **kht++** -- the most natural fit mathematically, and already measured on the reduced
+   row, but reachable only for knots with a KnotInfo braid word.
 
 ## Vocabulary warning
 

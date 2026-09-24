@@ -205,10 +205,10 @@ def test_unwired_map_is_exactly_the_known_remaining_oracles():
 
     khoca is absent because it is wired. knotkit is wired for rasmussen_s only; its
     Khovanov is measured in the benchmark but deliberately not a validator, since those
-    invariants already have three. khtpp is absent because it computes the reduced
-    theory, which has no canonical invariant name yet (Phase 9)."""
+    invariants already have three. khtpp reaches khovanov_homology only through its reduced
+    F2 output and the Shumakovitch tensor, so it is listed there and nowhere else."""
     assert registry._UNWIRED == {
-        "khovanov_homology": ("javakh", "knotkit"),
+        "khovanov_homology": ("javakh", "knotkit", "khtpp"),
         "rational_khovanov_homology": ("javakh", "khoho", "knotkit"),
     }
 

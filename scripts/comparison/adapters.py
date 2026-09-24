@@ -788,6 +788,146 @@ def knotkitRun(knot, reps):
     }
 
 
+# ---- kht++ (reduced Khovanov over F2, and F2 Khovanov by the Shumakovitch tensor) ----------
+#
+# kht++ reads only its own Morse-word tangle format (roadmap/research/khtpp.md), so the input is a
+# braid word closed as a 1-1 tangle: nested caps l1..l(n-1) open the return arcs, each generator
+# becomes a crossing slice at index |g| - 1 (sigma+ -> x, sigma- -> y), and cups u(n-1)..u1 close
+# them, with the single top end pointing down. The word is KnotInfo's braid notation for the
+# knot's name: with that sign mapping the result is our knot's own chirality, 10/10 against native
+# F2 on 3_1, 4_1, 5_2, 6_1, 6_2, 7_4, 7_7, 8_19, 9_42 and 10_124 (the swapped mapping gives the
+# mirror), which also confirms KnotInfo's braid words share our PD's chirality there. A
+# braid-presented knot is NOT fed its own word: native Khovanov needs a PD, so that route could
+# never be checked against native.
+#
+# Only F2 is used: kht++'s own documentation calls its rational arithmetic experimental and
+# unchecked for overflow. That is also why kht++ gets no rasmussen_s cell -- s over F2 is a
+# different invariant from Rasmussen's s over Q, and the two are known to differ on some knots.
+
+_KHTPP_LINE = re.compile(r"^\s*\d+\)\s*h\^\s*(-?\d+)\s*q\^\s*(-?\d+)\s*δ\^\s*(-?\d+)\s*(.*?)\s*$")
+_KHTPP_TAIL = re.compile(r"^⬮(?:——H(?:\^(\d+))?—>⬮)?$")
+
+
+def _parseBraidNotation(text):
+    """A KnotInfo ``braid_notation`` string -> one braid word as a list of signed generators.
+
+    Usually a flat list such as ``[1,-2,1,-2]``. For a few knots KnotInfo lists alternative words
+    as a list of lists (10_136 is the only one through 10 crossings); the first is used, and on
+    10_136 it gives native F2 directly. Anything else -- empty, a zero generator, other nesting --
+    raises."""
+    parsed = ast.literal_eval(text.strip())
+    if isinstance(parsed, list) and parsed and all(isinstance(word, list) for word in parsed):
+        parsed = parsed[0]
+    if (not isinstance(parsed, list) or not parsed
+            or not all(isinstance(generator, int) and generator != 0 for generator in parsed)):
+        raise ValueError(f"malformed braid notation: {text!r}")
+    return parsed
+
+
+def _khtppBraid(knot):
+    """KnotInfo's braid word for the knot's name, or None when it has no name or KnotInfo has no
+    braid notation for it."""
+    name = getattr(knot, "identity", None)
+    if not name:
+        return None
+    from tetradrome.backends.knotinfo_backend import lookup
+    notation = (lookup(str(name)).get("braid_notation") or "").strip()
+    return _parseBraidNotation(notation) if notation else None
+
+
+def _khtppMorseWord(word):
+    """A braid word closed as a 1-1 tangle, in kht++'s .kht format (see the section note)."""
+    strands = max(abs(generator) for generator in word) + 1
+    slices = [f"l{k}" for k in range(1, strands)]
+    slices += [("x" if generator > 0 else "y") + str(abs(generator) - 1) for generator in word]
+    slices += [f"u{k}" for k in range(strands - 1, 0, -1)]
+    return "% braid closure\n" + ".".join(slices) + "\n,0\n"
+
+
+def _parseKhtppComplex(text):
+    """A kht++ ``cxCKh`` data file -> reduced Khovanov {(h, q): dim} over its field, at H = 0.
+
+    Each summand line is ``N) h^a q^b d^c`` then either a single object (C_0) or two objects
+    joined by H^n (C_n). Setting H = 0 keeps every object: C_0 gives (h, q); C_n gives its printed
+    source (h, q) and its target (h + 1, q + 2n), since the differential raises h by one and H has
+    q-degree -2. Every line must parse and satisfy kht++'s own grading identity q/2 = h + d, or it
+    raises."""
+    groups = {}
+    for line in text.splitlines():
+        if not line.strip() or line.lstrip().startswith("%"):
+            continue
+        summand = _KHTPP_LINE.match(line)
+        tail = _KHTPP_TAIL.match(summand.group(4)) if summand else None
+        if not tail:
+            raise ValueError(f"unrecognised kht++ summand line: {line!r}")
+        h, q, delta = (int(summand.group(i)) for i in (1, 2, 3))
+        if q != 2 * (h + delta):
+            raise ValueError(f"kht++ line violates q/2 = h + delta: {line!r}")
+        keys = [(h, q)]
+        if "H" in summand.group(4):
+            keys.append((h + 1, q + 2 * int(tail.group(1) or 1)))
+        for key in keys:
+            groups[key] = groups.get(key, 0) + 1
+    if not groups:
+        raise ValueError("empty kht++ complex (never zero for a knot)")
+    return groups
+
+
+def _shumakovitchF2(reduced):
+    """Unreduced Khovanov over F2 from reduced Khovanov over F2: the reduced groups tensored with
+    (q + q^-1). A theorem over F2 only -- it fails over Q."""
+    unreduced = {}
+    for (h, q), dim in reduced.items():
+        for shift in (-1, 1):
+            unreduced[(h, q + shift)] = unreduced.get((h, q + shift), 0) + dim
+    return unreduced
+
+
+def _khtppCall(morse):
+    """One kht++ run in a scratch directory. kht++ refuses a .kht file in the working directory
+    itself and strips a leading slash from absolute paths, so the file goes in a subdirectory and
+    is passed relatively."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as work:
+        os.makedirs(os.path.join(work, "in"))
+        with open(os.path.join(work, "in", "knot.kht"), "w") as handle:
+            handle.write(morse)
+        subprocess.run(["khtpp", "in/knot.kht"], cwd=work, check=True, capture_output=True,
+                       text=True)
+        with open(os.path.join(work, "in", "knot", "cxCKh-c2")) as handle:
+            return handle.read()
+
+
+def khtppRun(knot, reps):
+    """One kht++ run over F2 on the knot's braid word -> reduced Khovanov (a target row) and, by
+    the Shumakovitch tensor, unreduced F2 Khovanov (a native row, judged direct: the encoding
+    lands on our knot's own chirality)."""
+    names = ("khovanov_reduced", "khovanov_homology")
+    try:
+        word = _khtppBraid(knot)
+        if word is None:
+            miss = Measurement(value="n/a", seconds=None,
+                               note="kht++ input is a KnotInfo braid word; none for this knot",
+                               agree="n/a")
+            return {name: miss for name in names}
+        morse = _khtppMorseWord(word)
+        reduced, seconds = _best(lambda: _parseKhtppComplex(_khtppCall(morse)), reps)
+        f2 = _shumakovitchF2(reduced)
+    except Exception as error:
+        miss = Measurement(value=f"error: {type(error).__name__}", seconds=None,
+                           note=str(error)[:80], agree="n/a")
+        return {name: miss for name in names}
+    return {
+        "khovanov_reduced": Measurement(
+            value=f"F2 rank={sum(reduced.values())}", seconds=seconds,
+            note="kht++ -c2 Bar-Natan complex at H = 0, from a braid word", agree="oracle"),
+        "khovanov_homology": Measurement(
+            value=f"total_rank={sum(f2.values())}", seconds=None,
+            note="same kht++ call; reduced F2 tensored with (q + q^-1) (Shumakovitch)",
+            agree=_agreeGroups(knot, "khovanov_homology", f2)),
+    }
+
+
 # ---- SnapPy (hyperbolic volume) ------------------------------------------------------------
 
 def snappyRun(knot, reps):
@@ -1227,6 +1367,10 @@ def knotkitAvailable():
     return _probeBinary("kk", "knotkit")
 
 
+def khtppAvailable():
+    return _probeBinary("khtpp", "kht++")
+
+
 def sageAvailable():
     return _probeBinary("sage", "SageMath")
 
@@ -1306,6 +1450,10 @@ def knotkitVersion():
     return _gitShaVersion("knotkit")
 
 
+def khtppVersion():
+    return _gitShaVersion("khtpp")
+
+
 def sageVersion():
     exe = shutil.which("sage")
     if not exe:
@@ -1337,4 +1485,5 @@ ORACLES = [
     Oracle("sage", sageAvailable, sageRun, sageVersion),
     Oracle("khoca", khocaAvailable, khocaRun, khocaVersion),
     Oracle("knotkit", knotkitAvailable, knotkitRun, knotkitVersion),
+    Oracle("khtpp", khtppAvailable, khtppRun, khtppVersion),
 ]

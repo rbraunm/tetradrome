@@ -498,9 +498,9 @@ Each phase is validated before the next begins. Reductions and acceleration are 
      field rings), giving (0,2), (2,6), (3,8) in KnotInfo's *q*-convention, and its integral
      reduced ranks match KnotJob's on the sweep.
   2. **knotkit** — `kk kh -r -f {Q,Z2}`; works, emits LaTeX carrying `\rank Kh`.
-  3. **kht++** — computes the reduced theory natively, but is blocked behind a PD→Morse-word
-     input encoder (its only documented inputs are an interactive dialogue or a `.kht` file),
-     so it is the most expensive of the three despite being the most natural fit.
+  3. **kht++** — computes the reduced theory natively over F2, read through KnotInfo braid
+     words transcribed into its Morse-word input; already measured on the `khovanov_reduced`
+     row, but reachable only for knots KnotInfo has a braid word for.
 
   Full discovery for the last two, including the H=0 route to reduced Khovanov and the
   empirical Shumakovitch check over F2, is in `roadmap/research/khtpp.md` and

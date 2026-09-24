@@ -75,11 +75,12 @@ _WIRED: tuple[Validator, ...] = (
 # they stay measured-only under the wiring standard above: khovanov_homology and
 # rational_khovanov_homology already have three validators each (knotjob, sage, khoca).
 # knotkit is wired for rasmussen_s, the one invariant it brought to two.
-# khtpp is provisioned but deliberately absent: it computes the REDUCED theory, which has
-# no canonical invariant name until homology-engine.md section 7 Phase 9 builds a native
-# reduced engine. See roadmap/research/khtpp.md.
+# khtpp computes reduced Khovanov over F2, and unreduced F2 follows by the Shumakovitch
+# tensor (verified 10/10 against native through KnotInfo braid words), so it is listed for
+# khovanov_homology. Its reduced theory itself has no canonical name until homology-engine.md
+# section 7 Phase 9 builds a native reduced engine. See roadmap/research/khtpp.md.
 _UNWIRED: dict[str, tuple[str, ...]] = {
-    "khovanov_homology": ("javakh", "knotkit"),
+    "khovanov_homology": ("javakh", "knotkit", "khtpp"),
     "rational_khovanov_homology": ("javakh", "khoho", "knotkit"),
 }
 

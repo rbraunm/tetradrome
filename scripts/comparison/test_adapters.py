@@ -582,3 +582,56 @@ def test_sage_target_script_compiles_as_python():
     script = adapters._SAGE_TARGET_SCRIPT % {"pd": "[[1, 5, 2, 4], [3, 1, 4, 6], [5, 3, 6, 2]]",
                                              "reps": 1}
     compile(script, "targets.sage", "exec")
+
+
+# ---- kht++ (braid-word Morse encoding, Bar-Natan complex at H = 0) ------------------------
+# Real cxCKh-c2 data files captured in the sandbox, from each knot's KnotInfo braid word
+# (the generated-by header comment line dropped). 8_19 carries a C_2 summand (H^2).
+KHTPP_3_1 = '1) h^ 0 q^-2 δ^-1 ⬮\n2) h^-3 q^-8 δ^-1 ⬮——H—>⬮\n'
+KHTPP_8_19 = '1) h^ 0 q^ -6 δ^-3 ⬮\n2) h^-3 q^-12 δ^-3 ⬮——H—>⬮\n3) h^-5 q^-16 δ^-3 ⬮——H^2—>⬮\n'
+NATIVE_F2_8_19 = {(-5, -17): 1, (-5, -15): 1, (-4, -13): 1, (-4, -11): 1, (-3, -13): 1, (-3, -11): 1, (-2, -11): 1, (-2, -9): 1, (0, -7): 1, (0, -5): 1}
+
+
+def test_khtpp_morse_word_closes_a_braid_as_a_one_one_tangle():
+    assert adapters._khtppMorseWord([1, -2, 1, -2]) == "% braid closure\nl1.l2.x0.y1.x0.y1.u2.u1\n,0\n"
+    assert adapters._khtppMorseWord([1, 1, 1]) == "% braid closure\nl1.x0.x0.x0.u1\n,0\n"
+
+
+def test_khtpp_reduced_f2_tensored_is_native_f2_for_a_chiral_knot():
+    reduced = adapters._parseKhtppComplex(KHTPP_3_1)
+    assert sum(reduced.values()) == 3
+    assert adapters._shumakovitchF2(reduced) == NATIVE_F2["3_1"]
+
+
+def test_khtpp_c_n_target_is_one_degree_up_not_n():
+    """A C_n summand's target sits at (h + 1, q + 2n): the differential raises h by one.
+    8_19 has a C_2, so placing the target at (h + n, q + 2n) instead must fail."""
+    assert adapters._shumakovitchF2(adapters._parseKhtppComplex(KHTPP_8_19)) == NATIVE_F2_8_19
+    wrong = {}
+    for line in KHTPP_8_19.splitlines():
+        h, q, n = adapters._KHTPP_LINE.match(line).group(1, 2, 4)
+        h, q = int(h), int(q)
+        power = int(n.split("^")[1].split("—")[0]) if "H^" in n else 1
+        keys = [(h, q)] + ([(h + power, q + 2 * power)] if "H" in n else [])
+        for key in keys:
+            wrong[key] = wrong.get(key, 0) + 1
+    assert adapters._shumakovitchF2(wrong) != NATIVE_F2_8_19
+
+
+def test_khtpp_parser_rejects_unknown_lines_and_bad_gradings():
+    with pytest.raises(ValueError, match="unrecognised kht\\+\\+ summand"):
+        adapters._parseKhtppComplex("1) h^ 0 q^ 0 δ^0 something else\n")
+    with pytest.raises(ValueError, match="violates q/2 = h \\+ delta"):
+        adapters._parseKhtppComplex("1) h^ 0 q^ 2 δ^0 ⬮\n")
+    with pytest.raises(ValueError, match="empty kht"):
+        adapters._parseKhtppComplex("% only a comment\n")
+
+
+def test_braid_notation_flat_nested_and_malformed():
+    assert adapters._parseBraidNotation("[1,-2,1,-2]") == [1, -2, 1, -2]
+    assert adapters._parseBraidNotation(
+        "[[-1,-1,-2,3,-2,1,-2,-2,3,2,2],[-1,2,-1,2,3,-2,-2,-4,3,-4]]") == [
+        -1, -1, -2, 3, -2, 1, -2, -2, 3, 2, 2]
+    for text in ("[]", "[1,0,2]", "[[1,2],3]", "not a braid"):
+        with pytest.raises((ValueError, SyntaxError)):
+            adapters._parseBraidNotation(text)
