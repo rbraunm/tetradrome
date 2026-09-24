@@ -8,7 +8,7 @@ Artifact generation is the slow, all-oracle path; this is the quick check that a
 oracle's run function works on a host before spending a generation on it -- the only way
 to exercise an oracle provisioned on CT 250 but not in the sandbox (Sage):
 
-    python tools/ct_exec.py -- "cd /opt/tetradrome/src && \\
+    git pull ; python tools/ct_exec.py -- "cd /opt/tetradrome/src && \\
         git fetch --depth 1 origin claude && git reset --hard FETCH_HEAD && \\
         /opt/tetradrome/venv/bin/python scripts/comparison/smoke.py sage 3_1 4_1 8_19"
 

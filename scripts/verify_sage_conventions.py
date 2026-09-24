@@ -6,7 +6,7 @@
 
 Run this ON CT 250 (the only provisioned host with sage) under the plain venv python:
 
-    python tools/ct_exec.py -- "cd /opt/tetradrome/src && \\
+    git pull ; python tools/ct_exec.py -- "cd /opt/tetradrome/src && \\
         git fetch --depth 1 origin claude && git reset --hard FETCH_HEAD && \\
         /opt/tetradrome/venv/bin/python scripts/verify_sage_conventions.py"
 

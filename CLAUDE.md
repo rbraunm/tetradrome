@@ -79,6 +79,14 @@ tests; NUMA pinning benchmarks.
 on it over SSH using the key and login the provisioner wrote beside itself
 (`scripts/ctNNN-ssh-key`, `scripts/ctNNN-ssh-credentials.txt`). It defaults to `--ctid 250`,
 needs no password, streams output live, and exits with the remote command's status.
+- Pull the workstation clone first, every time. It holds `tools/ct_exec.py` and
+  `tools/generate_benchmarks.py`, and a stale or diverged clone is caught by the pull instead of
+  surfacing as a confusing run. A command handed to the owner to paste is written as one line:
+
+      git pull ; python tools/ct_exec.py -- "cd /opt/tetradrome/src && ..."
+
+  An agent session runs `git pull` as its own command first and then `ct_exec` standalone, so
+  the allow rule below still matches -- same effect, no permission prompt.
 - Put the command after `--` or quote it:
 
       python tools/ct_exec.py -- nproc

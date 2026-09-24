@@ -16,9 +16,12 @@ Order is fail-fast: git push-readiness is checked and the local branch is synced
 or out-of-date git never wastes a benchmark and the final push fast-forwards. Every seam fails
 loud with a clear next step; nothing is swallowed and there is no silent fallback.
 
-    python tools/generate_benchmarks.py
-    python tools/generate_benchmarks.py --reps 5
-    python tools/generate_benchmarks.py --ref claude --no-push
+    git pull ; python tools/generate_benchmarks.py
+    git pull ; python tools/generate_benchmarks.py --reps 5
+    git pull ; python tools/generate_benchmarks.py --ref claude --no-push
+
+The leading pull is not redundant with the sync above: that sync runs inside whatever copy of
+this tool is already on disk, so only a pull beforehand guarantees the current version runs.
 
 The CT 250 path knobs (--ctid, --ref, --src, --python) default to the known box layout.
 Override the relevant flag rather than editing this file if the box changes.
