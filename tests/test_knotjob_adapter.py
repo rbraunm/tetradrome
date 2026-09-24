@@ -80,3 +80,38 @@ def test_end_to_end_strict_records_knotjob():
     record = next(v for v in result.validation.validators if v.oracle == "knotjob")
     assert record.verdict == "pass"
     assert record.version.startswith("knotjob sha256:")
+
+
+def test_f2_torsion_reads_every_even_order_in_the_unreduced_section_only():
+    """KnotJob prints torsion per section and per order. Z/2 and Z/4 under the unreduced
+    heading both feed F2; Z/3 does not; and torsion under the reduced heading belongs to
+    the reduced theory, never the unreduced one."""
+    from tetradrome.backends.knotjob_adapter import _unreduced_even_torsion
+
+    text = (
+        "Knot 1\n"
+        "S-Invariant mod 0 : 2\n"
+        "Integral unreduced Khovanov Homology : q + q^3\n"
+        "Torsion of order 2 : t^2 q^5\n"
+        "Torsion of order 4 : t^3 q^7\n"
+        "Torsion of order 3 : t^4 q^9\n"
+        "Integral reduced Khovanov Homology : q^2\n"
+        "Torsion of order 2 : t^5 q^11\n"
+    )
+    assert _unreduced_even_torsion(text) == {(2, 5): 1, (3, 7): 1}
+
+
+def test_f2_torsion_on_real_output_matches_the_single_order_2_line():
+    """On real 8_19 output (only Z/2, reduced section torsion-free) the section-aware read
+    agrees with the order-2 line it replaces."""
+    from tetradrome.backends.knotjob_adapter import _unreduced_even_torsion
+
+    text = (
+        "Knot 1\n"
+        "S-Invariant mod 0 : 6\n"
+        "Integral unreduced Khovanov Homology : q^5 + q^7 + t^2 q^9 + t^3 q^13 + t^4 q^11"
+        " + t^4 q^13 + t^5 q^15 + t^5 q^17\n"
+        "Torsion of order 2 : t^3 q^11\n"
+        "Integral reduced Khovanov Homology : q^6 + t^2 q^10 + t^3 q^12 + t^4 q^12 + t^5 q^16\n"
+    )
+    assert _unreduced_even_torsion(text) == {(3, 11): 1}

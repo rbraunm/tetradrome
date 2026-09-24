@@ -8,10 +8,11 @@ keeps its own measurement-oriented KnotJob path, and the two deliberately do not
 code -- the operator's call, made when this validator was wired. Do not unify them.
 
 One ``knotjob knot.txt -kb0 -s0`` subprocess yields everything at once: the integral
-unreduced Khovanov homology (whose free part is the rational theory), the order-2
-torsion (which gives the F2 theory via the universal coefficient theorem: a Z/2
-summand at (h, q) contributes F2 classes at (h, q) and at (h-1, q)), and the
-s-invariant. There is deliberately NO caching: a warm run costs ~0.2s (measured
+unreduced Khovanov homology (whose free part is the rational theory), its torsion
+(which gives the F2 theory via the universal coefficient theorem: a Z/N summand at
+(h, q) with N even contributes F2 classes at (h, q) and at (h-1, q), and odd N
+contributes nothing), and the s-invariant. KnotJob prints torsion per section and per
+order, so only the ``Torsion of order N`` lines following the unreduced heading count. There is deliberately NO caching: a warm run costs ~0.2s (measured
 across tier-0 through 10_124), so every known_value call invokes the jar and the
 provenance record never claims a run that did not happen.
 
@@ -53,6 +54,26 @@ def _field_after_colon(text: str, marker: str) -> str | None:
     return None
 
 
+def _unreduced_even_torsion(text: str) -> dict[tuple[int, int], int]:
+    """Every even-order torsion summand of the integral UNREDUCED homology, merged.
+
+    Torsion lines belong to the homology heading above them; the reduced section can
+    carry its own, which must not leak into the unreduced theory. Z/N with N even
+    (Z/2, Z/4, ...) contributes to F2 by UCT; odd N contributes nothing."""
+    torsion_line = re.compile(r"^Torsion of order (\d+)\s*:\s*(.*)$")
+    merged: dict[tuple[int, int], int] = {}
+    in_unreduced = False
+    for line in (raw.strip() for raw in text.splitlines()):
+        match = torsion_line.match(line)
+        if match:
+            if in_unreduced and int(match.group(1)) % 2 == 0:
+                for key, count in _parse_khovanov(match.group(2)).items():
+                    merged[key] = merged.get(key, 0) + count
+        elif "Homology" in line:
+            in_unreduced = line.startswith("Integral unreduced Khovanov Homology")
+    return merged
+
+
 def _monomial(term: str) -> tuple[tuple[int, int], int]:
     """One ``c t^h q^q`` monomial (factors ``*``-joined or juxtaposed, exponents
     optional and possibly negative) -> ((h, q), coefficient)."""
@@ -83,8 +104,8 @@ def _parse_khovanov(text: str) -> dict[tuple[int, int], int]:
 
 
 def _f2_from_integral(free, torsion) -> dict[tuple[int, int], int]:
-    """F2 Khovanov dimensions from the integral free ranks plus the order-2 torsion,
-    by the universal coefficient theorem."""
+    """F2 Khovanov dimensions from the integral free ranks plus the even-order
+    torsion, by the universal coefficient theorem."""
     f2 = dict(free)
     for (h, q), count in torsion.items():
         f2[(h, q)] = f2.get((h, q), 0) + count
@@ -153,6 +174,4 @@ class KnotJobValidator:
         free = _parse_khovanov(free_text)
         if invariant == "rational_khovanov_homology":
             return _mirror(free)
-        torsion_text = _field_after_colon(text, "Torsion of order 2")
-        torsion = _parse_khovanov(torsion_text) if torsion_text else {}
-        return _mirror(_f2_from_integral(free, torsion))
+        return _mirror(_f2_from_integral(free, _unreduced_even_torsion(text)))
