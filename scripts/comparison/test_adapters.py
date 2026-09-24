@@ -547,3 +547,13 @@ def test_javakh_integral_rejects_unparseable_or_empty_output():
         adapters._parseJavakhIntegral('"q^1*t^0*Z[0] + garbage"')
     with pytest.raises(ValueError, match="empty javakh -Z output"):
         adapters._parseJavakhIntegral('""')
+
+
+# ---- Regina Alexander -> determinant ------------------------------------------------------
+# Real regina alexander() strings captured in the sandbox from knots.from_name(...).pd_code.
+
+def test_determinant_is_alexander_at_minus_one_in_absolute_value():
+    cases = {"x^2 - x + 1": 3, "x^2 - 3 x + 1": 5, "2 x^2 - 3 x + 2": 7,
+             "x^6 - x^5 + x^3 - x + 1": 3, "x^8 - x^7 + x^5 - x^4 + x^3 - x + 1": 1}
+    for text, determinant in cases.items():
+        assert adapters._determinantFromAlexander(adapters._parseLaurent(text, "x")) == determinant

@@ -35,7 +35,7 @@ compute it but no convention probe has run, so nothing may be wired on it yet.
 | JavaKh | install script (source) | PD | `rational_khovanov_homology`, `khovanov_homology` (via UCT from `-Z`) -- verified | `-Z` gives integral Khovanov with torsion; F2 is UCT on the raw groups, then mirrored. Measured only, not a validator. No reduced theory. |
 | KhoHo | install script (source, PARI/gp) | torus(2,n) only today | `rational_khovanov_homology` for T(2,n) -- unprobed as a validator | A general input path is unprobed. |
 | kht++ (`khtpp`) | install script (source) | `.kht` Morse word only | none today | Computes the reduced theory, which has no canonical name until homology-engine.md Phase 9. Details: `roadmap/research/khtpp.md`. |
-| SnapPy / Spherogram | pip | PD, DT, braid, name | none without Sage | Classical invariants are Sage-gated under plain pip. Hyperbolic volume, which is not a canonical invariant. |
+| SnapPy / Spherogram | pip | PD, DT, braid, name | none without Sage | Classical invariants are Sage-gated under plain pip. Measured for hyperbolic volume and Chern-Simons, neither canonical, and only on a geometric solution: a torus knot gets n/a rather than a value read off flat tetrahedra. |
 | KnotInfo (`database_knotinfo`) | pip | name | tabulated values for most canonical invariants | Not a computed oracle: rides along as a cross-check, and is the sole validator only where nothing computes the invariant (decision 0006). Details: `roadmap/research/knotinfo.md`. |
 
 ## What a plain pip environment gives you

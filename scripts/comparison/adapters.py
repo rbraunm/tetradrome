@@ -794,30 +794,42 @@ def knotkitRun(knot, reps):
 # ---- SnapPy (hyperbolic volume) ------------------------------------------------------------
 
 def snappyRun(knot, reps):
-    """One SnapPy volume for a hyperbolic knot (by its KnotInfo name). Hyperbolic volume is not a
-    native invariant, so this is oracle-only data (no agreement verdict). Non-hyperbolic knots
-    (torus knots, etc.) report n/a rather than a degenerate number."""
+    """SnapPy's hyperbolic volume and Chern-Simons invariant for a hyperbolic knot (by its
+    KnotInfo name), each from its own timed call. Neither is a native invariant, so both are
+    oracle-only data (no agreement verdict). Non-hyperbolic knots (torus knots, etc.) report n/a
+    rather than a number read off a degenerate solution: SnapPy will return a Chern-Simons value
+    for a torus knot from a triangulation with flat tetrahedra, and that is not published here."""
     import snappy
     name = getattr(knot, "identity", None)
+    names = ("hyperbolic_volume", "chern_simons")
     if not name:
-        return {"hyperbolic_volume": Measurement(
-            value="n/a", seconds=None, note="no KnotInfo name for SnapPy", agree="n/a")}
-    try:
+        miss = Measurement(value="n/a", seconds=None, note="no KnotInfo name for SnapPy",
+                           agree="n/a")
+        return {row: miss for row in names}
+
+    def geometric(read):
         def call():
             manifold = snappy.Manifold(str(name))
             solution = manifold.solution_type()
             if solution != "all tetrahedra positively oriented":
                 raise ValueError("non-geometric solution: %s" % solution)
-            return float(manifold.volume())
+            return float(read(manifold))
+        return call
 
-        volume, seconds = _best(call, reps)
-    except Exception as error:
-        return {"hyperbolic_volume": Measurement(
-            value="n/a", seconds=None,
-            note="not hyperbolic (%s)" % type(error).__name__, agree="n/a")}
-    return {"hyperbolic_volume": Measurement(
-        value=f"{volume:.10f}", seconds=seconds, note="snappy Manifold(name).volume()",
-        agree="oracle")}
+    rows = {}
+    for row, read, label in (("hyperbolic_volume", lambda m: m.volume(), "volume()"),
+                             ("chern_simons", lambda m: m.chern_simons(), "chern_simons()")):
+        try:
+            value, seconds = _best(geometric(read), reps)
+        except Exception as error:
+            rows[row] = Measurement(value="n/a", seconds=None,
+                                    note="not hyperbolic (%s)" % type(error).__name__,
+                                    agree="n/a")
+        else:
+            # round-then-add-zero turns a -1e-17 residue (an amphichiral knot's CS) into 0.0
+            rows[row] = Measurement(value=f"{round(value, 10) + 0.0:.10f}", seconds=seconds,
+                                    note=f"snappy Manifold(name).{label}", agree="oracle")
+    return rows
 
 
 # ---- shared classical-polynomial normalization (single-variable Laurent) -------------------
@@ -889,10 +901,20 @@ def reginaAvailable():
     return _probeImport("regina", "Regina")
 
 
+def _determinantFromAlexander(alexander):
+    """|Alexander(-1)| for an Alexander polynomial given as {exponent: coefficient}."""
+    return abs(sum(coefficient * (-1) ** exponent for exponent, coefficient in alexander.items()))
+
+
 def reginaRun(knot, reps):
     """regina's Jones (a Laurent poly in x = t^(1/2)) mapped to native's t by halving exponents,
     judged up to the t <-> t^-1 convention (regina matches native directly). HOMFLY is reported as
-    oracle-only data -- native computes no HOMFLY. regina reads the PD via Link.fromPD."""
+    oracle-only data -- native computes no HOMFLY. regina reads the PD via Link.fromPD.
+
+    Alexander comes from its own timed call, so the Jones cell's time is not inflated by it. It
+    is judged up to the +/- t^k unit, and the determinant is |Alexander(-1)| from the same call --
+    the same derivation the regina validator uses. Both matched native on 3_1, 4_1, 5_2, 8_19
+    and 10_124. Regina has no signature."""
     import regina
     try:
         pd = pdAsList(knot)
@@ -910,7 +932,7 @@ def reginaRun(knot, reps):
         miss = Measurement(value=f"error: {type(error).__name__}", seconds=None,
                            note=str(error)[:80], agree="n/a")
         return {"jones_polynomial": miss, "homfly_polynomial": miss}
-    return {
+    rows = {
         "jones_polynomial": Measurement(
             value=_shortValue(jones), seconds=seconds, note="regina jones(); x = t^1/2",
             agree=_agreeJones(knot, jones)),
@@ -918,6 +940,28 @@ def reginaRun(knot, reps):
             value=homflyText.strip()[:40] or "?", seconds=None,
             note="regina homfly(); oracle-only", agree="oracle"),
     }
+    try:
+        alexanderText, secondsAlexander = _best(
+            lambda: str(regina.Link.fromPD(pd).alexander()), reps)
+        alexander = _parseLaurent(alexanderText, "x")
+        if not alexander:
+            raise ValueError("unexpected regina Alexander: %r" % alexanderText)
+        determinant = _determinantFromAlexander(alexander)
+    except Exception as error:
+        miss = Measurement(value=f"error: {type(error).__name__}", seconds=None,
+                           note=str(error)[:80], agree="n/a")
+        rows.update({"alexander_polynomial": miss, "determinant": miss})
+    else:
+        rows.update({
+            "alexander_polynomial": Measurement(
+                value=_shortValue(alexander), seconds=secondsAlexander,
+                note="regina alexander()", agree=_agreeAlexander(knot, alexander)),
+            "determinant": Measurement(
+                value=str(determinant), seconds=None,
+                note="same regina alexander() call; |Alexander(-1)|",
+                agree=_agreeScalar(knot, "determinant", determinant, mirror=lambda v: v)),
+        })
+    return rows
 
 
 # ---- SageMath (Jones, Alexander, determinant, signature, Khovanov) --------------------------
