@@ -64,26 +64,31 @@ GROUPS = [
     ),
     Group(
         "knotjob",
-        "Khovanov-family homology -- vs KnotJob / JavaKh / KnotTheory",
-        "KnotJob (Schutz, Java); JavaKh/knotkit; KnotTheory (Bar-Natan, Mathematica)",
+        "Khovanov-family homology -- vs KnotJob / Khoca / JavaKh / KhoHo / knotkit / kht++",
+        "KnotJob (Schutz, Java); Khoca (C++/Python); JavaKh (Java); KhoHo (PARI/gp); "
+        "knotkit (C++); kht++ (C++, fed KnotInfo braid words)",
         "Native cube-of-resolutions over F2 and Q (and, planned, Z/reduced/odd). KnotInfo's "
         "Khovanov columns are themselves KnotJob output. Pure Python and one schema vs Java / "
         "Mathematica; reproducible across the acceleration tiers.",
     ),
     Group(
         "sage",
-        "Classical & polynomial invariants -- vs SageMath / KnotTheory",
-        "SageMath knot tools; KnotTheory; (Spherogram's are Sage-gated)",
+        "Classical & polynomial invariants -- vs SageMath / Regina",
+        "SageMath knot tools (provisioned on CT 250 only); Regina; (Spherogram's are Sage-gated)",
         "Computed natively from a Seifert matrix or a skein recursion. KnotInfo tabulates the "
-        "values; Sage is the live computational peer (Spherogram under plain pip is diagram-only). "
-        "Pure Python, no Sage runtime required.",
+        "values; SageMath and Regina are the live computational peers (Spherogram under plain "
+        "pip is diagram-only). Conway, two-variable Kauffman, algebraic concordance order and "
+        "braid index have no provisioned computing peer: SageMath 9.5 lacks them. Pure Python, "
+        "no Sage runtime required.",
     ),
     Group(
         "khoca",
-        "Khovanov-Rozansky / sl(N) -- vs Khoca",
-        "Khoca (C++/Python research program)",
-        "Aspirational higher-homology direction. Khoca demonstrates the computation exists and is "
-        "the reference target; no native engine yet.",
+        "Khovanov-Rozansky / sl(N) -- vs KnotJob (sl(3))",
+        "KnotJob (sl(3) from the PD); Khoca only for bipartite matched diagrams",
+        "Aspirational higher-homology direction; no native engine yet. KnotJob computes sl(3) "
+        "homology from the PD and is the reference target. Khoca's general sl(N) needs a "
+        "bipartite knot given as a matched diagram -- fed a PD it returns nonsense rather than "
+        "an error -- so it is not measured here.",
     ),
     Group(
         "snappy",
