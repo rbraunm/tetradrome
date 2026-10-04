@@ -284,6 +284,10 @@ def create_container(args) -> None:
         net += f",gw={args.gateway}"
     if args.vlan:
         net += f",tag={args.vlan}"
+    if args.hwaddr:
+        if not re.fullmatch(r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}", args.hwaddr):
+            sys.exit(f"--hwaddr {args.hwaddr!r} is not a MAC address like BC:24:11:A9:AA:AD.")
+        net += f",hwaddr={args.hwaddr.upper()}"
     dns = ""
     if args.nameserver:
         dns += f" --nameserver {shlex.quote(args.nameserver)}"
@@ -551,6 +555,9 @@ def main() -> None:
                         help="container IPv4: 'dhcp' or CIDR like 10.0.0.5/24 (default dhcp)")
     parser.add_argument("--gateway", default="", help="default gateway (required with a static --ip)")
     parser.add_argument("--vlan", type=int, default=0, help="VLAN tag for the NIC (0 = untagged)")
+    parser.add_argument("--hwaddr", default="",
+                        help="MAC address for the NIC, such as the one a DHCP reservation is keyed on, so a "
+                             "rebuilt container keeps its address (default: Proxmox picks one)")
     parser.add_argument("--nameserver", default="", help="DNS server(s) (default: from DHCP)")
     parser.add_argument("--searchdomain", default="", help="DNS search domain (default: from DHCP)")
     parser.add_argument("--tags", default="tetradrome;compute",
