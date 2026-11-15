@@ -516,11 +516,13 @@ def test_low_fanout_result_stays_private():
 
 def test_shared_result_gets_one_replica_per_node():
     # A result shared by pinned consumers on different nodes is replicated per node. Two nodes share
-    # the one real core (the sandbox has one), so they run in sequence, and node sizing forces the
-    # second consumer onto node 1: c0 (small) lands on node 0, c1 (large) fits only node 1, so the
-    # result is materialized once per node -- two segments, each charged on its own node.
-    node0 = NumaNode(0, frozenset({0}), 5 * _SMALL)
-    node1 = NumaNode(1, frozenset({0}), 20 * _SMALL)
+    # one real core, so they run in sequence, and node sizing forces the second consumer onto
+    # node 1: c0 (small) lands on node 0, c1 (large) fits only node 1, so the result is
+    # materialized once per node -- two segments, each charged on its own node. The core is one
+    # this process may use: CPU 0 is outside the mask on a host pinned to other CPUs.
+    core = frozenset({min(os.sched_getaffinity(0))})
+    node0 = NumaNode(0, core, 5 * _SMALL)
+    node1 = NumaNode(1, core, 20 * _SMALL)
     m = Machine(nodes=(node0, node1), gpus=(), mem_cap_bytes=25 * _SMALL)
     small = ComputePath(Placement.CPU_PINNED, cores=1, ram_bytes=_SMALL)
     large = ComputePath(Placement.CPU_PINNED, cores=1, ram_bytes=10 * _SMALL)

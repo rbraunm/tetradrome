@@ -24,7 +24,7 @@ and counts every CPU it is allowed as a core, while Proxmox left alone picks CPU
 to sockets and reshuffles them as other containers come and go. --memory is refused when it
 exceeds what the node has available.
 
-What it builds. An unprivileged Debian LXC (pure compute -- no Docker, nesting, or GPU) with
+What it builds. An unprivileged Debian LXC (pure compute -- no Docker or GPU) with
 Tetradrome in a venv and the full runnable suite by default (every CPU acceleration tier, the
 KnotInfo backend, and pytest), the comparison oracles (SageMath plus the built gold-masters
 KnotJob, JavaKh, kht++, knotkit, and KhoHo) unless --skip-oracles, sshd with a dedicated login,
@@ -67,6 +67,7 @@ DEFAULT_TEMPLATE = "debian-12-standard_12.12-1_amd64.tar.zst"
 DEFAULT_REPO = "https://github.com/rbraunm/tetradrome.git"
 DEFAULT_SMOKE = "scripts/bench_grid_floer.py --knots 3_1 --sizes 5"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+ORACLE_HOME = "/opt/oracles"
 BASE_PACKAGES = ("git curl gnupg python3 python3-venv python3-pip numactl ca-certificates "
                  "openssh-server avahi-daemon libnss-mdns")
 
@@ -334,7 +335,9 @@ def create_container(node: Node, args, cpus: list[int]) -> None:
         f"--hostname {shlex.quote(args.hostname)} "
         f"--cores {args.cores} --memory {args.memory} --swap {args.swap} "
         f"--rootfs {args.rootfs_storage}:{args.rootfs_size} --net0 {shlex.quote(net)}{dns} "
-        f"--unprivileged 1 --onboot 0 --tags {shlex.quote(args.tags)}"
+        # Without nesting, systemd-logind cannot start in an unprivileged container, and every
+        # SSH session then waits out pam_systemd's 25 s timeout.
+        f"--unprivileged 1 --features nesting=1 --onboot 0 --tags {shlex.quote(args.tags)}"
     )
     # An explicit cpuset in the config is the one thing Proxmox leaves alone: without it, it
     # picks --cores CPUs at random on start and rebalances them while the container runs.
@@ -528,7 +531,7 @@ def install_oracles(node: Node, args, name: str) -> None:
                  f"{debug_env}PIP={shlex.quote(base + '/venv/bin/pip')} "
                  "PIP_INSTALL_FLAGS='' "
                  f"PY={shlex.quote(base + '/venv/bin/python')} "
-                 "INSTALL_SAGE=1 ORACLE_HOME=/opt/oracles BIN_DIR=/usr/local/bin "
+                 f"INSTALL_SAGE=1 ORACLE_HOME={ORACLE_HOME} BIN_DIR=/usr/local/bin "
                  f"bash {shlex.quote(script)}\n",
                  stream=True)
     node.exec_in(args.ctid,
@@ -609,7 +612,10 @@ def provision(args, client, save_login=write_login_file) -> Login:
     login = setup_login(node, args, name, save_login)
     install_repo(node, args, name)
     install_oracles(node, args, name)
-    node.exec_in(args.ctid, f"chown -R {shlex.quote(login.user)}: /opt/{name}\n")
+    # The login owns everything it runs: the suite reads each built oracle's version with git,
+    # and git refuses a source tree that belongs to another user.
+    owned = f"/opt/{name}" if args.skip_oracles else f"/opt/{name} {ORACLE_HOME}"
+    node.exec_in(args.ctid, f"chown -R {shlex.quote(login.user)}: {owned}\n")
     setup_mdns(node, args.ctid, login.mdns_name)
     clear_install_service_policy(node, args.ctid)
     smoke_test(node, args, login)
