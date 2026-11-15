@@ -89,15 +89,18 @@ It is written as a general runner with a single path today: an unprivileged Debi
 
 ```bash
 python scripts/provision_runner.py --host root@<node> --rootfs-storage <pool> \
-    --cores 16 --memory 16384
+    --cores 16 --memory 32768
 ```
 
-It creates the container, installs Tetradrome with the `accel` extra, runs a tiny smoke sweep, then prints the command to run the full sweep at the container's core count with NUMA pinning. Re-running on an existing container is refused unless `--recreate` is given — no silent clobber.
+It creates the container, installs Tetradrome with every CPU tier and the comparison oracles, runs a tiny smoke sweep, then prints the commands for the real ones. Re-running on an existing container is refused unless `--recreate` is given — no silent clobber.
+
+The container's CPUs are chosen, not left to the hypervisor: the runner reads the node's NUMA and hyperthread layout and pins the container to whole physical cores, the same number from every NUMA node. The scheduler places work per NUMA node and treats every CPU it is allowed as a core, so a box whose CPUs were picked at random would measure something else.
 
 Common flags (`--help` for the full set):
-- `--host root@<node>` — Proxmox node to drive over SSH (required).
+- `--host <user>@<node>` — login on the Proxmox node, prompted for its password (required). `root`, or any account with passwordless sudo.
+- `--cores` — logical CPUs (required): a multiple of NUMA nodes × threads per core, so every node gives the same number of whole cores.
+- `--memory` — RAM in MiB (required); the heavy tier wants 32768 or more. Refused if the node does not have that much available.
 - `--rootfs-storage` — storage pool for the rootfs (default `local-lvm`).
-- `--cores` / `--memory` — vCPUs and RAM in MiB (default `4` / `4096`; size up for real sweeps).
 - `--ctid` — container ID (default `250`).
 - `--ip` / `--gateway` / `--vlan` — static networking; defaults to DHCP, untagged.
 - `--branch` — repo branch to install (default `main`).
