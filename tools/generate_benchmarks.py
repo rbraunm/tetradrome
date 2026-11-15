@@ -7,7 +7,7 @@ Runs the comparison generator on the fully provisioned box (CT 250) via tools/ct
 pulls the artifact back, writes it locally, then commits and pushes it. The execution path
 and extraction are encoded here once so they are not re-derived by hand each time.
 
-This runs on the workstation that can reach CT 250 (Toshiro), not in a sandbox. The numbers
+This runs on the workstation that can reach CT 250, not in a sandbox. The numbers
 in the artifact are DATA, never a gate (see CLAUDE.md); this tool just produces and commits
 the chart.
 
@@ -298,7 +298,7 @@ def commit_and_push(out_path: str, branch: str, ctid: int, message: str, push: b
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description="Regenerate BENCHMARKS.md on CT 250 and commit it (run on Toshiro).")
+        description="Regenerate BENCHMARKS.md on CT 250 and commit it (run on the workstation that reaches CT 250).")
     parser.add_argument("--ctid", type=int, default=250, help="container id (default 250)")
     parser.add_argument("--ref", default="claude",
                         help="branch CT 250 is hard-reset to before generating; must hold the generator")
