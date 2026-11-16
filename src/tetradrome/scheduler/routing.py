@@ -45,7 +45,7 @@ def _device(placement) -> str:
 
 
 class Calibration:
-    """What has been measured about the handlers, each figure refined by an EWMA.
+    """What has been measured about the handlers, each figure refined by an EWMA until it is fixed.
 
     The work rate is seconds per cost unit for a job kind on a device: ``observe`` folds a
     completed job's ``seconds / cost`` into it, and ``predicted_time(cost, placement, kind)`` is
@@ -55,22 +55,55 @@ class Calibration:
     The dispatch overhead is the seconds a job spends being handed to a placement and reaped,
     beyond its own run time: zero for the inline path, measured for the others, None until then.
 
-    State is in memory only: a stored figure would silently drift against changed hardware or
-    backends. A Scheduler given no calibration starts a fresh one each run; the engines share one
-    per process (``scheduler.session``), so a sweep's later runs start out calibrated.
+    A figure is ready once it has ``settle`` measurements; ``ready`` hands those out for storing,
+    and ``fix`` sets figures that stay as given, which later measurements no longer move. The
+    engines share one calibration per process and keep its ready figures between processes
+    (``scheduler.calibration_store``); a Scheduler given no calibration starts a fresh one.
     """
 
-    def __init__(self, alpha: float = 0.3):
+    def __init__(self, alpha: float = 0.3, settle: int = 8):
         if not 0.0 < alpha <= 1.0:
             raise ValueError(f"alpha must be in (0, 1], got {alpha}")
+        if settle < 1:
+            raise ValueError(f"settle must be at least 1, got {settle}")
         self.alpha = alpha
+        self.settle = settle
         self._rate: dict = {}        # (kind, device) -> seconds per cost unit
         self._overhead: dict = {}    # placement -> dispatch seconds
+        self._samples: dict = {}     # (table name, key) -> measurements folded in
+        self._fixed: set = set()     # (table name, key) of figures that no longer move
 
-    def _blend(self, table: dict, key, observed: float) -> None:
+    def _blend(self, name: str, table: dict, key, observed: float) -> None:
+        if (name, key) in self._fixed:
+            return
         previous = table.get(key)
         table[key] = (observed if previous is None
                       else self.alpha * observed + (1.0 - self.alpha) * previous)
+        self._samples[(name, key)] = self._samples.get((name, key), 0) + 1
+
+    def ready(self) -> dict:
+        """The figures measured ``settle`` times and not yet fixed, in the stored form."""
+        def due(name, key):
+            return ((name, key) not in self._fixed
+                    and self._samples.get((name, key), 0) >= self.settle)
+        return {
+            "rates": [{"kind": kind, "device": device, "seconds_per_unit": rate}
+                      for (kind, device), rate in self._rate.items() if due("rate", (kind, device))],
+            "overheads": [{"placement": placement.name, "seconds": seconds}
+                          for placement, seconds in self._overhead.items()
+                          if due("overhead", placement)],
+        }
+
+    def fix(self, figures: dict) -> None:
+        """Set stored figures, in the form ``ready`` gives, as final."""
+        for entry in figures["rates"]:
+            key = (entry["kind"], entry["device"])
+            self._rate[key] = float(entry["seconds_per_unit"])
+            self._fixed.add(("rate", key))
+        for entry in figures["overheads"]:
+            placement = Placement[entry["placement"]]
+            self._overhead[placement] = float(entry["seconds"])
+            self._fixed.add(("overhead", placement))
 
     def rate(self, placement, kind: str = ""):
         """The current seconds-per-cost-unit estimate for a kind on a placement's device, or None
@@ -86,7 +119,7 @@ class Calibration:
         """Fold a completed job's measured run time into the rate for its kind and device."""
         if cost <= 0:
             return                   # no cost, so no per-unit signal to learn from
-        self._blend(self._rate, (kind, _device(placement)), seconds / cost)
+        self._blend("rate", self._rate, (kind, _device(placement)), seconds / cost)
 
     def overhead(self, placement):
         """Dispatch seconds for a placement: 0.0 inline, the measured figure otherwise, or None
@@ -97,7 +130,7 @@ class Calibration:
 
     def observe_overhead(self, placement, seconds: float) -> None:
         """Fold one job's measured dispatch-and-reap time into the placement's overhead."""
-        self._blend(self._overhead, placement, seconds)
+        self._blend("overhead", self._overhead, placement, seconds)
 
 
 def route_execution(predicted_vram: int, vram_budget: int, predicted_time,

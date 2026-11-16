@@ -24,6 +24,21 @@ import os
 
 import pytest
 
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _scheduler_calibration_store(tmp_path_factory):
+    """Keep the suite's scheduler measurements out of the user's cache and start it measuring:
+    tests run the code being changed, whose figures are not the installed code's."""
+    previous = os.environ.get("TETRADROME_CACHE_DIR")
+    os.environ["TETRADROME_CACHE_DIR"] = str(tmp_path_factory.mktemp("calibration"))
+    yield
+    if previous is None:
+        del os.environ["TETRADROME_CACHE_DIR"]
+    else:
+        os.environ["TETRADROME_CACHE_DIR"] = previous
+
+
 # --- the single heavy-tier gate -------------------------------------------------------
 
 

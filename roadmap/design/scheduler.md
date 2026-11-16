@@ -37,8 +37,8 @@ are spawned cold and each is charged a measured import baseline.
 
 ## What is measured
 
-Each handler has a speed and a cost, both measured while jobs run and kept for the life of the
-process (`scheduler/routing.py`, shared through `scheduler/session.py`):
+Each handler has a speed and a cost, both measured while jobs run (`scheduler/routing.py`, shared
+through `scheduler/session.py`):
 
 - **work rate**: seconds per cost unit, per kind and device. The inline path and both CPU
   placements run the same code, so they share a rate; the GPU has its own.
@@ -46,7 +46,11 @@ process (`scheduler/routing.py`, shared through `scheduler/session.py`):
 - **memory**: a worker's private bytes are sampled; the ledger charges the larger of declared and
   measured, and logs a job that exceeds its declaration.
 
-Nothing is stored between processes: a stored figure would drift against changed hardware.
+Work rates and dispatch overheads are measured once per code version and machine and kept
+(`scheduler/calibration_store.py`): one JSON file per machine in the user's cache directory
+(`TETRADROME_CACHE_DIR` moves it). A figure is stored after eight measurements and is not measured
+again. Any change to the package's source discards the file; a figure the file lacks is measured.
+A worker's start-up memory is still probed once per process.
 
 ## The planner
 
