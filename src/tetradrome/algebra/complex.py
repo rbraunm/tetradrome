@@ -5,7 +5,7 @@
 
 This is the invariant-agnostic core (SPEC.md 4; homology-engine design section 2):
 a front end (Khovanov, later Floer) emits one of these per independent grading, and
-the back end reduces it to homology. F2 first (decision 0003): a boundary map is a 0/1
+the back end reduces it to homology. F2 first: a boundary map is a 0/1
 matrix, and this is the bit-set fast lane for it. The rational coefficients Lee /
 Rasmussen need live beside this as RationalComplex (a coefficient-column representation
 reduced over Q), not as a generalization of this class -- the field-tested pattern keeps
@@ -172,7 +172,7 @@ class GradedComplex:
     def verify_d_squared(self) -> None:
         """Check d^(n+1) . d^n = 0 over F2 at every degree; raise on the first violation.
         A non-zero composite means the front end's differential is wrong, which is exactly
-        the kind of bug to surface loudly (decision 0004, inward)."""
+        the kind of bug to surface loudly."""
         for n in self._dims:
             if n not in self._indices or n + 1 not in self._indices:
                 continue  # d^n or d^(n+1) is the zero map, so the composite is zero

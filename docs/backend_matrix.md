@@ -3,8 +3,8 @@
 What each external tool can compute, how it gets onto a host, and where its details
 are recorded. Tetradrome computes every invariant natively; these tools only ever
 **validate** a native result or get **measured** against it in the benchmark -- never
-produce a returned value (decision 0006). For canonical invariant names, see decision
-0001.
+produce a returned value (`SPEC.md` section 2). Canonical invariant names are in `SPEC.md`
+section 7.
 
 ## Where the live state is -- not in this file
 
@@ -36,7 +36,7 @@ compute it but no convention probe has run, so nothing may be wired on it yet.
 | KhoHo | install script (source, PARI/gp) | PD (via `init_diagr`) | `rational_khovanov_homology` -- verified | A KhoHo diagram is a PD matrix with KnotTheory's sign rule; mirror convention, 7/7. Measured only, not a validator. Also exposes `KhPol_T` / `Torsion` (integral) and an odd module, not yet probed. |
 | kht++ (`khtpp`) | install script (source) | `.kht` Morse word; fed KnotInfo braid words | `khovanov_homology` (F2, via reduced tensored with (q + q^-1)) -- verified | Computes the reduced theory over F2, measured on the `khovanov_reduced` row. F2 only: its rational arithmetic is documented as untrustworthy, so no `rasmussen_s`. Measured only, not a validator. Details: `roadmap/research/khtpp.md`. |
 | SnapPy / Spherogram | pip | PD, DT, braid, name | none without Sage | Classical invariants are Sage-gated under plain pip. Measured for hyperbolic volume and Chern-Simons, neither canonical, and only on a geometric solution: a torus knot gets n/a rather than a value read off flat tetrahedra. |
-| KnotInfo (`database_knotinfo`) | pip | name | tabulated values for most canonical invariants | Not a computed oracle: rides along as a cross-check, and is the sole validator only where nothing computes the invariant (decision 0006). Details: `roadmap/research/knotinfo.md`. |
+| KnotInfo (`database_knotinfo`) | pip | name | tabulated values for most canonical invariants | Not a computed oracle: rides along as a cross-check, and is the sole validator only where nothing computes the invariant. Details: `roadmap/research/knotinfo.md`. |
 
 ## What a plain pip environment gives you
 
@@ -45,4 +45,4 @@ covers strict validation of the Floer invariants, Jones, Alexander, determinant,
 Khovanov over F2 and Q. It does not cover signature (Sage only) or Rasmussen `s`
 (KnotJob and knotkit both come from `install_oracles.sh`), so strict raises for those
 on a pip-only host, naming the missing oracle, while `soft` and `off` work
-(decision 0004).
+(`SPEC.md` section 6).

@@ -83,7 +83,7 @@ def _ascending_coefficients(poly: dict[int, int]) -> tuple[int, list[int]]:
 
 
 class ReginaValidator:
-    """Read-only cross-check against Regina's Link engine (SPEC 6, ADR 0006)."""
+    """Read-only cross-check against Regina's Link engine (SPEC 6)."""
 
     name = "regina"
     covered_invariants = _COVERED

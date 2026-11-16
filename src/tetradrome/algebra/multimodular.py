@@ -17,6 +17,10 @@ dimension-only invariants (homology ranks, and Rasmussen s via filtered ranks) n
 The point is speed: exact `Fraction` Gaussian elimination suffers coefficient explosion,
 while mod-p arithmetic stays bounded. The result is validated identical to the exact
 rational reducer across the catalog.
+
+No calculation uses this module: a rank that is right unless every prime is bad is a
+probabilistic rank, which the core does not accept. It is the starting point for an exact
+multimodular reducer.
 """
 from __future__ import annotations
 

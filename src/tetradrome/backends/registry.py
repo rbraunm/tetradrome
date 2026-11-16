@@ -3,8 +3,8 @@
 
 """The validator registry: which computed oracles exist, which are wired, at what version.
 
-This is the compute layer's single source of truth for the strict/soft/off doctrine
-(ADR 0004): strict REQUIRES a computed oracle wherever one exists anywhere, and its
+This is the compute layer's single source of truth for the strict/soft/off doctrine:
+strict REQUIRES a computed oracle wherever one exists anywhere, and its
 raise message must say whether the gap is provisioning ("not installed -- run
 scripts/install_oracles.sh") or development ("not yet wired"). Answering that needs
 three distinct states per invariant, and this module owns all three:
@@ -49,7 +49,7 @@ class Validator(Protocol):
     """The SPEC 6 validator contract: read-only cross-checks, never producers.
 
     A validator never produces the value a user receives; it only confirms or
-    contradicts the native one (ADR 0006).
+    contradicts the native one.
     """
 
     name: str
@@ -99,7 +99,7 @@ def computed_oracle_exists(invariant: str) -> bool:
     """Whether a computed oracle for ``invariant`` exists anywhere, wired or not.
 
     When True, strict REQUIRES one to run and pass; KnotInfo alone may validate a
-    result only when this is False (fallback of last resort, ADR 0004).
+    result only when this is False (fallback of last resort).
     """
     return bool(wired_validators(invariant)) or bool(unwired_oracles(invariant))
 

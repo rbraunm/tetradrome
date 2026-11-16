@@ -4,7 +4,7 @@
 """PD-code normalization and validation.
 
 Fails loudly on malformed input -- we never repair or guess a PD code
-(no silent fallbacks; decisions/0004).
+(no silent fallbacks).
 """
 from __future__ import annotations
 

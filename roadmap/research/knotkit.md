@@ -28,7 +28,7 @@ kk <invariant> [options] <link>
 ```
 
 - **Invariants**: `kh`, `gss`, `lsss`, `sq2`, `leess`, `s`.
-  Only `kh` and `s` map onto canonical invariant names (ADR 0001); `gss`, `lsss`,
+  Only `kh` and `s` map onto canonical invariant names (`SPEC.md` section 7); `gss`, `lsss`,
   `sq2` and `leess` are spectral-sequence and Steenrod refinements with no canonical
   row and are out of scope.
 - **`-f <field>`**: `Z2` (default), `Z3`, `Q`. `Z3` has no canonical row.

@@ -7,7 +7,7 @@ A knot is in the roster when KnotInfo tabulates everything the engine validates 
 HFK-hat, the Ozsvath-Szabo tau, and the three-genus -- and its grid number is within a
 tractable bound. Derived live from the table so it tracks the installed KnotInfo rather than
 freezing a hand-maintained list. The n <= 10 acceptance ceiling is the brute floor: the grid
-complex at n = 11 overruns 200 GiB (decisions/0011; roadmap/design/homology-engine.md section 7).
+complex at n = 11 overruns 200 GiB (roadmap/design/homology-engine.md section 7).
 """
 from __future__ import annotations
 

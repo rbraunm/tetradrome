@@ -1,9 +1,9 @@
 # Existing Tools
 
 Licences and roles of the external tools. None of them computes a returned value
-(decision 0006). What each provisioned oracle computes is in `backend_matrix.md`. The
+(`SPEC.md` section 2). What each provisioned oracle computes is in `backend_matrix.md`. The
 versions on a host are reported by `scripts/install_oracles.sh` and recorded in every
-result (decision 0013), so no version is pinned here.
+result, so no version is pinned here.
 
 ## Licences
 

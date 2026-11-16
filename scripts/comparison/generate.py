@@ -296,8 +296,7 @@ def emit(tetraCells, oracleResults, oracleLive, facts, ladder, reps):
     add("Rows are grouped by the **computational gold-master** that already exists for each "
         "invariant. KnotInfo is the value oracle throughout (the `KnotInfo` column), and its own "
         "group only for the bounds no program computes. Tetradrome computes every \"done\" row "
-        "**natively** - the external tools are validators, never a compute backend "
-        "(decision 0006).\n")
+        "**natively** - the external tools are validators, never a compute backend.\n")
     add("Status: " + "  ".join(_STATUS[s] for s in
         ["done", "landing", "near", "build", "bound", "research"]) + ".\n")
     add("Empty cells are honest: *not implemented (target)* = we don't compute it yet (the oracle "

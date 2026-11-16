@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Randy Braunm
 
-"""Three-mode validate (ADR 0004) against the validator registry.
+"""Three-mode validate against the validator registry.
 
 Strict requires a computed oracle wherever one exists anywhere; soft tolerates a
 computed oracle's absence but never a disagreement; off skips validation while keeping

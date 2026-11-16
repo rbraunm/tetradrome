@@ -4,7 +4,7 @@
 
 ## How to read this
 
-Rows are grouped by the **computational gold-master** that already exists for each invariant. KnotInfo is the value oracle throughout (the `KnotInfo` column), and its own group only for the bounds no program computes. Tetradrome computes every "done" row **natively** - the external tools are validators, never a compute backend (decision 0006).
+Rows are grouped by the **computational gold-master** that already exists for each invariant. KnotInfo is the value oracle throughout (the `KnotInfo` column), and its own group only for the bounds no program computes. Tetradrome computes every "done" row **natively** - the external tools are validators, never a compute backend.
 
 Status: ✅ done  🚧 landing  🔜 near  🔧 build  📏 bound  🔬 research.
 
@@ -22,7 +22,7 @@ Empty cells are honest: *not implemented (target)* = we don't compute it yet (th
 
 ## knot Floer homology -- vs Szabo's HFK Calculator (`knot_floer_homology`)
 
-Tetradrome computes these natively from a grid diagram (Apache-2.0, pure Python, auditable, multi-core/optional-GPU accelerated with every tier checked to reproduce the reference). `knot_floer_homology` wraps Szabo's compiled-C HFKcalc and is a validator only, never a compute backend (decision 0006). Expect the compiled cube to be far faster than the grid engine on a real knot -- that gap is the documented case for the Tier-2 Szabo-cube engine.
+Tetradrome computes these natively from a grid diagram (Apache-2.0, pure Python, auditable, multi-core/optional-GPU accelerated with every tier checked to reproduce the reference). `knot_floer_homology` wraps Szabo's compiled-C HFKcalc and is a validator only, never a compute backend. Expect the compiled cube to be far faster than the grid engine on a real knot -- that gap is the documented case for the Tier-2 Szabo-cube engine.
 
 | Invariant | Math | In → Out | Status | KnotInfo | Tetradrome | knot_floer_homology | Validation |
 |---|---|---|---|---|---|---|---|

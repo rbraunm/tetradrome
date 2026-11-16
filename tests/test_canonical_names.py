@@ -1,59 +1,45 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Randy Braunm
 
-"""The canonical-name record and the code must agree.
+"""The canonical-name table and the code must agree.
 
-Decision 0001 is the only list of canonical invariant names, and SPEC 7 carries the
-same set with each backend's spelling alongside. Both drifted from ``compute()`` with
-nothing noticing: the record named ``rasmussen_invariant`` while ``compute()`` accepted
-only ``rasmussen_s``, and ``rational_khovanov_homology`` was in neither. These tests
-read both documents and pin them against the code and against each other.
+SPEC 7 is the only list of canonical invariant names, with each tool's spelling alongside and
+a column marking the ones computed natively. These tests read it and pin it against
+``compute()``.
 """
 import pathlib
 import re
 
 from tetradrome.invariants.compute import _supported
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
-ADR_0001 = ROOT / "roadmap" / "decisions" / "0001-canonical-invariant-names.md"
-SPEC = ROOT / "SPEC.md"
+SPEC = pathlib.Path(__file__).resolve().parents[1] / "SPEC.md"
+_HEADER = "| Tetradrome (canonical) | Native |"
+_ROW = re.compile(r"\|\s*`([a-z0-9_]+)`[^|]*\|\s*([^|]*?)\s*\|")
+_NOT_NATIVE = "\u2014"
 
 
-def _canonical_column(path: pathlib.Path, header_start: str) -> list[str]:
-    """The backticked name opening each row of the markdown table whose header row
-    starts with ``header_start``. Fails loud on a missing table or an unparseable row
-    rather than quietly returning a short list."""
-    lines = path.read_text().splitlines()
-    starts = [i for i, line in enumerate(lines) if line.startswith(header_start)]
-    assert len(starts) == 1, f"expected one table headed {header_start!r} in {path.name}"
-    names = []
+def _canonical_rows() -> list[tuple[str, bool]]:
+    """(name, computed natively) for each row of the SPEC 7 table. Fails loud on a missing
+    table or an unparseable row rather than quietly returning a short list."""
+    lines = SPEC.read_text(encoding="utf-8").splitlines()
+    starts = [i for i, line in enumerate(lines) if line.startswith(_HEADER)]
+    assert len(starts) == 1, f"expected one table headed {_HEADER!r} in SPEC.md"
+    rows = []
     for line in lines[starts[0] + 2:]:
         if not line.startswith("|"):
             break
-        match = re.match(r"\|\s*`([a-z0-9_]+)`", line)
-        assert match, f"unparseable canonical row in {path.name}: {line!r}"
-        names.append(match.group(1))
-    assert names, f"empty canonical table in {path.name}"
-    return names
+        match = _ROW.match(line)
+        assert match, f"unparseable canonical row in SPEC.md: {line!r}"
+        assert match.group(2) in ("yes", _NOT_NATIVE), f"unreadable Native cell: {line!r}"
+        rows.append((match.group(1), match.group(2) == "yes"))
+    assert rows, "empty canonical table in SPEC.md"
+    return rows
 
 
-def _adr_names() -> list[str]:
-    return _canonical_column(ADR_0001, "| Canonical name |")
+def test_native_column_is_exactly_what_compute_accepts():
+    assert sorted(name for name, native in _canonical_rows() if native) == sorted(_supported())
 
 
-def _spec_names() -> list[str]:
-    return _canonical_column(SPEC, "| Tetradrome (canonical) |")
-
-
-def test_every_computed_invariant_is_in_the_canonical_record():
-    missing = sorted(set(_supported()) - set(_adr_names()))
-    assert missing == []
-
-
-def test_spec_table_carries_exactly_the_canonical_set():
-    assert sorted(_spec_names()) == sorted(_adr_names())
-
-
-def test_canonical_tables_have_no_duplicate_rows():
-    for names in (_adr_names(), _spec_names()):
-        assert len(names) == len(set(names))
+def test_canonical_table_has_no_duplicate_rows():
+    names = [name for name, _ in _canonical_rows()]
+    assert len(names) == len(set(names))

@@ -18,9 +18,9 @@ A result with no validation path is a bug.
 
 | Rule | Where |
 |---|---|
-| The three modes (`strict`, `soft`, `off`) and the errors they raise | decision 0004 |
-| A computed oracle is required wherever one exists; KnotInfo alone validates only where none does | decision 0006 |
-| Every validator's identity, version and verdict is recorded | decision 0013; schema in SPEC 5 |
+| The three modes (`strict`, `soft`, `off`) and the errors they raise | `SPEC.md` section 6 |
+| A computed oracle is required wherever one exists; KnotInfo alone validates only where none does | `SPEC.md` section 6 |
+| Every validator's identity, version and verdict is recorded | `SPEC.md` section 5 |
 | Which validators are wired, and which computed oracles exist but are not | `src/tetradrome/backends/registry.py` |
 | What each oracle computes | `backend_matrix.md` |
 | Provisioning the oracles | `scripts/install_oracles.sh` |

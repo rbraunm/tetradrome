@@ -55,7 +55,7 @@ def rational_rank(columns: Sequence[Mapping[int, object]]) -> int:
 def rational_homology(cx: RationalComplex, *, verify: bool = True) -> dict[int, int]:
     """Q homology of `cx`, as {degree: dim H^n} for every degree with non-zero homology.
 
-    By default `cx` is checked for d^2 = 0 first (decision 0004); pass `verify=False` to
+    By default `cx` is checked for d^2 = 0 first; pass `verify=False` to
     skip that when already run. The negative-dimension backstop fires regardless.
     """
     if verify:

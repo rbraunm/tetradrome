@@ -11,9 +11,8 @@ normalizes them. A diagram given by PD code or braid word with no name has no id
 
 ## Canonical invariant names
 
-Defined in `roadmap/decisions/0001-canonical-invariant-names.md`. SPEC 7 carries the
-same set beside each tool's spelling; `tests/test_canonical_names.py` keeps the two
-and `invariants.compute()` in step.
+Defined in `SPEC.md` section 7, beside each tool's spelling; `tests/test_canonical_names.py`
+keeps the table and `invariants.compute()` in step.
 
 ## Diagram notation
 
@@ -25,7 +24,7 @@ braid word. In a braid word `+j` means strand j crosses over strand j+1.
 ## Coefficient field, gradings, chirality
 
 - F2 is the unmarked coefficient field; every other ring is named
-  (`roadmap/decisions/0003-native-coefficient-field.md`, decision 0001).
+  (`SPEC.md` section 7).
 - The native grading and chirality conventions, and how each compares with KnotInfo,
   are pinned in `roadmap/design/homology-engine.md` section 8.
 - Each validator's convention against the native value (direct, mirrored, negated) is
@@ -36,8 +35,7 @@ braid word. In a braid word `+j` means strand j crosses over strand j+1.
 
 Oracle values are strings and may be blank or carry a sentinel (KnotInfo `""` or
 `"does not exist"`). These are read as missing, never as a default. A blank read as
-`0` is a wrong answer, not a missing one (`roadmap/research/knotinfo.md`, decision
-0004).
+`0` is a wrong answer, not a missing one (`roadmap/research/knotinfo.md`).
 
 ## Claim strength
 

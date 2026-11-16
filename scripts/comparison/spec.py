@@ -55,12 +55,12 @@ GROUPS = [
         "kfh",
         "knot Floer homology -- vs Szabo's HFK Calculator (`knot_floer_homology`)",
         "knot_floer_homology (Szabo HFKcalc, GPLv2+, binary wheel)",
-        "Tetradrome computes these natively from a grid diagram (Apache-2.0, pure Python, "
-        "auditable, multi-core/optional-GPU accelerated with every tier checked to reproduce the "
+        "Tetradrome computes these natively from a grid diagram (Apache-2.0, auditable, "
+        "multi-core/optional-GPU accelerated with every tier checked to reproduce the "
         "reference). `knot_floer_homology` wraps Szabo's compiled-C HFKcalc and is a validator "
-        "only, never a compute backend (decision 0006). Expect the compiled cube to be far faster "
-        "than the grid engine on a real knot -- that gap is the documented case for the Tier-2 "
-        "Szabo-cube engine.",
+        "only, never a compute backend. Expect it to be far faster than the grid engine on a "
+        "real knot: it runs the bordered-algebra algorithm, which does not pay the grid's n! -- "
+        "that gap is the case for a bordered-algebra engine.",
     ),
     Group(
         "knotjob",

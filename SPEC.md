@@ -4,9 +4,7 @@ Tetradrome is a Python workbench that computes the invariants of smooth 4-dimens
 topology natively, validates every result against independent tools, and records how each
 result was produced.
 
-Decisions are in `roadmap/decisions/`. Engine design is in
-`roadmap/design/homology-engine.md` and `roadmap/design/scheduler.md`. Where this document
-and a decision record disagree, the decision record governs.
+Engine design is in `roadmap/design/homology-engine.md` and `roadmap/design/scheduler.md`.
 
 ## 1. Scope
 
@@ -36,22 +34,27 @@ Where the plans are:
 
 ## 2. Principles
 
-1. **Native compute.** Every returned value is computed by Tetradrome's own code. External
-   tools only validate (decision 0006). There is no `backend=` argument: the invariant name
-   selects the engine.
+1. **Native compute.** Every returned value is computed by Tetradrome's own code. No external
+   topology tool computes a returned value or is needed to obtain one; they only check answers
+   (section 6). There is no `backend=` argument: the invariant name selects the engine.
 2. **Faithful.** The raw computation is the reference and is always runnable. Only exact,
-   answer-preserving reductions may optimize it. No heuristics (decision 0007).
+   answer-preserving reductions may optimize it. No heuristics: no truncated gradings, no
+   assumption of thinness or alternation, no probabilistic rank, no early-termination guess
+   (`roadmap/design/homology-engine.md` section 4).
 3. **Agreement.** Every reduction tier and every scheduled form returns the identical answer
    as its reference (`roadmap/design/homology-engine.md` section 4).
 4. **One way to run.** Every calculation is a scheduler job (`roadmap/design/scheduler.md`).
 5. **Validated by default.** `strict` requires a computed oracle wherever one exists, and any
-   oracle that runs and disagrees raises (decisions 0004, 0006).
+   oracle that runs and disagrees raises (section 6).
 6. **Provenance.** No bare values. Every result records its method, the versions that can
-   move it, and each validator's identity, version and verdict (decision 0013).
+   move it, and each validator's identity, version and verdict (section 5). Provenance is
+   never dropped for size. Dependencies are updated, not pinned: the run records the version
+   it used.
 7. **Fail loud.** No silent fallback, default or coercion. A calculation that will not fit is
-   refused before it starts (decisions 0004, 0008).
-8. **General objects.** Knots are validated first, but no representation may assume a single
-   component (decision 0009).
+   refused before it starts (`roadmap/design/homology-engine.md` section 5).
+8. **General objects.** The scope is the toolset of smooth 4-dimensional topology, not a knot
+   calculator. Knots are validated first, but no representation may assume a single
+   component. Links and manifold inputs are built when an invariant needs them.
 9. **Specialize the dataset, not the mathematics.** No engine contains anything specific to
    one knot.
 10. **Claim strength.** A reported claim is a computation, an obstruction or a theorem
@@ -86,7 +89,7 @@ scripts/          install_oracles.sh, provision_runner.py, comparison/ (generate
                   benchmarks
 tools/            ct_exec.py, generate_benchmarks.py
 tests/            pytest; --heavy widens the validation rosters
-roadmap/          decisions/, design/, research/, claim-ledger.md
+roadmap/          design/, research/, claim-ledger.md
 docs/             conventions, validation, backend_matrix, existing_tools, conway_notes, outreach
 ```
 
@@ -164,26 +167,45 @@ class Validator(Protocol):
 - A validator confirms or contradicts a native value. It never produces the value a caller
   receives.
 - `known_value` returns `None` when the validator cannot check this input; the record is
-  `not_run`.
+  `not_run`. A blank or sentinel cell in KnotInfo is "cannot check", never a default value.
 - The registry holds the wired validators in consultation order and, in `_UNWIRED`, the
   computed oracles that exist but are not wired. Wiring standard: at least two independent
   computed validators per invariant wherever two exist.
 - KnotInfo is recorded as one more validator. It validates alone only where no computed
   oracle exists for the invariant.
 
+`compute(..., validate=...)` takes a mode. There is no boolean form.
+
+| Mode | Behaviour |
+|---|---|
+| `strict` (default) | A computed oracle is required wherever one exists for the invariant, installed on this host or not. A missing one raises `UnvalidatedResult`, which says whether it is not installed (`scripts/install_oracles.sh`) or not wired. KnotInfo is consulted as well. |
+| `soft` | Uses the computed oracle when it is installed. Otherwise falls back to KnotInfo and logs that `strict` would have raised. |
+| `off` | No validation. The result still carries its provenance and an empty validation record. |
+
+In `strict` and `soft` an oracle that runs and disagrees raises, and a result with no oracle
+agreeing raises `UnvalidatedResult` instead of being returned.
+
 | Topic | Where |
 |---|---|
-| The modes `strict`, `soft`, `off` | decision 0004 |
 | What each oracle computes and how it is provisioned | `docs/backend_matrix.md`, `scripts/install_oracles.sh` |
 | Tool licences | `docs/existing_tools.md` |
 | The benchmark's oracle roster (measurement, not validation) | `scripts/comparison/adapters.py` |
 
 ## 7. Canonical names
 
-Decision 0001 fixes the names. This table carries the same set beside the KnotInfo column and
-the `knot_floer_homology` key for each; `tests/test_canonical_names.py` pins both tables
-against `compute()`. Every other validator's spelling lives in its adapter. Knot identity and
-diagram notation are in `docs/conventions.md`.
+This table is the list of canonical names, beside the KnotInfo column and the
+`knot_floer_homology` key for each. A name is canonical when `compute()` accepts it or the
+table reserves it for an engine not yet built; `tests/test_canonical_names.py` pins the Native
+column against `compute()`.
+
+- Names are `lower_snake_case`, use the term the literature uses, and take the attributed form
+  where the invariant is standardly attributed. `rasmussen_s` keeps the letter the literature
+  writes.
+- F2 is the unmarked coefficient field and every other ring is named: `khovanov_homology` is
+  over F2, `rational_khovanov_homology` over ℚ.
+- Every other validator's spelling lives in its adapter. Renaming a canonical name is a change
+  across `src/`, `scripts/` and `tests/`.
+- Knot identity and diagram notation are in `docs/conventions.md`.
 
 | Tetradrome (canonical) | Native | KnotInfo column | `knot_floer_homology` key |
 |---|---|---|---|

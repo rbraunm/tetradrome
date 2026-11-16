@@ -48,7 +48,7 @@ def test_floer_provenance_records_the_libraries_its_kernels_run_on():
     assert result.provenance.backend == "tetradrome-native"
     assert result.provenance.method == "grid_hfk_hat"
     assert result.provenance.inputs == "knotinfo:grid_notation"
-    # The grid kernels run on numpy, compiled by Numba when it is installed (ADR 0013).
+    # The grid kernels run on numpy, compiled by Numba when it is installed.
     from tetradrome.engines.floer.differential_jit import HAVE_NUMBA
 
     expected = ["python", "numpy", "numba"] if HAVE_NUMBA else ["python", "numpy"]

@@ -76,7 +76,7 @@ def measureTetradrome(knot, computeName, reps):
     cell by 20x); the verdicts come from one untimed soft call, and the two values must
     agree or this raises. An invariant whose wired computed oracles are ALL missing from
     this host is a provisioning failure of the artifact run itself, not a per-cell state --
-    fail loud before timing anything (ADR 0004). A partially-provisioned invariant is fine:
+    fail loud before timing anything. A partially-provisioned invariant is fine:
     strict's own rule is >= 1 computed pass, so regina alone validates a classical cell on a
     sage-less host. Soft mode then tolerates only the honestly-recorded gaps. The agree
     verdict prefers a computed oracle's pass over KnotInfo's.
@@ -1383,7 +1383,7 @@ def khocaAvailable():
     return _probeImport("khoca", "Khoca")
 
 
-# ---- oracle versions (ADR 0013) -----------------------------------------------------------
+# ---- oracle versions -----------------------------------------------------------
 # Each probe mirrors what scripts/install_oracles.sh records, so the artifact's versions match the
 # provisioned host exactly: pip distributions by metadata, source oracles by their built git sha,
 # the rolling KnotJob jar by content hash. An absent oracle reports "absent" (the generator only
@@ -1466,7 +1466,7 @@ def sageVersion():
 
 # Registry the generator iterates. ``run`` is None for probe-only oracles -- the generator prints
 # "adapter pending" for the invariants they cover until a run is wired against a real install.
-# ``version`` mirrors what install_oracles.sh recorded for the oracle (ADR 0013).
+# ``version`` mirrors what install_oracles.sh recorded for the oracle.
 @dataclasses.dataclass
 class Oracle:
     key: str

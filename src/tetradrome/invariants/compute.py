@@ -3,7 +3,7 @@
 
 """Compute a knot invariant and return a validated, provenanced result.
 
-Validate-by-default (decisions/0004): ``validate`` is a three-mode enum, default
+Validate-by-default: ``validate`` is a three-mode enum, default
 "strict". Strict requires a computed oracle wherever one exists anywhere (the registry
 knows), and the raise distinguishes "not installed" from "not yet wired"; soft
 tolerates a computed oracle's absence (falling back to KnotInfo with an info message)
@@ -111,7 +111,7 @@ def _supported() -> list[str]:
 
 
 def _library_versions(used: tuple[str, ...] = ()) -> tuple[tuple[str, str], ...]:
-    """Versions of the computational libraries a result depends on (ADR 0013).
+    """Versions of the computational libraries a result depends on.
 
     Always records the interpreter, then each library the computation actually used: the true
     record, not the set of libraries that merely happen to be installed. The Seifert-form and cube
@@ -136,7 +136,7 @@ def _floer_libraries() -> tuple[str, ...]:
 
 
 def _computed_oracle_gap(invariant, not_installed, could_not_check):
-    """Why no computed oracle checked this result: provisioning gap vs dev gap (ADR 0004)."""
+    """Why no computed oracle checked this result: provisioning gap vs dev gap."""
     parts = []
     if not_installed:
         parts.append(
@@ -156,7 +156,7 @@ def _finalize(knot, invariant, value, method, inputs, fallback_label, validate,
 
     Every wired + installed validator covering the invariant is consulted (registry), then
     KnotInfo rides along as one more record -- an extra cross-check, never the primary
-    validator (ADR 0004). ``libraries`` names the third-party computational libraries the
+    validator. ``libraries`` names the third-party computational libraries the
     computation used, if any; the native core uses none, so it defaults to empty and the
     result records only the interpreter.
     """
@@ -217,7 +217,7 @@ def _finalize(knot, invariant, value, method, inputs, fallback_label, validate,
         return result
 
     # Strict and soft alike: ANY oracle that ran and disagrees raises. Soft tolerates
-    # absence, never disagreement (ADR 0004).
+    # absence, never disagreement.
     if result.validation.has_disagreement:
         disagreeing = next(v for v in records if v.verdict == "fail")
         raise UnvalidatedResult(

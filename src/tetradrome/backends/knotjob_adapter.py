@@ -137,7 +137,7 @@ def raw_knotjob(knot) -> str:
 
 
 class KnotJobValidator:
-    """Read-only cross-check against KnotJob (SPEC 6, ADR 0006)."""
+    """Read-only cross-check against KnotJob (SPEC 6)."""
 
     name = "knotjob"
     covered_invariants = _COVERED

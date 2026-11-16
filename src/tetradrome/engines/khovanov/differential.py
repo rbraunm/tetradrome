@@ -14,8 +14,8 @@ identity elsewhere:
 (+ is the unit 1 of quantum degree +1, - is x of quantum degree -1.)
 
 Two lanes share this construction. Over F2 the cube edge signs vanish, so the
-differential is the plain F2 sum of these maps -- the fast lane, `khovanov_complexes`
-(decision 0003). Over Q the edges carry the standard sign assignment
+differential is the plain F2 sum of these maps -- the fast lane, `khovanov_complexes`.
+Over Q the edges carry the standard sign assignment
 
     sign(flip crossing c at state s) = (-1)^(number of 1-bits of s before position c),
 

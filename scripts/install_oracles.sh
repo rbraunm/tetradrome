@@ -6,7 +6,7 @@
 #
 # The comparison artifact (scripts/comparison/) validates Tetradrome's native results against
 # external gold-master oracles, and deliberately runs EVERY overlapping engine on the same
-# invariant so the artifact can compare wall-time and exact output (decision 0006: oracles are
+# invariant so the artifact can compare wall-time and exact output (oracles are
 # opt-in validators only, never a runtime dependency of a computation). This script installs and
 # builds all of them and smoke-gates each, so those comparisons never have to be re-derived by
 # hand in a later session.
@@ -54,9 +54,9 @@
 # missing oracle is installed. A converged re-run does no source build and no network apt call and
 # ends with an unambiguous "good to proceed" line, so a later session knows the host is ready without
 # re-running or troubleshooting. Any whitelist regression or failed smoke aborts loudly with a nonzero
-# exit. This script is a first-class project artifact (ADR 0013): it is how any consumer -- not just
+# exit. This script is a first-class project artifact: it is how any consumer -- not just
 # our sandbox -- keeps their oracles current, and it reports the exact version of every oracle it
-# converges to, because the recorded version is the reproducibility (ADR 0013).
+# converges to, because the recorded version is the reproducibility.
 #
 #   scripts/install_oracles.sh              # converge to present + current, apply updates, verify
 #   scripts/install_oracles.sh --check      # dry run: report each oracle's version and update state,
@@ -106,7 +106,7 @@ fi
 
 # Per-oracle outcome + resolved version, printed in the closing summary. STATUS is what happened this
 # run (installed / built / up to date / updated); VERSION is the exact version we converged to and is
-# the value that matters for reproducibility (ADR 0013).
+# the value that matters for reproducibility.
 STATUS_KFH="not attempted";     VERSION_KFH="-"
 STATUS_SNAPPY="not attempted";  VERSION_SNAPPY="-"
 STATUS_REGINA="not attempted";  VERSION_REGINA="-"
@@ -325,7 +325,7 @@ ensure_apt() {
 
 install_pip_oracles() {
   log "pip oracles: snappy (pulls kfh), regina, khoca (+ py sympy) -- applying any updates"
-  # Apply updates rather than pin (ADR 0013): -U upgrades to the current release; the version we end
+  # Apply updates rather than pin: -U upgrades to the current release; the version we end
   # up on is recorded below and is what makes the run reproducible. Capture versions before and after
   # so a run that changes nothing skips the (otherwise wasted) smoke.
   local before_kfh before_snappy before_regina before_khoca

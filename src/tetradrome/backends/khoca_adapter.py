@@ -23,7 +23,7 @@ homological grading is untouched, so do not describe it as one.
 
 The calculator returns ``[reduced, unreduced]``; only the unreduced half feeds the
 canonical rows, since ``khovanov_homology`` and ``rational_khovanov_homology`` are both
-unreduced theories (ADR 0001). The discarded reduced half is real, computed data and is
+unreduced theories. The discarded reduced half is real, computed data and is
 the cheapest available oracle for a future reduced row -- see homology-engine.md section
 7, Phase 9, and roadmap/research/khtpp.md.
 
@@ -36,7 +36,7 @@ from __future__ import annotations
 
 _COVERED = {"khovanov_homology", "rational_khovanov_homology"}
 
-# Canonical invariant -> khoca coefficient_ring. F2 is the unmarked default per ADR 0001;
+# Canonical invariant -> khoca coefficient_ring. F2 is the unmarked default (SPEC 7);
 # each field is computed natively rather than derived from an integral run.
 _RING_FOR_INVARIANT = {
     "khovanov_homology": 2,          # F_2
@@ -74,7 +74,7 @@ def raw_khoca(knot, ring: int) -> list:
 
 
 class KhocaValidator:
-    """Read-only cross-check against khoca (SPEC 6, ADR 0006)."""
+    """Read-only cross-check against khoca (SPEC 6)."""
 
     name = "khoca"
     covered_invariants = _COVERED

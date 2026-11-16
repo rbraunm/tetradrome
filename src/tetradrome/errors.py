@@ -4,7 +4,7 @@
 """Public error types.
 
 No silent fallbacks: Tetradrome raises loudly rather than returning a plausible
-wrong answer (decisions/0004-validate-by-default-error-policy). The remaining
+wrong answer. The remaining
 members of the error set (ConventionMismatch, ExportHashMismatch) are added here as
 the code that raises them lands.
 """
@@ -23,4 +23,4 @@ class BackendUnavailable(TetradromeError):
 
 
 class UnvalidatedResult(TetradromeError):
-    """A result could not be validated under validate="strict" or "soft" (decisions/0004)."""
+    """A result could not be validated under validate="strict" or "soft"."""

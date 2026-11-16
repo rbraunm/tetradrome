@@ -14,11 +14,11 @@ from typing import Any
 
 @dataclass(frozen=True)
 class Provenance:
-    """How a result was produced (ADR 0013).
+    """How a result was produced.
 
     Records the backend and its version, the method, the inputs, and the versions of the
     computational libraries that can move the answer. For a pure-native computation that library
-    set is just the interpreter -- which is the point: nothing external moved the number (ADR 0006),
+    set is just the interpreter -- which is the point: nothing external moved the number,
     so the provenance chain is as short as it can honestly be.
     """
 
@@ -31,7 +31,7 @@ class Provenance:
 
 @dataclass(frozen=True)
 class ValidatorRecord:
-    """One validator's verdict on a result (ADR 0013).
+    """One validator's verdict on a result.
 
     KnotInfo is recorded as one of these, never as a special case.
     """
@@ -43,7 +43,7 @@ class ValidatorRecord:
 
 @dataclass(frozen=True)
 class ValidationStatus:
-    """The validators consulted for a result and their verdicts (SPEC 5, ADR 0013).
+    """The validators consulted for a result and their verdicts (SPEC 5).
 
     A result is validated when at least one validator passed; it has a disagreement when any
     validator that ran disagreed (the fail-loud trigger). ``d_squared_check`` is deliberately

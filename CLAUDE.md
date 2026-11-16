@@ -5,18 +5,18 @@ smooth 4-dimensional topology -- the Khovanov, Lee, and knot Floer homologies, t
 Rasmussen *s*-invariant, tau, epsilon, nu, and the classical and concordance invariants --
 for knots, links, and braids, on one normalized, fully-provenanced surface.
 
-Authoritative design lives in `SPEC.md`, `roadmap/decisions/` (esp. 0006, 0007, 0009),
-and `roadmap/design/homology-engine.md`. Those govern on any conflict with this file or
-with older "orchestration" language surviving elsewhere in the tree.
+The rules and interfaces are in `SPEC.md`; engine design is in
+`roadmap/design/homology-engine.md` and `roadmap/design/scheduler.md`. Those govern on any
+conflict with this file. There are no decision records: a rule is stated once, where it is used.
 
 ## Core principles (these are the project, not preferences)
-- **Native compute path (decision 0006).** Tetradrome computes each invariant with its own code. Existing tools (Spherogram/SnapPy, `knot_floer_homology`, KnotJob/Khoca, KnotInfo, SageMath) are opt-in validators and gold-master checks ONLY -- never a runtime dependency of a computation. Do not add an orchestration path that calls them to produce an answer.
-- **No heuristics in the core (decision 0007).** Only exact, answer-preserving reductions may optimize a computation. The raw, faithful path is first-class and always runnable.
+- **Native compute path.** Tetradrome computes each invariant with its own code. Existing tools (Spherogram/SnapPy, `knot_floer_homology`, KnotJob/Khoca, KnotInfo, SageMath) are opt-in validators and gold-master checks ONLY -- never a runtime dependency of a computation. Do not add an orchestration path that calls them to produce an answer.
+- **No heuristics in the core.** Only exact, answer-preserving reductions may optimize a computation. The raw, faithful path is first-class and always runnable.
 - **Never present an unvalidated number as a fact.** Every result carries method, version, conventions, raw output, and an explicit validation status. The reporter distinguishes computation, obstruction, and theorem reference.
 
-## Validation policy (decisions 0004, 0006, 0013)
+## Validation policy
 Backing a computation and validating it are separate concerns. Tetradrome always BACKS a result
-with its own native code (decision 0006); an external tool may only VALIDATE it. `compute(...,
+with its own native code; an external tool may only VALIDATE it. `compute(...,
 validate=...)` is a three-mode enum:
 - **strict (default).** Wherever a computed oracle for the invariant exists anywhere, it is REQUIRED. A missing required oracle raises -- the message says whether it is not installed (run `scripts/install_oracles.sh`) or not yet wired -- and ANY oracle that runs and disagrees raises. KnotInfo rides along as an extra cross-check, never the primary validator.
 - **soft.** Use the computed oracle if installed; otherwise fall back to KnotInfo with an info message noting that strict would have raised, distinguishing "not installed" (provisioning gap) from "not wired" (dev gap). A computed oracle that runs and DISAGREES still raises: soft tolerates absence, never disagreement.
@@ -26,7 +26,7 @@ Multi-oracle rule: a result is validated when at least one oracle agrees, and AN
 and disagrees raises. KnotInfo is a fallback of last resort -- used only when no computed oracle
 exists anywhere for the invariant, not merely when one is absent from this host.
 
-Provenance is the deliverable (decision 0013). Every result records the mathematics (backend and
+Provenance is the deliverable. Every result records the mathematics (backend and
 version, method, inputs), each validator's identity, version, and verdict, and the versions of the
 computational libraries that can move an answer. The recorded version is the reproducibility, so we
 apply updates rather than pin and let the run record what it converged to. This is also why
@@ -49,7 +49,7 @@ silently fall back to the reference path and report success -- that hides a brok
 environment and produces misleading benchmarks.
 
 ## Speed is subordinate to correctness (warn, never gate)
-Tetradrome's thesis is auditability and correctness over speed (SPEC, decisions 0006/0007):
+Tetradrome's thesis is auditability and correctness over speed (`SPEC.md` section 2):
 a validated number beats a fast one, and faithful-but-slow beats fast-but-wrong or
 fast-but-won't-install. The comparison artifact (tetradrome vs the gold-master oracles)
 reports times and the measured gap as DATA -- never a pass/fail, threshold, or gate. Do NOT
@@ -104,10 +104,10 @@ needs no password, streams output live, and exits with the remote command's stat
       python tools/ct_exec.py -- 'cat /tmp/job.log'
 
 ## Oracle setup (scripts/install_oracles.sh)
-The comparison oracles are opt-in validators ONLY (decision 0006), never a runtime dependency.
+The comparison oracles are opt-in validators ONLY, never a runtime dependency.
 `scripts/install_oracles.sh` makes a box oracle-ready and is a first-class project artifact: run it
 at the START of a session and let it manage the oracles. Never install an oracle ad-hoc -- a stray
-`pip install` leaves an unrecorded version, which defeats decision 0013. It is the sandbox sibling
+`pip install` leaves an unrecorded version, which defeats provenance. It is the sandbox sibling
 of `scripts/provision_runner.py` (which stands up CT 250 itself).
 
 It is idempotent, update-aware, and fail-loud. A reachability preflight aborts on any
@@ -116,7 +116,7 @@ reinstalls: an oracle already at the current upstream is left alone, one with an
 rebuilt, a missing one is installed, and only oracles that changed this run are re-smoked. A
 converged re-run does no compile and ends with "All oracles present and current -- good to
 proceed"; a run that changed something ends with "changes applied this run -- good to proceed". It
-reports the exact version of every oracle it converged to (decision 0013).
+reports the exact version of every oracle it converged to.
 - `scripts/install_oracles.sh` -- converge, apply updates, verify.
 - `scripts/install_oracles.sh --check` -- dry run: report each oracle's version and update state, change nothing (nonzero exit only if any are missing).
 - `VERIFY=1 scripts/install_oracles.sh` -- additionally re-run every smoke even when converged.

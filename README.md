@@ -18,7 +18,7 @@ The motivating example is the Conway knot, whose smooth sliceness Lisa Piccirill
 
 **It isn't:**
 - a claim that no tooling exists — it credits and validates against the tools listed below;
-- a layer that calls those tools to produce its answers (`roadmap/decisions/0006`);
+- a layer that calls those tools to produce its answers (`SPEC.md` section 2);
 - a generator of new theorems, or a proof assistant;
 - a thing that calls a knot "slice" because an obstruction happens to vanish.
 
@@ -46,7 +46,6 @@ input: name / PD code / braid word
 | Topic | Where |
 |---|---|
 | Scope, principles, result schema, validator contract, canonical names, public API | `SPEC.md` |
-| Decisions | `roadmap/decisions/` |
 | Engines, and how calculations run | `roadmap/design/homology-engine.md`, `roadmap/design/scheduler.md` |
 | Conventions and validation | `docs/conventions.md`, `docs/validation.md` |
 | What each oracle computes | `docs/backend_matrix.md` |
@@ -66,7 +65,7 @@ t = td.knots.from_braid([1] * 15)
 det = td.invariants.compute(t, "determinant", validate="off")   # -> 15, empty validation record
 ```
 
-Validation is a mode (decision 0004). `"strict"`, the default, requires a computed oracle
+Validation is a mode (`SPEC.md` section 6). `"strict"`, the default, requires a computed oracle
 wherever one exists and raises rather than return an unchecked value. `"soft"` falls back to
 KnotInfo when the computed oracle is absent. `"off"` skips validation and still records
 provenance. The off-table call above needs `"off"` unless SageMath is installed: a braid

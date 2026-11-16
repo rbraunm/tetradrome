@@ -16,8 +16,8 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Mathematics",
 ]
 # KnotInfo (database_knotinfo) supplies the tabulated diagrams and is the validation
-# oracle -- core. Everything else is optional: external tools only validate (decision
-# 0006) and are installed by the user, never vendored (docs/existing_tools.md).
+# oracle -- core. Everything else is optional: external tools only validate
+# and are installed by the user, never vendored (docs/existing_tools.md).
 dependencies = ["database_knotinfo"]
 
 [project.optional-dependencies]

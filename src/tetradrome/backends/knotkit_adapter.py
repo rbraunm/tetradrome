@@ -70,7 +70,7 @@ def parse_s(text: str) -> int:
 
 
 class KnotkitValidator:
-    """Read-only cross-check against knotkit (SPEC 6, ADR 0006)."""
+    """Read-only cross-check against knotkit (SPEC 6)."""
 
     name = "knotkit"
     covered_invariants = _COVERED

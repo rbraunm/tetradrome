@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Randy Braunm
 
-"""Bit-packed F2 rank reducers -- the first acceleration tier (decision 0003).
+"""Bit-packed F2 rank reducers -- the first acceleration tier.
 
 Two flavours, both computing the same GF(2) column rank as the reference
 `reduce_reference.f2_rank`, and both required to agree with it exactly (the agreement

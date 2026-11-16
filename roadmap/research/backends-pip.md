@@ -72,13 +72,12 @@ but are decorated `@_sage_method` and raise unless running inside Sage. So
   critical path for anything Khovanov-side, because Spherogram alone will not
   deliver them.
 
-## License note (for the licensing decision record)
+## License note
 
 Both backends are **GPLv2+** and are consumed by `import`, not subprocess. The
-SPEC 20 / README posture (Apache 2.0, original code, call-not-vendor, optional
+SPEC 9 / README posture (Apache 2.0, original code, call-not-vendor, optional
 user-installed deps) still holds: Tetradrome vendors none of their source and
-the user assembles the combination. The import-vs-subprocess nuance should be
-written up in the licensing decision record rather than left implicit.
+the user assembles the combination.
 
 ## Open items
 

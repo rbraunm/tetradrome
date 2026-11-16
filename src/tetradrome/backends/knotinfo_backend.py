@@ -6,7 +6,7 @@
 Read access to the offline KnotInfo table (`database_knotinfo`). Serves two roles:
 the source of structural data for tabulated knots (PD code, braid word) and the
 known-answer oracle for validation. It is optional: a missing install raises
-BackendUnavailable, never a silent fallback (decisions/0004).
+BackendUnavailable, never a silent fallback.
 
 KnotInfo names use the forms `3_1` (Rolfsen, <= 10 crossings) and `11n_34`
 (Hoste-Thistlethwaite, >= 11). `normalize_name` maps common spellings (a leading
@@ -119,7 +119,7 @@ def normalize_name(name: str) -> str:
 
 
 def version() -> str:
-    """The KnotInfo data-package version consulted -- KnotInfo's validator version (ADR 0013).
+    """The KnotInfo data-package version consulted -- KnotInfo's validator version.
 
     KnotInfo is a validator, so the reproducibility-relevant version is the ``database_knotinfo``
     distribution the answers are read from.
@@ -223,7 +223,7 @@ def known_answer(name: str, invariant: str):
     Integers (determinant, signature) come back as int; the Alexander polynomial comes
     back as ascending integer coefficients (a tuple), left in KnotInfo's raw form for
     the invariants layer to canonicalize. None means the oracle has no value
-    (blank/sentinel) -- it is never coerced to a default (decisions/0004).
+    (blank/sentinel) -- it is never coerced to a default.
     """
     if invariant == "alexander_polynomial":
         raw = lookup(name).get("alexander_polynomial_vector")

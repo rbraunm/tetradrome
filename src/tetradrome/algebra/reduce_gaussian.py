@@ -10,7 +10,7 @@ with a and b deleted, where every surviving column x picks up the zig-zag correc
     d'(x) = d(x) - <d(x), b> * lambda^{-1} * d(a)     (then drop the a, b components),
 
 lambda = <d(a), b>. This is exact -- identical homology and gradings -- and assumes
-nothing about the knot (decision 0007); delooping is already implicit in our generators
+nothing about the knot; delooping is already implicit in our generators
 (each resolution circle contributes the two V-labelled basis elements). Over a field,
 cancelling every unit leaves the zero differential, so the surviving generators ARE the
 homology: an independent homology algorithm that must agree with the rank-counting

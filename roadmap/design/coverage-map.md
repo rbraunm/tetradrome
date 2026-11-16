@@ -1,8 +1,8 @@
 # Coverage map: KnotInfo columns
 
 Which KnotInfo columns Tetradrome computes natively, which it plans to, and by what method.
-Each engine is validated against KnotInfo and the computed oracles, never wrapped around them
-(decision 0006). The 4-dimensional objects these invariants feed are mapped in
+Each engine is validated against KnotInfo and the computed oracles, never wrapped around them.
+The 4-dimensional objects these invariants feed are mapped in
 `four-manifold-objectives.md`.
 
 Column names are the machine keys from `database_knotinfo` (248 fields: 124 columns, each with
@@ -65,7 +65,7 @@ Two limits:
 | `khovanov_odd_*` (Z, Q, mod2) | odd Khovanov homology (Ozsváth–Rasmussen–Szabó) — a sibling engine |
 | `width` | homological width of (integral) Khovanov |
 | `turaev_genus` | Turaev surface from the diagram (combinatorial) |
-| `hfk_polynomial` at scale | Ozsváth–Szabó bordered-algebra Floer engine (arXiv:1707.00597, arXiv:1912.01657; the algorithm of Szabó's HFK calculator) — does not pay n!, so it reaches past the grid wall. A class (A) route (decision 0011): it must agree with the grid reference. Not the same lever as `homology-engine.md` §7 Phase 8, which changes the grid complex's representation, not the algorithm |
+| `hfk_polynomial` at scale | Ozsváth–Szabó bordered-algebra Floer engine (arXiv:1707.00597, arXiv:1912.01657; the algorithm of Szabó's HFK calculator) — does not pay n!, so it reaches past the grid wall. A class (A) route (`homology-engine.md` section 6): it must agree with the grid reference. Not the same lever as `homology-engine.md` §7 Phase 8, which changes the grid complex's representation, not the algorithm |
 | `monodromy` | open-book monodromy of fibered knots (from the fibration) |
 | `nakanishi_index`, `torsion_numbers` | Alexander module structure (minimal generators / torsion) |
 | `braid_index` | MFW (HOMFLY) lower bound + Seifert-circle upper bound; sharp for most |

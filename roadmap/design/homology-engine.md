@@ -2,15 +2,8 @@
 
 The engines behind the homological invariants: Khovanov, Lee, Rasmussen *s*, and knot Floer.
 
-Governed by decisions
-[0003](../decisions/0003-native-coefficient-field.md) (F2 first),
-[0006](../decisions/0006-no-external-compute-backends.md) (native compute; external tools only validate),
-[0007](../decisions/0007-faithful-raw-path-no-heuristics.md) (faithful raw path; exact reductions only),
-[0008](../decisions/0008-memory-prediction-gate.md) (memory gate),
-[0010](../decisions/0010-defer-gpu-kernel.md) (on-device GPU kernel deferred),
-[0011](../decisions/0011-harden-the-brute-reference.md) (hardening the brute reference; the (B)/(A)/(C) classes) and
-[0012](../decisions/0012-performance-and-cost-architecture.md) (one cost model).
-How calculations run is in [scheduler.md](scheduler.md).
+How calculations run is in [scheduler.md](scheduler.md). The project's rules are in
+`SPEC.md` section 2.
 
 Code comments cite this document by section and phase number, so those numbers stay fixed.
 
@@ -51,9 +44,8 @@ FRONT ENDS (one per theory)
   ranks. Every reduction tier lives here, so every front end gets it.
 - **The Seifert-form engine** is outside this: a 2g×2g dense integer matrix.
 - **Not built:** the Ozsváth–Szabó bordered-algebra algorithm (arXiv:1707.00597,
-  arXiv:1912.01657), which Szabó's HFK calculator implements. It does not pay n!. Under
-  decision 0011 it is a class (A) route: a separate fast path that must agree with the grid
-  reference.
+  arXiv:1912.01657), which Szabó's HFK calculator implements. It does not pay n!. It is a
+  class (A) route (section 6): a separate fast path that must agree with the grid reference.
 
 ```text
 src/tetradrome/
@@ -109,11 +101,15 @@ available raises.
 - **ℚ.** `compute()` uses exact `Fraction` reduction (`rational_reduce.py`).
 - **`multimodular.py`** takes the rank over ℚ as the largest rank mod three large primes. A
   bad prime can only lower a rank, so the result is the rank unless every prime is bad. That
-  is a probabilistic rank, which section 4 bans from the core, so `compute()` does not use it.
-  It is tested equal to the exact reducer. Whether it stays is open.
+  is a probabilistic rank, which section 4 bans from the core, so no calculation uses it.
+  It is tested equal to the exact reducer and kept as the starting point for an exact
+  multimodular reducer.
 - **GPU.** `gpu.py` detects the device and derives the VRAM budget from the card. The
   threshold below which the CPU wins is an explicit knob, never a hidden default
-  (`memory.route_backend`, used by `scripts/bench_reducers.py`).
+  (`memory.route_backend`, used by `scripts/bench_reducers.py`). The dense kernel is correct
+  and slower than `bitint` at every size measured (section 6). A kernel that stays on the
+  device (bit-packed columns, no host sync per column) is built only when there is a
+  calculation the CPU tiers cannot finish, and must equal the reference like every tier.
 - **Choosing a tier in a run.** A reduction job declares a CPU path for the named tier, and
   under `backend="auto"` a GPU path as well when a CUDA reducer is present. The scheduler
   chooses between them ([scheduler.md](scheduler.md)).
@@ -122,7 +118,7 @@ available raises.
 
 ## 4. Faithfulness
 
-No lossy shortcut, heuristic or probabilistic rank in the core (decision 0007).
+No lossy shortcut, heuristic or probabilistic rank in the core.
 
 | Allowed: exact reductions | Banned: heuristics |
 |---|---|
@@ -139,13 +135,13 @@ How it is enforced:
 
 ## 5. Memory gate
 
-A calculation that will not fit is refused with the number before it starts (decision 0008).
+A calculation that will not fit is refused with the number before it starts.
 
 - **Exact, from the diagram, with nothing built.** Khovanov: `unreduced_size(pd)` sums
   2^(circles) over the 2^c states. Floer: the grading histogram counts generators per
   (Alexander, Maslov) over the n! states in slices, with no differential; its dimensions are
   the reducer's matrix sizes.
-- **Cost model** (`algebra/memory.py`, decision 0012). A boundary block of `cols` columns
+- **Cost model** (`algebra/memory.py`). A boundary block of `cols` columns
   into `rows` rows costs `(cols + min(cols, rows)) * ceil(rows / 64) * 8` bytes: the packed
   matrix plus its pivots. A grading's peak is the largest block over its degrees.
 - **The gate.** Every job declares the RAM and VRAM each of its paths needs. The scheduler
@@ -162,14 +158,30 @@ Times are data, never a gate.
 | Measured | Result |
 |---|---|
 | CPU reducers | `bitint` is the fastest in every regime tested; small dense blocks favour the CPU tiers |
-| Dense GPU kernel | correct; about 14 times slower than `bitint` at 2048 × 2048, because it syncs with the host once per column (decision 0010) |
+| Dense GPU kernel | correct; about 14 times slower than `bitint` at 2048 × 2048, because it syncs with the host once per column |
 | Grid Floer, grid number 10 (3.6 million states), 32-CPU two-socket container | HFK-hat 78 s, τ 487 s ([scheduler.md](scheduler.md)) |
 | Grid Floer, grid number 11 (39.9 million states) | does not fit: over 200 GiB |
 
 Szabó's calculator runs a different algorithm (section 2), so its times are not a
 constant-factor target for the grid engine. `BENCHMARKS.md` records both.
 
-Candidate accelerations, each with its decision-0011 class, are in
+**Speedups.** Making a reference faster by exact means is in scope: its speed sets how large
+a case can be reached and how much cross-checking can be afforded. The gain is a constant
+factor. A reference that builds its whole complex before reducing it still grows as n! (grid
+Floer) or 2^c (Khovanov); an algorithm that never builds the whole complex can escape that
+(arXiv:2601.02119, closed 3-braids in polynomial time). Every proposed speedup is classed
+before it is built:
+
+| Class | What it is | Rule |
+|---|---|---|
+| (B) | an answer-preserving transform of the same complex: delooping, local elimination, clearing, implicit reduction, incremental generation, iterative sparse rank, discrete-Morse cancellation | allowed in the core, in generation as well as reduction; optional, and verified equal to the reference |
+| (A) | a different algorithm, such as bordered or tangle Floer | a separate fast path that must agree with the brute reference; never the reference itself |
+| (C) | a smaller input: diagram simplification | allowed; the reference must still run on the input as given |
+
+Effort goes to the engine that limits the target at hand: what can be reached in 4-dimensional
+topology is the intersection of what each required invariant can reach.
+
+Candidates, each with its class, are in
 [`../research/engine-acceleration-catalog.md`](../research/engine-acceleration-catalog.md).
 
 ## 7. Phases
@@ -184,11 +196,11 @@ the reference it must agree with.
 | 2. Khovanov over F2 | unreduced cube complex: enhanced states, gradings, differential; size from the diagram | done; validated against KnotInfo's mod-2 ranks | |
 | 3. Lee and *s* | signed Khovanov over ℚ; the Lee deformation; *s* from the quantum filtration; exact `Fraction` arithmetic | done; validated against KnotInfo for s = 0, ±2, ±4, ±6 | KnotInfo has s = 2τ on every row, so a check that tells s from 2τ needs an off-table knot such as 14n19265 (`docs/validation.md`). A calculation is one job; its build and per-grading reductions are not split |
 | 4. Exact reductions | Gaussian cancellation over F2 and ℚ (`reduce_gaussian.py`), verified `raw == reduced` | done, as a reference: it rescans for a pivot at each step | It cancels after the full cube is built. Cancelling while building (Bar-Natan scanning) is not implemented |
-| 5. Reduction tiers | `bitint`, numpy words, Numba, the dense GPU kernel; the tier registry; GPU detection; size and cost prediction | done; every tier equals the reference, GPU and Numba confirmed on hardware | On-device GPU kernel deferred (decision 0010). `multimodular.py` (section 3) |
+| 5. Reduction tiers | `bitint`, numpy words, Numba, the dense GPU kernel; the tier registry; GPU detection; size and cost prediction | done; every tier equals the reference, GPU and Numba confirmed on hardware | On-device GPU kernel and `multimodular.py` (section 3) |
 | 6. Grid Floer | grid model, gradings, bigraded and filtered differentials, HFK-hat, three-genus, τ; in `compute()`; validated by `knot_floer_homology` and KnotInfo | done to grid number 10. Default tests cover the 13 roster knots of grid number ≤ 8; `pytest --heavy` covers the 185 of grid number ≤ 10 | Off-table knots: the grid comes from KnotInfo's `grid_notation`. Grid number 11. τ's rank and level search are two long single jobs on the set-based reducer. No test sends an oversized grid through the gate (the refusal is tested with synthetic jobs) |
 | 7. Filtered complex as an artifact | (a) the bigraded grid complex with its bifiltered differential as a serializable object: generators with (Maslov, Alexander), arrows with their O- and X-crossing counts. (b) Reduction over F2, by filtered change of basis, to the simplified CFK (staircase ⊕ boxes). (c) ε, ν and Υ(t) read from the reduced model | planned | Oracles: ε and ν against KnotInfo and `knot_floer_homology`; the reduced complex against `knot_floer_homology` (`complex=True`); Υ against torus-knot closed forms. KnotInfo has no Υ column and Szabó's calculator does not output Υ; `yui-hfk` is a candidate oracle. Same grid-number bound as Phase 6 |
 | 8. Compact grid representation | generators named by lexicographic rank; slice results as columnar arrays; complexes stored CSC | built in the scheduled path. `grid_complexes` keeps permutation tuples as the readable oracle | Grid number 11 still does not fit. An on-disk form of the complex, decided with Phase 7 (a) |
-| 9. Reduced Khovanov | the basepoint-reduced complex: the subcomplex of enhanced states that label the basepoint circle *x*. A front-end change in `engines/khovanov/gradings.py::enhanced_generators`; the back end is untouched. F2 first | planned | Pin the *q*-shift against KnotInfo's `khovanov_reduced_mod2_vector`. Self-check: the result is the same at two basepoints. Wire a computed oracle: Khoca already returns the reduced theory, knotkit has `kk kh -r`, kht++ covers knots with a braid word (`../research/khtpp.md`, `../research/knotkit.md`). The canonical name follows decision 0001 |
+| 9. Reduced Khovanov | the basepoint-reduced complex: the subcomplex of enhanced states that label the basepoint circle *x*. A front-end change in `engines/khovanov/gradings.py::enhanced_generators`; the back end is untouched. F2 first | planned | Pin the *q*-shift against KnotInfo's `khovanov_reduced_mod2_vector`. Self-check: the result is the same at two basepoints. Wire a computed oracle: Khoca already returns the reduced theory, knotkit has `kk kh -r`, kht++ covers knots with a braid word (`../research/khtpp.md`, `../research/knotkit.md`). The canonical name follows `SPEC.md` section 7 |
 
 The Floer roster is the KnotInfo knots with HFK, τ and three-genus all tabulated (2,977),
 filtered by grid number: 13 at ≤ 8, 41 at ≤ 9, 185 at ≤ 10. `floer_roster` derives it from the
@@ -214,6 +226,6 @@ installed table.
 Code comments call the KnotInfo comparisons of Phases 2 and 3 "Phase 2c" and "Phase 3c".
 
 "Reduced" has three unrelated senses here. In Phase 9 and `coverage-map.md` it is the
-basepoint-reduced theory. In section 4, Phase 4 and decision 0007, `raw == reduced` is the
+basepoint-reduced theory. In section 4 and Phase 4, `raw == reduced` is the
 Gaussian-cancelled complex. In Phase 7 and `four-manifold-objectives.md`, the reduced
 filtered complex is the simplified CFK.

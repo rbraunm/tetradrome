@@ -5,7 +5,7 @@
 
 This is the faithful reference (homology-engine design section 7, Phase 1) --
 correctness and obviousness over speed. Every later reducer (bit-packed F2, JIT, GPU)
-must agree with it (SPEC.md 2). F2 only for now (decision 0003).
+must agree with it (SPEC.md 2). F2 only for now.
 
 For a cochain complex with d^n: C^n -> C^(n+1),
 
@@ -123,7 +123,7 @@ def homology(cx: GradedComplex, *, verify: bool = True) -> dict[int, int]:
     """F2 homology of the complex `cx`, as {degree: dim H^n} for every degree with
     non-zero homology (an omitted degree has H^n = 0).
 
-    By default `cx` is checked for d^2 = 0 first (decision 0004): the homology of a
+    By default `cx` is checked for d^2 = 0 first: the homology of a
     non-complex is meaningless, so we refuse loudly rather than return a number. Pass
     `verify=False` to skip that O(edges) check when the caller has already run it --
     the impossible-result backstop below still fires regardless.

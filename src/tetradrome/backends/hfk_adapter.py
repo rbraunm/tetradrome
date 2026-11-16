@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Randy Braunm
 
-"""Szabo's HFK calculator as a validator (SPEC 6; ADR 0006).
+"""Szabo's HFK calculator as a validator (SPEC 6).
 
 ``knot_floer_homology`` (kfh) wraps Szabo's HFKcalc: given a planar diagram it computes HFK-hat,
 the Ozsvath-Szabo tau invariant, and the Seifert genus. This adapter exposes it behind the one
 validator contract, so it only ever cross-checks the native grid engine -- it never produces the
-value a user receives (ADR 0006). The import is guarded: kfh is an optional cross-check, not a
+value a user receives. The import is guarded: kfh is an optional cross-check, not a
 runtime dependency.
 
 Naming and conventions. kfh reports its own spellings (``tau``, ``seifert_genus``, ``ranks``);

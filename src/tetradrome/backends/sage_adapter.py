@@ -180,7 +180,7 @@ def candidate_labels(invariant: str) -> tuple[str, ...]:
 
 
 class SageValidator:
-    """Read-only cross-check against Sage (SPEC 6, ADR 0006), transforms verified
+    """Read-only cross-check against Sage (SPEC 6), transforms verified
     on CT 250 (see the module docstring for the run's provenance)."""
 
     name = "sage"

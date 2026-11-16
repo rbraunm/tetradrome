@@ -4,8 +4,8 @@
 """The shared, invariant-agnostic algebra back end (SPEC.md 4).
 
 Front ends (Khovanov, Lee, later Floer) emit graded chain complexes; this package
-reduces them to homology. Two lanes behind one interface: an F2 fast lane (decision
-0003) and a rational lane for what Lee / Rasmussen need. See
+reduces them to homology. Two lanes behind one interface: an F2 fast lane
+and a rational lane for what Lee / Rasmussen need. See
 roadmap/design/homology-engine.md.
 """
 from .complex import GradedComplex

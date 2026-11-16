@@ -1,6 +1,6 @@
 # Contributing to Tetradrome
 
-The design and engineering rules are in `SPEC.md`, `roadmap/decisions/` and `CLAUDE.md`:
+The design and engineering rules are in `SPEC.md` and `CLAUDE.md`:
 native compute, validation, no silent fallbacks, and identical answers from every faster
 path. This file adds three rules.
 
@@ -9,7 +9,7 @@ path. This file adds three rules.
 `scripts/install_oracles.sh` is the single source of every validator on a host. Run it at
 the start of a session and do not hand-install an oracle: a stray `pip install` or manual
 build leaves a version the run never recorded, and the recorded version is the
-reproducibility (decision 0013).
+reproducibility.
 
 - `scripts/install_oracles.sh` converges the host: installs what is missing, applies
   upstream updates, rebuilds a source oracle only when its upstream moved, re-smokes only

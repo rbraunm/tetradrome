@@ -3,8 +3,7 @@
 
 """Graded cochain complexes over Q -- the generic-field lane of the back end.
 
-GradedComplex (F2) is the fast lane for Khovanov mod 2 (decision 0003, the bit-set
-GF(2) representation foreshadowed there). This is its rational counterpart, sitting
+GradedComplex (F2) is the fast lane for Khovanov mod 2. This is its rational counterpart, sitting
 beside it behind the same conceptual interface rather than as a parallel stack -- the
 field-tested pattern keeps an F2 fast path next to a general-field one (Ripser defaults
 to F2 with prime-field support opt-in; PHAT separates the column representation from the
@@ -14,7 +13,7 @@ Khovanov is Conway-mutation-invariant, hence blind to what s sees.
 
 Coefficients are exact rationals (fractions.Fraction). Multimodular reduction -- run mod
 several primes, then CRT + rational reconstruction -- is a fixed-width *optimization* for
-the acceleration phase (decision 0007); the faithful reference is exact Q arithmetic.
+the acceleration phase; the faithful reference is exact Q arithmetic.
 
 Representation mirrors GradedComplex, with one change: a boundary map is a rational
 matrix, so a column is the mapping {row index -> coefficient} of its non-zero entries,
@@ -106,7 +105,7 @@ class RationalComplex:
     def verify_d_squared(self) -> None:
         """Check d^(n+1) . d^n = 0 over Q at every degree; raise on the first
         violation. A non-zero composite means the front end's differential is wrong --
-        exactly the kind of bug to surface loudly (decision 0004)."""
+        exactly the kind of bug to surface loudly."""
         for n in self._dims:
             if n + 1 not in self._maps:
                 continue  # d^(n+1) is the zero map, so the composite is zero

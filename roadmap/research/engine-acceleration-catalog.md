@@ -1,7 +1,7 @@
 # Research: engine acceleration catalog
 
 Candidate accelerations for the brute reference paths, gathered so the research survives
-between sessions. Governed by [ADR 0011](../decisions/0011-harden-the-brute-reference.md):
+between sessions. Governed by the speedup classes of `../design/homology-engine.md` section 6:
 every entry is tagged with its **(B)/(A)/(C)** class, the core may use only the exact
 **(B)** ones, and the realistic ceiling is constant-factor on an irreducible floor. This
 note is a menu of *candidates*, not committed work; it feeds engine **Phases 5–6**, and
@@ -21,7 +21,7 @@ Each engine is a **brute reference** = a combinatorial explosion, split into two
 
 A technique attaches to one or both phases. The explosion is the engine's floor:
 exact work pushes the reachable size out a few units and lowers the constant, never the
-growth (0011). The three classes, recapped:
+growth. The three classes, recapped:
 
 - **(B)** answer-preserving transform of the *same* complex — permitted in the core,
   toggleable, verified `== reference`.
@@ -44,7 +44,7 @@ growth (0011). The three classes, recapped:
 Done and validated, so these are headroom for high-crossing inputs, not blockers.
 The historically decisive lever here is **delooping + local Gaussian elimination**
 (Bar-Natan's divide-and-conquer / "Gaussian elimination made abstract"): it shrinks the
-cube so much that the residual field linear algebra is small. ADR 0007 already names it;
+cube so much that the residual field linear algebra is small. The engine design already names it;
 it is exact (a chain-homotopy equivalence), so it leads. Its cost is not uniform:
 arXiv:2601.02119 gives a polynomial-time algorithm for closed 3-braids, shows plain
 scanning is exponential on some 3-braid families, and gives a modified scanning that is
@@ -66,7 +66,7 @@ levers, in rough leverage order:
 - **(C) Grid simplification first.** Reducing n by even one or two via Cromwell
   moves / destabilization is a *factorial* win — larger than any (B) gain — because the
   complex is `n!`. It is what the field does (Droz; Culler's gridlink "simplify"). It
-  depends on a smaller diagram existing, so per 0011 it is never the floor; the brute
+  depends on a smaller diagram existing, so it is never the floor; the brute
   path must still run on the diagram as given.
 - **(B) Differential `O(n³)→O(n²)`.** Replace the rebuilt-set emptiness scan with an
   order-structure / prefix-count test (the state is a permutation — one point per
@@ -98,15 +98,14 @@ is branchy and early-exiting (warp divergence) with variable-length per-state ou
 generation may be output-bound rather than compute-bound; if a GPU generation kernel is
 ever built it should be *fused* (unrank + grade + differentiate + feed the on-device
 reducer) so the block never leaves the card. The **GPU reduction** target is block-Lanczos
-over F2 (fill-in-free, SpMM-shaped), consistent with the deferral in
-[0010](../decisions/0010-defer-gpu-kernel.md).
+over F2 (fill-in-free, SpMM-shaped), consistent with `../design/homology-engine.md` section 3.
 
 ### Shared F2 reducer
 The reducer every engine calls. **Clearing** (use `∂²=0` to skip vanishing columns) and
 **implicit reduction** (recompute columns instead of storing the matrix) are exact and
 cut both time and memory. For the rank step at scale, **M4RI** (method of the four
 Russians) and the **block Lanczos / Wiedemann** iterative methods avoid fill-in entirely
-by working through sparse matrix×block products. ADR 0010 defers the on-device GPU kernel;
+by working through sparse matrix×block products. The on-device GPU kernel is not built;
 when it is built, block-Lanczos-over-F2 SpMM is the structural target it should aim at.
 
 ## Technique reference (provenance)
@@ -124,7 +123,7 @@ when it is built, block-Lanczos-over-F2 SpMM is the structural target it should 
 | Block Lanczos | B | reduction | Montgomery (1995) — dependencies over GF(2) |
 | Block Wiedemann | B | reduction | Coppersmith (1994), *Math. Comp.* 62:333–350; rank variant: Dumas & Giorgi |
 | Block Lanczos/Wiedemann on GPU | B | reduction | Schmidt et al. (2013) CUDA SpMV for NFS over GF(2), ~4–8× over multicore; 4-Russians GF(2) matmul on GPU |
-| M4RI (four Russians) | B | reduction | dense GF(2) elimination; noted as a target in ADR 0010 |
+| M4RI (four Russians) | B | reduction | dense GF(2) elimination; a target for the on-device GPU kernel |
 | W-precompute (additive Alexander sum) | B | generation | *(ours)* — derived from `gradings.py`; the winding-number form of the grid Alexander grading |
 | Differential `O(n³)→O(n²)` | B | generation | *(ours)* — order-structure emptiness test over a permutation, vs the current rebuilt-set scan in `differential.py` |
 | Gray-code permutation enumeration | B | generation | Steinhaus-Johnson-Trotter / plain changes; Knuth, TAOCP Vol. 4A |
@@ -135,12 +134,6 @@ when it is built, block-Lanczos-over-F2 SpMM is the structural target it should 
 
 ## Pointers
 
-- **Governing decision:** [0011](../decisions/0011-harden-the-brute-reference.md)
-  (Locked) — investment in the brute path, the irreducible floor, the (B)/(A)/(C) rule,
-  the binding-engine frontier.
-- **Related:** [0007](../decisions/0007-faithful-raw-path-no-heuristics.md) (exact-only,
-  no heuristics), [0008](../decisions/0008-memory-prediction-gate.md) (memory gate),
-  [0010](../decisions/0010-defer-gpu-kernel.md) (GPU deferral),
-  [0009](../decisions/0009-scope-smooth-4d-toolset.md) (4D scope).
 - **Design:** [`../design/homology-engine.md`](../design/homology-engine.md) §3
-  (reduction tiers), §6 (performance), §7 (phases).
+  (reduction tiers), §4 (exact only), §5 (memory gate), §6 (performance and the speedup
+  classes), §7 (phases).

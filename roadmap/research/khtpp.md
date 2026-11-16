@@ -8,7 +8,7 @@ format, so it is in the comparison roster: it measures the `khovanov_reduced` ta
 F2, and -- by the Shumakovitch tensor -- the native `khovanov_homology` (F2) row, verified
 against native. It is not a validator: F2 Khovanov already has three, and the reduced theory
 has no canonical name until `roadmap/design/homology-engine.md` section 7, Phase 9 builds a
-native engine (ADR 0006 makes an oracle a checker of a native computation, never a producer).
+native engine (an oracle checks a native computation and never produces one).
 
 Claims are marked **verified** (observed against native or another oracle) or **derived**.
 
@@ -129,7 +129,7 @@ theorem-backed transform, and onto nothing for the Q row.
 
 ## Cost ranking for Phase 9
 
-When a native reduced engine exists and needs a computed oracle (ADR 0006):
+When a native reduced engine exists and needs a computed oracle:
 
 1. **khoca** -- already computes the reduced half, and the benchmark measures it. No new
    provisioning at all.
@@ -143,6 +143,6 @@ When a native reduced engine exists and needs a computed oracle (ADR 0006):
 likely way someone wires the wrong thing:
 
 - here and in `coverage-map.md`: the **basepoint-reduced theory**;
-- in `homology-engine.md` section 4 / Phase 4 and ADR 0007, `raw == reduced`: the
+- in `homology-engine.md` section 4 / Phase 4, `raw == reduced`: the
   **Gaussian-cancelled** complex, an optimization;
 - in `four-manifold-objectives.md`: the **reduced filtered complex** for CFK-infinity.

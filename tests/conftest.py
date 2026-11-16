@@ -16,7 +16,7 @@ default. They hang off a single ``--heavy`` flag shared across all engines:
 So ``pytest`` is the sandbox-safe suite and ``pytest --heavy`` (on labradorite) is the full
 sweep. The gate is environmental -- "is this safe in the cheap ephemeral env?" -- not
 per-engine, so a new engine with a scaling wall reuses the same flag rather than adding its
-own. See roadmap/design/homology-engine.md section 7 and decisions/0011.
+own. See roadmap/design/homology-engine.md section 7.
 """
 from __future__ import annotations
 
