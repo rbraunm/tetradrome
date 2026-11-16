@@ -65,10 +65,11 @@ _TAU_ASSEMBLE = "tau_assemble"
 _SLICE_STATES = 4096
 _GEN_RECORD_BASE = 256
 _GEN_RECORD_PER_N = 128
-# What a forked slice worker makes private beyond its own state: the inherited interpreter pages
+# What a forked worker makes private beyond its own working set: the inherited interpreter pages
 # it touches. It grows with how long the worker lives, so it is sized from a loaded machine, where
-# slice workers of a grid-number-10 knot peaked at 76 MB private against a working set of 9 MB.
-_SLICE_FORK_BASE_BYTES = 80 * 2**20
+# slice workers of a grid-number-10 knot peaked at 76 MB private against a working set of 9 MB,
+# and tau rank and level workers ran up to 57 MB over their columns.
+_FORK_BASE_BYTES = 80 * 2**20
 # A histogram slice holds its states (n int64 each), their two gradings, and the stacked pairs it
 # counts; it builds no differential, so it takes far more states per job than a generation slice.
 _HISTOGRAM_SLICE_STATES = 65536
@@ -80,7 +81,6 @@ _TAU_SLICE_STATES = 16384
 # The set-based reducer holds each column as a Python set of row indices; measured on a
 # grid-number-10 knot at just over 1 KiB per column for both the rank and the level search.
 _TAU_COLUMN_BYTES = 1152
-_TAU_FORK_BASE_BYTES = 10 * 2**20
 
 
 def _reduce_run(inputs, deps):
@@ -230,7 +230,7 @@ def histogram_jobs(grid, *, slice_states: int = _HISTOGRAM_SLICE_STATES) -> tupl
             key=key, run=_histogram_slice_run, kind="floer.histogram_slice",
             inputs=(grid.O, grid.X, start, stop),
             paths=(ComputePath(Placement.CPU_PINNED, cores=1,
-                               ram_bytes=_SLICE_FORK_BASE_BYTES + (stop - start) * state_bytes),),
+                               ram_bytes=_FORK_BASE_BYTES + (stop - start) * state_bytes),),
             cost=float(stop - start),
         ))
         slice_keys.append(key)
@@ -264,7 +264,7 @@ def generation_jobs(grid, *, slice_states: int = _SLICE_STATES, merge_shards=Non
             key=key, run=_slice_run, kind="floer.generation_slice",
             inputs=(grid.O, grid.X, start, stop),
             paths=(ComputePath(Placement.CPU_PINNED, cores=1,
-                               ram_bytes=_SLICE_FORK_BASE_BYTES + (stop - start) * record),),
+                               ram_bytes=_FORK_BASE_BYTES + (stop - start) * record),),
             cost=float(stop - start),
         ))
         slice_keys.append(key)
@@ -379,7 +379,7 @@ def tau_jobs(grid, histogram: dict, *, slice_states: int = _TAU_SLICE_STATES) ->
             key=key, run=_tau_slice_run, kind="floer.tau_slice",
             inputs=(grid.O, grid.X, start, stop),
             paths=(ComputePath(Placement.CPU_PINNED, cores=1,
-                               ram_bytes=_SLICE_FORK_BASE_BYTES + (stop - start) * record),),
+                               ram_bytes=_FORK_BASE_BYTES + (stop - start) * record),),
             cost=float(stop - start),
         ))
         slice_keys.append(key)
@@ -388,7 +388,7 @@ def tau_jobs(grid, histogram: dict, *, slice_states: int = _TAU_SLICE_STATES) ->
         return Job(
             key=key, run=run, inputs={}, kind=f"floer.{key[0]}",
             paths=(ComputePath(Placement.CPU_PINNED, cores=1,
-                               ram_bytes=_TAU_FORK_BASE_BYTES + columns * _TAU_COLUMN_BYTES),),
+                               ram_bytes=_FORK_BASE_BYTES + columns * _TAU_COLUMN_BYTES),),
             dependencies=dependencies, cost=float(columns), shards=shards,
         )
 
@@ -398,7 +398,7 @@ def tau_jobs(grid, histogram: dict, *, slice_states: int = _TAU_SLICE_STATES) ->
     jobs.append(Job(
         key=merge_key, run=_tau_merge_run, inputs={}, kind="floer.tau_merge",
         paths=(ComputePath(Placement.CPU_PINNED, cores=1,
-                           ram_bytes=_SLICE_FORK_BASE_BYTES + 2 * (columns + count[-1]) * record),),
+                           ram_bytes=_FORK_BASE_BYTES + 2 * (columns + count[-1]) * record),),
         dependencies=slice_keys, cost=float(columns), shards=frozenset(shard),
     ))
     jobs.append(serial((_TAU_RANK,), _tau_rank_run, count[0], {shard["d0"]}))
