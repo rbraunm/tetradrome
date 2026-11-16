@@ -27,19 +27,24 @@ CPU does not.
 from __future__ import annotations
 
 import math
+from array import array
 from collections import defaultdict
 
 from ...algebra import (
     available_f2_backends,
     f2_homology,
+    f2_kernel,
+    f2_rank,
     grading_cost_ops,
     grading_peak_bytes,
+    pack_columns,
     predict_cost,
     predict_size,
     reduce_host_bytes,
 )
+from ...errors import TetradromeError
 from ...scheduler import ComputePath, Job, JobGraph, Placement, Shard
-from .generation import _build_complexes, _generate_slice, _histogram_slice
+from .generation import _build_complexes, _generate_slice, _histogram_slice, _tau_slice
 
 _REDUCE = "reduce"
 _ASSEMBLE = "assemble"
@@ -47,6 +52,11 @@ _SLICE = "gen_slice"
 _MERGE = "gen_merge"
 _HISTOGRAM_SLICE = "hist_slice"
 _HISTOGRAM_MERGE = "hist_merge"
+_TAU_SLICE = "tau_slice"
+_TAU_MERGE = "tau_merge"
+_TAU_RANK = "tau_rank"
+_TAU_LEVELS = "tau_levels"
+_TAU_ASSEMBLE = "tau_assemble"
 
 # Generation is not in the cost model (grading_histogram predicts reduction dims, not record
 # bytes), so a slice's working set and the merge's peak are priced by a per-record estimate: a
@@ -65,6 +75,12 @@ _SLICE_FORK_BASE_BYTES = 64 * 2**20
 _HISTOGRAM_SLICE_STATES = 65536
 _HISTOGRAM_STATE_BASE = 64
 _HISTOGRAM_STATE_PER_N = 8
+# A tau slice grades every state but builds the differential for Maslov 0 and 1 only, so it sits
+# between the two: more states per job than a generation slice, priced at the generation record.
+_TAU_SLICE_STATES = 16384
+# The set-based reference reducer holds each column as a Python set of row indices.
+_TAU_COLUMN_BYTES = 1024
+_TAU_FORK_BASE_BYTES = 10 * 2**20
 
 
 def _reduce_run(inputs, deps):
@@ -265,6 +281,133 @@ def generation_graph(grid, *, slice_states: int = _SLICE_STATES):
     equals the serial ``grid_complexes(grid)``."""
     jobs, merge_key = generation_jobs(grid, slice_states=slice_states)
     return JobGraph(jobs), merge_key
+
+
+def _tau_slice_run(inputs, deps):
+    return _tau_slice(inputs)
+
+
+def _tau_merge_run(inputs, deps):
+    # Fold the slices, in rank order, into the two boundary maps tau needs, each as CSC over
+    # array('i'): d0 from the Maslov 0 generators to the Maslov -1 ones and d1 from Maslov 1 to
+    # Maslov 0, rows and columns numbered by position in rank order -- the reference's matrices.
+    import numpy as np
+
+    slices = sorted(deps.values(), key=lambda piece: piece.start)
+
+    def joined(field):
+        return np.concatenate([getattr(piece, field) for piece in slices])
+
+    def csc(targets, counts, row_ranks, rows):
+        positions = np.searchsorted(row_ranks, targets)
+        inside = positions < row_ranks.shape[0]
+        if not inside.all() or not np.array_equal(row_ranks[positions], targets):
+            raise TetradromeError(
+                f"a filtered-differential target is not a Maslov {rows} generator; the filtered "
+                f"differential must lower Maslov by exactly one.")
+        indptr = np.zeros(counts.shape[0] + 1, dtype=np.int64)
+        np.cumsum(counts, out=indptr[1:])
+        return (array("i", positions.astype(np.int32).tobytes()),
+                array("i", indptr.astype(np.int32).tobytes()))
+
+    zero_ranks = joined("zeroRanks")
+    return {
+        "d0": csc(joined("zeroTargets"), joined("zeroCounts"), joined("minusRanks"), -1),
+        "d1": csc(joined("oneTargets"), joined("oneCounts"), zero_ranks, 0),
+        "alexander": array("i", joined("zeroAlexander").astype(np.int32).tobytes()),
+    }
+
+
+def _tau_rank_run(inputs, deps):
+    (csc,) = deps.values()
+    return f2_rank(csc)
+
+
+def _csc_columns(csc):
+    indices, indptr = csc
+    return [frozenset(indices[indptr[k]:indptr[k + 1]]) for k in range(len(indptr) - 1)]
+
+
+def _tau_levels_run(inputs, deps):
+    # The reference's level loop: the first Alexander level whose cycles are not all boundaries.
+    merge_key = (_TAU_MERGE,)
+    d0 = _csc_columns(deps[Shard(merge_key, "d0")])
+    d1 = _csc_columns(deps[Shard(merge_key, "d1")])
+    alexander_of = deps[Shard(merge_key, "alexander")]
+    rank_d1 = deps[(_TAU_RANK, 1)]
+    for level in sorted(set(alexander_of)):
+        below = [k for k in range(len(alexander_of)) if alexander_of[k] <= level]
+        cycles = [
+            frozenset(below[p] for p in relation)
+            for relation in f2_kernel([d0[k] for k in below])
+        ]
+        if f2_rank(pack_columns(d1 + cycles)) > rank_d1:
+            return level
+    return None
+
+
+def _tau_assemble_run(inputs, deps):
+    return (len(deps[Shard((_TAU_MERGE,), "alexander")]),
+            deps[(_TAU_RANK, 0)], deps[(_TAU_RANK, 1)], deps[(_TAU_LEVELS,)])
+
+
+def tau_graph(grid, histogram: dict, *, slice_states: int = _TAU_SLICE_STATES):
+    """A JobGraph for tau plus the assemble key, whose result is ``(Maslov-0 generator count,
+    rank d0, rank d1, level)``: the two ranks that fix dim H_0 of the filtered complex, and the
+    first Alexander level carrying the surviving class (None if no level does). Slices grade
+    the n! states and build the filtered differential of the Maslov 0 and 1 generators; a merge
+    folds them into the two boundary maps; the ranks and the level loop then run as jobs.
+
+    ``histogram`` is the grid's grading histogram; its Maslov -1, 0 and 1 generator counts price
+    the merge and the linear algebra before any matrix exists."""
+    total = math.factorial(grid.n)
+    slice_count = max(1, math.ceil(total / slice_states))
+    record = _record_bytes(grid.n)
+    count = {maslov: sum(generators for (_, degree), generators in histogram.items()
+                         if degree == -maslov) for maslov in (-1, 0, 1)}
+    jobs = []
+    slice_keys = []
+    for w in range(slice_count):
+        start = total * w // slice_count
+        stop = total * (w + 1) // slice_count
+        key = (_TAU_SLICE, w)
+        jobs.append(Job(
+            key=key, run=_tau_slice_run,
+            inputs=(grid.O, grid.X, start, stop),
+            paths=(ComputePath(Placement.CPU_PINNED, cores=1,
+                               ram_bytes=_SLICE_FORK_BASE_BYTES + (stop - start) * record),),
+            cost=float(stop - start),
+        ))
+        slice_keys.append(key)
+
+    def serial(key, run, columns, dependencies, shards=None):
+        return Job(
+            key=key, run=run, inputs={},
+            paths=(ComputePath(Placement.CPU_PINNED, cores=1,
+                               ram_bytes=_TAU_FORK_BASE_BYTES + columns * _TAU_COLUMN_BYTES),),
+            dependencies=dependencies, cost=float(columns), shards=shards,
+        )
+
+    merge_key = (_TAU_MERGE,)
+    shard = {name: Shard(merge_key, name) for name in ("d0", "d1", "alexander")}
+    columns = count[0] + count[1]
+    jobs.append(Job(
+        key=merge_key, run=_tau_merge_run, inputs={},
+        paths=(ComputePath(Placement.CPU_PINNED, cores=1,
+                           ram_bytes=_SLICE_FORK_BASE_BYTES + 2 * (columns + count[-1]) * record),),
+        dependencies=slice_keys, cost=float(columns), shards=frozenset(shard),
+    ))
+    jobs.append(serial((_TAU_RANK, 0), _tau_rank_run, count[0], {shard["d0"]}))
+    jobs.append(serial((_TAU_RANK, 1), _tau_rank_run, count[1], {shard["d1"]}))
+    jobs.append(serial((_TAU_LEVELS,), _tau_levels_run, 2 * (2 * count[0] + count[1]),
+                       {shard["d0"], shard["d1"], shard["alexander"], (_TAU_RANK, 1)}))
+    assemble_key = (_TAU_ASSEMBLE,)
+    jobs.append(Job(
+        key=assemble_key, run=_tau_assemble_run, inputs={},
+        paths=(ComputePath(Placement.CPU_PINNED, cores=1, ram_bytes=0),),
+        dependencies={shard["alexander"], (_TAU_RANK, 0), (_TAU_RANK, 1), (_TAU_LEVELS,)},
+    ))
+    return JobGraph(jobs), assemble_key
 
 
 def _wired_reduce_run(inputs, deps):

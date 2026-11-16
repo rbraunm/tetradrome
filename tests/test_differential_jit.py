@@ -9,6 +9,8 @@ is a proof of equivalence at that size). The jit tier reorganizes the F2 fold by
 pair, so the comparison reconstructs each target permutation from the surviving pairs and checks
 the resulting ``{target: 1}`` map equals the reference's. Default runs cover the staircase grids
 and the n <= 8 KnotInfo roster (real marker layouts); ``--heavy`` adds the larger staircases.
+The Alexander-filtered differential runs the same kernel with the O markers only, pinned the same
+way against ``filtered_differential``.
 """
 from __future__ import annotations
 
@@ -18,8 +20,12 @@ import pytest
 
 from tetradrome.engines.floer.grid import GridDiagram, staircase_grid
 from tetradrome.engines.floer.generation import _unrank
-from tetradrome.engines.floer.differential import differential
-from tetradrome.engines.floer.differential_jit import HAVE_NUMPY, differential_block
+from tetradrome.engines.floer.differential import differential, filtered_differential
+from tetradrome.engines.floer.differential_jit import (
+    HAVE_NUMPY,
+    differential_block,
+    filtered_differential_block,
+)
 
 pytestmark = pytest.mark.skipif(not HAVE_NUMPY, reason="the jit differential tier needs numpy")
 
@@ -40,13 +46,22 @@ def _roster_params():
             reason="KnotInfo backend unavailable"))]
 
 
-def _assert_exhaustive_agreement(grid):
+def _hat(grid):
+    return (lambda states: differential_block(states, grid.O, grid.X)), differential
+
+
+def _filtered(grid):
+    return (lambda states: filtered_differential_block(states, grid.O)), filtered_differential
+
+
+def _assert_exhaustive_agreement(grid, flavour=_hat):
     import numpy as np
 
+    block, reference = flavour(grid)
     n = grid.n
     total = math.factorial(n)
     states = np.array([_unrank(k, n) for k in range(total)], dtype=np.int64)
-    out_pairs, out_counts = differential_block(states, grid.O, grid.X)
+    out_pairs, out_counts = block(states)
     assert out_counts.shape == (total,)
     for index in range(total):
         sigma = tuple(int(value) for value in states[index])
@@ -57,7 +72,7 @@ def _assert_exhaustive_agreement(grid):
             target = list(sigma)
             target[i], target[j] = sigma[j], sigma[i]
             reconstructed[tuple(target)] = 1
-        assert reconstructed == differential(grid, sigma), (n, sigma)
+        assert reconstructed == reference(grid, sigma), (n, sigma)
 
 
 @pytest.mark.parametrize("n", range(2, 9))
@@ -70,6 +85,18 @@ def test_differential_jit_matches_reference_roster(name):
     if name is None:
         pytest.skip("KnotInfo backend unavailable")
     _assert_exhaustive_agreement(GridDiagram.from_knotinfo(name))
+
+
+@pytest.mark.parametrize("n", range(2, 9))
+def test_filtered_differential_jit_matches_reference_staircase(n):
+    _assert_exhaustive_agreement(staircase_grid(n), _filtered)
+
+
+@pytest.mark.parametrize("name", _roster_params())
+def test_filtered_differential_jit_matches_reference_roster(name):
+    if name is None:
+        pytest.skip("KnotInfo backend unavailable")
+    _assert_exhaustive_agreement(GridDiagram.from_knotinfo(name), _filtered)
 
 
 @pytest.mark.heavy

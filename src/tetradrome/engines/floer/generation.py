@@ -31,6 +31,7 @@ from .differential import differential
 from .differential_jit import (
     HAVE_NUMPY,
     differential_block,
+    filtered_differential_block,
     target_ranks_block,
     unrank_block,
 )
@@ -45,6 +46,15 @@ from .grid import GridDiagram
 # (the kernels do); grid_complexes, _grading_slice, and grading_histogram_reference stay pure
 # Python: the canonical, auditable oracles and the numpy-free escape hatch.
 _GenerationSlice = namedtuple("_GenerationSlice", "start maslov alexander targetRanks counts")
+
+
+# A tau slice's result: what the Alexander-filtered complex needs from one slice. Generators are
+# named by lexicographic rank. For Maslov 0 and Maslov 1 it carries their ranks and their filtered
+# differential's target ranks, flattened with a per-generator count; for Maslov 0 also the
+# Alexander gradings; for Maslov -1 only the ranks, which index the rows Maslov 0 maps into.
+_TauSlice = namedtuple(
+    "_TauSlice",
+    "start minusRanks zeroRanks zeroAlexander zeroTargets zeroCounts oneRanks oneTargets oneCounts")
 
 
 def _unrank(index: int, n: int) -> tuple:
@@ -128,6 +138,38 @@ def _generate_slice(args):
     out_pairs, out_counts = differential_block(states, grid.O, grid.X)
     target_ranks = target_ranks_block(states, out_pairs, out_counts)
     return _GenerationSlice(start, maslov_values, alexander_values, target_ranks, out_counts)
+
+
+def _tau_slice(args):
+    """One contiguous lexicographic slice of what tau needs, as a ``_TauSlice``: the block kernels
+    grade every generator of the slice, then compute the filtered differential's targets for the
+    Maslov 0 and Maslov 1 generators only."""
+    o_markers, x_markers, start, stop = args
+    if not HAVE_NUMPY:
+        raise BackendUnavailable(
+            "the scheduled tau path requires numpy (pip install the 'jit' or 'accel' extra); for "
+            "a pure-Python tau without numpy use tau_reference."
+        )
+    import numpy as np
+
+    grid = GridDiagram(o_markers, x_markers)
+    states = unrank_block(start, stop, grid.n)
+    maslov_values, alexander_values = maslov_alexander_block(states, grid.O, grid.X)
+    ranks = np.arange(start, stop, dtype=np.int64)
+
+    def columns(degree):
+        chosen = np.nonzero(maslov_values == degree)[0]
+        block = states[chosen]
+        pairs, counts = filtered_differential_block(block, grid.O)
+        targets = target_ranks_block(block, pairs, counts)
+        valid = np.arange(targets.shape[1]) < counts[:, None]
+        return chosen, targets[valid], counts
+
+    zero, zero_targets, zero_counts = columns(0)
+    one, one_targets, one_counts = columns(1)
+    return _TauSlice(start, ranks[maslov_values == -1],
+                     ranks[zero], alexander_values[zero], zero_targets, zero_counts,
+                     ranks[one], one_targets, one_counts)
 
 
 def _build_complexes(maslov_values, alexander_values, targets_flat, offsets):

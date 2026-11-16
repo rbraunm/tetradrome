@@ -115,6 +115,19 @@ def differential_block(states, o_markers, x_markers):
     of ``states[s]`` gives a target with F2 coefficient 1. Avoids every O and X marker, matching
     ``differential``. Uses the numba-compiled kernel when numba is present, else the plain impl.
     """
+    return _pairs_block(states, (o_markers, x_markers))
+
+
+def filtered_differential_block(states, o_markers):
+    """Surviving transposition pairs of the Alexander-filtered differential for a block of
+    generators, in ``differential_block``'s shape: the same kernel avoiding only the O markers,
+    matching ``filtered_differential``."""
+    return _pairs_block(states, (o_markers,))
+
+
+def _pairs_block(states, marker_families):
+    """Run the block kernel avoiding every marker of ``marker_families``, each family a sequence
+    giving its marker's column in each row."""
     global np
     if np is None:
         if not HAVE_NUMPY:
@@ -126,14 +139,13 @@ def differential_block(states, o_markers, x_markers):
 
     states_arr = np.ascontiguousarray(states, dtype=np.int64)
     n = states_arr.shape[1]
-    marker_count = 2 * n
+    marker_count = len(marker_families) * n
     marker_rows = np.empty(marker_count, dtype=np.int64)
     marker_cols = np.empty(marker_count, dtype=np.int64)
-    for r in range(n):
-        marker_rows[r] = r
-        marker_cols[r] = int(o_markers[r])
-        marker_rows[n + r] = r
-        marker_cols[n + r] = int(x_markers[r])
+    for family, columns in enumerate(marker_families):
+        for r in range(n):
+            marker_rows[family * n + r] = r
+            marker_cols[family * n + r] = int(columns[r])
     max_pairs = n * (n - 1) // 2
     out_pairs = np.empty((states_arr.shape[0], max_pairs), dtype=np.int64)
     out_counts = np.empty(states_arr.shape[0], dtype=np.int64)
