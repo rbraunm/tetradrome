@@ -96,6 +96,17 @@ On a 32-CPU, two-socket container, one knot of grid number 10 (3.6 million state
 | the same in a worker that binds the kernels itself | 0.63 |
 | a determinant through `compute()`, against 0.04 ms called directly | 0.0003 |
 
+The 185 roster knots of grid number up to 10, as one `run_many` graph each:
+
+| | Seconds |
+|---|---|
+| HFK-hat for all 185, sharing the machine with four other processes | 3,730 |
+| τ for all 185, alone | 1,358 |
+
+The old one-knot-at-a-time path took 5 h 15 min to 5 h 32 min for 43 knots' HFK-hat per process,
+four processes side by side. The τ run's last five minutes were two knots' single-core rank and
+level jobs.
+
 ## Not scheduled yet
 
 - A Khovanov, Lee or Rasmussen calculation is one job; its build and per-grading reductions are
