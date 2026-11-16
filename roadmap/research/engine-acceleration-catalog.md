@@ -4,9 +4,8 @@ Candidate accelerations for the brute reference paths, gathered so the research 
 between sessions. Governed by [ADR 0011](../decisions/0011-harden-the-brute-reference.md):
 every entry is tagged with its **(B)/(A)/(C)** class, the core may use only the exact
 **(B)** ones, and the realistic ceiling is constant-factor on an irreducible floor. This
-note is a menu of *candidates*, not committed work; it feeds milestone **M8** (native
-exact algebra / performance) and engine **Phases 5–6**, and is cross-linked from
-[`../design/homology-engine.md`](../design/homology-engine.md) §6.
+note is a menu of *candidates*, not committed work; it feeds engine **Phases 5–6**, and
+is cross-linked from [`../design/homology-engine.md`](../design/homology-engine.md) §6.
 
 These are not assertions that any technique is implemented or measured here. Where a
 claim about cost or behaviour came from reading our own code it is marked *(ours)*;
@@ -42,14 +41,20 @@ growth (0011). The three classes, recapped:
 ## Per-engine notes
 
 ### Khovanov / Lee — `2^c`
-Done and validated (M7/M9), so these are headroom for high-crossing inputs, not blockers.
+Done and validated, so these are headroom for high-crossing inputs, not blockers.
 The historically decisive lever here is **delooping + local Gaussian elimination**
 (Bar-Natan's divide-and-conquer / "Gaussian elimination made abstract"): it shrinks the
 cube so much that the residual field linear algebra is small. ADR 0007 already names it;
-it is exact (a chain-homotopy equivalence), so it leads. **Discrete-Morse cancellation**
-is the same idea framed via an acyclic matching, and is an active area for knot homology
-right now. **Clearing/twist** and **implicit reduction** then cut the residual reduction;
-**block-Lanczos** is the GPU-friendly way to take the rank of whatever dense block remains.
+it is exact (a chain-homotopy equivalence), so it leads. Its cost is not uniform:
+arXiv:2601.02119 gives a polynomial-time algorithm for closed 3-braids, shows plain
+scanning is exponential on some 3-braid families, and gives a modified scanning that is
+polynomial in a bounded homological range. **Discrete-Morse cancellation** is the same
+idea framed via an acyclic matching; its author reports it "computationally inferior to
+Bar-Natan's algorithm" (arXiv:2507.15060), so it ranks below scanning. For *s* alone,
+Schütz's algorithm (arXiv:1811.06432, used by KnotJob) scans the Lee or Bar-Natan complex
+directly and discards generators away from homological degree 0. **Clearing/twist** and
+**implicit reduction** then cut the residual reduction; **block-Lanczos** is the
+GPU-friendly way to take the rank of whatever dense block remains.
 
 ### Grid Floer — `n!`
 The current bottleneck is **generation** *(ours: ~75% of gen+reduce at the sizes swept;
@@ -108,8 +113,9 @@ when it is built, block-Lanczos-over-F2 SpMM is the structural target it should 
 
 | Technique | Class | Phase | Source |
 |---|---|---|---|
-| Delooping + local Gaussian elimination | B | reduction | Bar-Natan, *Fast Khovanov homology computations* (2007) — "Gaussian elimination made abstract" |
-| Algebraic discrete Morse theory | B | both | Sköldberg (2006), Kozlov (2005); for knot homology: Kelomäki (2023, arXiv:2306.11186), torus-link DMT (2025, arXiv:2507.15060), Khovanov complexity (2026, arXiv:2601.02119) |
+| Delooping + local Gaussian elimination | B | reduction | Bar-Natan, *Fast Khovanov homology computations* (2007) — "Gaussian elimination made abstract"; complexity on 3-braids: arXiv:2601.02119 (2026) |
+| Direct *s* by scanning the Lee / Bar-Natan complex near homological degree 0 | not classified | both | Schütz (arXiv:1811.06432); used by KnotJob |
+| Algebraic discrete Morse theory | B | both | Sköldberg (2006), Kozlov (2005); for knot homology: Kelomäki (2023, arXiv:2306.11186), torus-link DMT (2025, arXiv:2507.15060; "computationally inferior to Bar-Natan's algorithm" by its author's account), Khovanov complexity (2026, arXiv:2601.02119) |
 | Connection matrices / Conley complex | B | reduction | algebraic Morse minimal reduction respecting a poset grading (2025, arXiv:2503.09301) |
 | Clearing / twist | B | reduction | Chen & Kerber (2011); as used in Ripser |
 | Implicit matrix reduction | B | reduction | Bauer, *Ripser* (J. Appl. Comput. Topol., 2021) |
@@ -137,6 +143,4 @@ when it is built, block-Lanczos-over-F2 SpMM is the structural target it should 
   [0010](../decisions/0010-defer-gpu-kernel.md) (GPU deferral),
   [0009](../decisions/0009-scope-smooth-4d-toolset.md) (4D scope).
 - **Design:** [`../design/homology-engine.md`](../design/homology-engine.md) §3
-  (tier model), §6 (honest calibration), §7 (implementation path).
-- **Milestone:** M8 (native exact algebra / performance) in
-  [`../milestones.md`](../milestones.md).
+  (reduction tiers), §6 (performance), §7 (phases).

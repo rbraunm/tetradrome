@@ -58,8 +58,8 @@ the oracle" check, no CI speed gate. The generator stays neutral and just measur
 
 The warning is Claude's job, in conversation, not the code's. When tetradrome trails an oracle
 on math we compute, SAY SO -- frame it as a target to aim for, with the likely reason (compiled
-C/Java vs portable Python, or the n! grid vs a polynomial cube) and the roadmap lever that would
-close it (e.g. the Szabo-cube Floer engine). It is a target, NEVER a critical failure: trailing a
+C/Java vs portable Python, or the n! grid vs the bordered-algebra algorithm of Szabo's calculator) and the roadmap lever
+that would close it (e.g. a bordered-algebra Floer engine). It is a target, NEVER a critical failure: trailing a
 compiled oracle while staying native, auditable, and portable is the expected, accepted trade. An
 oracle's speed on math we have NOT implemented is also a target -- record it as the bar a future
 engine aims at.

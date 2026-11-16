@@ -15,10 +15,9 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Mathematics",
 ]
-# KnotInfo (database_knotinfo) is the structural-data source for tabulated knots
-# and the validation oracle -- core. Compute engines for off-table work are
-# optional, per "make every backend optional" (SPEC) and the call-not-vendor
-# licensing posture (decisions/0004, docs/existing_tools.md).
+# KnotInfo (database_knotinfo) supplies the tabulated diagrams and is the validation
+# oracle -- core. Everything else is optional: external tools only validate (decision
+# 0006) and are installed by the user, never vendored (docs/existing_tools.md).
 dependencies = ["database_knotinfo"]
 
 [project.optional-dependencies]

@@ -4,7 +4,7 @@
 
 ## Context
 
-The SPEC and README state Python 3.11+ with 3.13 targeted. The verified pip
+The README states Python 3.11+ with 3.13 targeted. The verified pip
 backends (`spherogram`, `knot_floer_homology`, `database_knotinfo`) all install and
 run cleanly on Python 3.12 in the research sandbox -- a useful data point that the
 toolchain is not pinned to a single minor version.

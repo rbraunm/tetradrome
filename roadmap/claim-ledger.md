@@ -1,9 +1,7 @@
 # Claim Ledger
 
-Living copy of SPEC Section 15. Every claim Tetradrome makes about its own
-correctness lives here with a status and the evidence behind it. Update statuses
-as evidence accrues; an impressive result with no validation path is a bug, not a
-feature (README, "Validation and trust").
+Every claim Tetradrome makes about its own correctness, with its status and the evidence
+behind it. A result with no validation path is a bug.
 
 ## Status legend
 
@@ -16,26 +14,23 @@ Blue    = independently reproduced or externally reviewed
 
 ## Ledger
 
-Reorganized after the native-first pivot (ADRs 0006/0007/0009). The orchestration-era
-claims about *external* compute backends (a Spherogram adapter, a `knot_floer_homology`
-backend, "select a Khovanov/Rasmussen backend via Sage/KnotJob") are **superseded**:
-external tools are validation oracles only, never a compute step. KnotInfo remains the
-oracle. The claims below are about Tetradrome's own native computation.
+Phases are those of `design/homology-engine.md` section 7.
 
 | Claim | Status | Evidence | Notes |
 |---|---|---|---|
-| KnotInfo oracle retrieves known-answer data | Green | `database_knotinfo` read layer; drives validate-by-default in `compute()` | det/sig/Alexander/Jones/Khovanov/s columns parsed |
-| Classical invariants (determinant, signature, Alexander) computed natively | Green | Collins Seifert matrix from a braid word; validated vs KnotInfo at scale, incl. Conway Alexander = 1 | off-table torus knots cross-checked too |
-| Jones polynomial computed natively | Green | Kauffman bracket over the resolution cube; validated vs KnotInfo through 11 crossings | warm-up for the cube machinery |
-| Native unreduced Khovanov (F2) builds and is correct | Green | cube + enhanced states + differential; validated vs KnotInfo's mod-2 (UCT from the integral vector) across 8 knots, up to the documented mirror; unknot/trefoil explicit | |
-| Native differential satisfies d² = 0 | Green | verified at every grading over **F2 and ℚ** for all tested knots; enforced in the reducers | the real correctness gate, esp. for the ℚ signs |
-| Native rational Khovanov builds and is correct | Green | signed cube over ℚ; validated vs KnotInfo free ranks; signed-reduced-mod-2 reproduces the F2 answer | ℚ vs F2 differ by exactly the ℤ/2 torsion |
-| Lee homology computed natively | Green | the deformed complex over ℚ; Lee's theorem (dim 2 for a knot) across 8 knots | |
-| Rasmussen *s* computed natively | Green | read off the Lee quantum filtration; validated vs KnotInfo across s = 0, ±2, ±4, ±6 (incl. T(3,4)) | the invariant with concordance teeth |
-| Outputs normalize into a shared, validated schema | Green | `InvariantResult` / `Provenance` / `ValidationStatus`; `compute()` validate-by-default, oracle mirror handled in one place | all of the above flow through `compute()` |
-| Exact reductions preserve homology (`raw == reduced`) | Green | Gaussian cancellation (field-agnostic F2/ℚ); reproduces the rank-based homology per grading across the catalog and the bigraded F2 table; collapses the cube to its homology dimension | Phase 4; unoptimized reference, packed/accelerated cancellation is Phase 5 |
-| Acceleration tiers agree with the reference | Green | every tier reproduces the reference homology across the catalog; GPU (dense kernel) and numba JIT now confirmed on real hardware. Measured: `bitint` (pure Python) is the fastest in every tested regime; the first-cut GPU kernel is correct but sync-bound and slower, so a true on-device kernel is deferred (decision 0010) | acceleration agreement done; only a NUMA-pinning speed check on a multi-socket box and the deferred GPU kernel remain (both speed-only) |
-| Native Floer (τ, ε, ν, HFK ranks) | Yellow | grid-homology engine computes HFK-hat ranks, the Seifert genus, and τ, all validated against KnotInfo directly (chirality pinned by reflecting to the standard tabulation; τ matches sign and all). ε, ν not yet implemented | Phase 6 (peer engine) in progress; ε next (KnotInfo tabulates it), then ν (determined by τ and ε) |
-| Auditable filtered Floer complex (CFK presentation) | Red | planned (Phase 7) | exposes the full bifiltered grid complex + a reduced canonical model (staircase ⊕ boxes) as a first-class serializable artifact; ε/ν/Υ read off it. The audit-friendly thesis applied to Floer — the value the black-box calculators do not provide |
-| Conway-adjacent workflow report is reproducible | Red | not assembled | needs the report generator + a curated input trail |
-| Existing tooling survey completed | Yellow | initial list in SPEC §4 + `roadmap/research/` notes | needs maintenance / expert review |
+| KnotInfo oracle retrieves known-answer data | Green | `database_knotinfo` read layer; drives validation in `compute()` | determinant, signature, Alexander, Jones, Khovanov, s, HFK, τ, genus columns parsed |
+| Classical invariants (determinant, signature, Alexander) computed natively | Green | Collins Seifert matrix from a braid word; validated against KnotInfo across the tables, including Conway Alexander = 1 | off-table torus knots cross-checked too |
+| Jones polynomial computed natively | Green | Kauffman bracket over the resolution cube; validated against KnotInfo through 11 crossings | |
+| Native unreduced Khovanov (F2) is correct | Green | cube + enhanced states + differential; validated against KnotInfo's mod-2 ranks (universal coefficients from the integral vector) across 8 knots, up to the documented mirror; unknot and trefoil explicit | |
+| Native differential satisfies d² = 0 | Green | verified at every grading over F2 and ℚ for all tested knots; enforced in the reducers | the correctness gate for the ℚ signs |
+| Native rational Khovanov is correct | Green | signed cube over ℚ; validated against KnotInfo free ranks; the signed complex reduced mod 2 reproduces the F2 answer | |
+| Lee homology computed natively | Green | the deformed complex over ℚ; Lee's theorem (dimension 2 for a knot) across 8 knots | |
+| Rasmussen *s* computed natively | Green | read off the Lee quantum filtration; validated against KnotInfo across s = 0, ±2, ±4, ±6 (including T(3,4)) | On every KnotInfo row s = 2τ, so this evidence cannot tell s from 2τ, or s over ℚ from s over F2. Open: a check on an off-table knot where they differ, such as 14n19265 (s over ℚ is 0, s over F2 is −2; arXiv:2610.37595, Table 2) |
+| Results carry provenance and validation in one schema | Green | `InvariantResult` / `Provenance` / `ValidationStatus`; every invariant goes through `compute()`; the KnotInfo mirror is handled in one place | |
+| Exact reductions preserve homology (`raw == reduced`) | Green | Gaussian cancellation over F2 and ℚ reproduces the rank-based homology per grading across the catalog and the bigraded F2 table | Phase 4; cancels after the full cube is built |
+| Reduction tiers agree with the reference | Green | every tier reproduces the reference homology across the catalog; the GPU dense kernel and the Numba reducer confirmed on real hardware | `bitint` (pure Python) is the fastest in every tested regime; the on-device GPU kernel is deferred (decision 0010) |
+| Scheduled calculations agree with their serial oracles | Green | the scheduled grading histogram, HFK-hat and τ are tested against `grading_histogram_reference`, `grid_complexes` and `tau_reference` | `design/scheduler.md` |
+| Native Floer (HFK ranks, three-genus, τ, ε, ν) | Yellow | the grid engine computes HFK-hat, the three-genus and τ in `compute()`, tested against KnotInfo over the roster with no mirror or sign change (default tests: grid number ≤ 8, 13 knots; `pytest --heavy`: ≤ 10, 185 knots) and under strict against `knot_floer_homology` on 3_1, 4_1 and 8_19 | ε, ν not implemented (Phase 7); grid number 11 does not fit in memory |
+| Auditable filtered Floer complex (CFK presentation) | Red | planned (Phase 7) | the bifiltered grid complex and a reduced model (staircase ⊕ boxes) as a serializable artifact; ε, ν, Υ read off it. `knot_floer_homology` (`complex=True`, since 1.1) returns the simplified complex over F[U,V]/(UV) and is an oracle for the reduced model |
+| Conway-adjacent workflow report is reproducible | Red | not assembled | needs the report generator and a checked encoding of K′ |
+| Existing tooling survey is current | Yellow | `docs/backend_matrix.md`, `docs/existing_tools.md`, `roadmap/research/` | needs expert review |

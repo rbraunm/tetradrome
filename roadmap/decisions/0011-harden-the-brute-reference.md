@@ -23,9 +23,11 @@ performance is therefore a first-class concern, not an accepted tax.
 
 This must be reconciled with two facts. First, the brute reference is bounded by its
 own combinatorics — grid Floer is n!, Khovanov is the 2^c cube of resolutions — and no
-exact transformation escapes that growth; the boundedness is precisely what makes the
-path trustworthy (it does the obvious thing, with no cleverness that could be subtly
-wrong). Second, 0010 already deferred a GPU *reduction* kernel on the measured finding
+exact transformation of the complex, once it is built, escapes that growth (an
+algorithm that never builds the full cube can: arXiv:2601.02119 computes the Khovanov
+homology of closed 3-braids in polynomial time); the boundedness is precisely what
+makes the path trustworthy (it does the obvious thing, with no cleverness that could be
+subtly wrong). Second, 0010 already deferred a GPU *reduction* kernel on the measured finding
 that `bitint` wins at current sizes. The present decision is broader than 0010: it
 governs the whole reference path — generation included, which is currently the dominant
 cost — and the standing question of whether to harden it at all.
@@ -45,9 +47,11 @@ cost — and the standing question of whether to harden it at all.
   reference is bounded by its combinatorial explosion. Exact acceleration is
   constant-factor: it lowers the constant and pushes the reachable size out by a few
   units (turning, say, feasible-at-n into feasible-at-n+2), and never bends the growth
-  rate. We therefore do not chase "speedups" that are really heuristics or route
-  changes dressed as optimizations (0007); a guaranteed-correct wall is still a wall,
-  and that is the point of having one.
+  rate. This is a statement about a reference that builds its whole complex before
+  reducing it, not a lower bound on the problem (arXiv:2601.02119, above). We therefore
+  do not chase "speedups" that are really heuristics or route changes dressed as
+  optimizations (0007); a guaranteed-correct wall is still a wall, and that is the point
+  of having one.
 
 - **Every proposed speedup is classified before it is built**, generalizing 0007's
   delooping / local-elimination allowance into a rule:

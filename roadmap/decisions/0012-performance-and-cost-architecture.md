@@ -43,8 +43,8 @@ looser than it appears.
   2. **Generation parallelism** -- splitting the n! generation across processes.
      Memory-cheap (peak is the complex, not the dense matrices).
   3. **Reduction parallelism + memory budget** -- reducing independent complexes (a
-     knot's gradings, or knots in a batch) across processes, bounded by a RAM budget via
-     deterministic waves. Home: `algebra/parallel.py`.
+     knot's gradings, or knots in a batch) across processes, bounded by a RAM budget.
+     Home: `scheduler/` (`roadmap/design/scheduler.md`).
   4. **Reduction cost model** -- one predictor of reduction memory. Home:
      `algebra/memory.py`.
 

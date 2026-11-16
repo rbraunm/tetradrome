@@ -6,7 +6,7 @@
 
 The project's whole value is checkable results (README, "Validation and trust").
 The house rule is no silent fallbacks: fail loudly and early rather than return a
-plausible-looking wrong answer. SPEC 13.10 defines the public error set.
+plausible-looking wrong answer. SPEC 8 defines the public error set.
 
 Validation is a setting rather than a flag because "validated" must not be able to
 quietly mean "checked against a tabulated table, because that was all that happened to

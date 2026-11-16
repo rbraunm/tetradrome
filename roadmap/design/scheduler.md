@@ -4,7 +4,8 @@
 scheduler decides where and when each one runs. A calculation done in the caller's process,
 outside a job, is a defect: nothing can place it, bound its memory, or run it beside other work.
 
-Code: `src/tetradrome/scheduler/`. Engines enter through `scheduler.run_to_result`.
+Code: `src/tetradrome/scheduler/`. Engines enter through `scheduler.run_to_result` (one
+calculation) or `scheduler.run_many` (several that share the machine).
 
 ## Jobs
 
@@ -60,6 +61,10 @@ For each ready job (`scheduler/placement.py`):
    the global ceiling less a margin; otherwise it waits. A busy path never degrades a job to a
    slower one.
 
+Ready jobs are tried in the order the graph lists them, a bounded number per pass. In a graph of
+many calculations (a roster of knots) the earlier ones therefore finish, and free what they
+hold, before the later ones start, instead of every one sitting half done.
+
 Under memory pressure the largest held results are spilled to disk rather than stalling.
 
 ## Failure
@@ -70,7 +75,9 @@ raises on any failure, so no partial answer is returned.
 
 ## What an engine does
 
-- Builds a graph and calls `run_to_result`.
+- Builds a graph and calls `run_to_result`. For several independent calculations it builds each
+  one's jobs and calls `run_many`, which puts them in one graph under their names and returns each
+  one's answer or failure (`hfk_hat_many`, `tau_many`).
 - Prices every job before it runs. The Floer engine first runs a histogram graph (generators per
   grading) and builds the main graph from its result.
 - Keeps a serial pure-Python form of each calculation as the oracle its scheduled form is tested
@@ -95,4 +102,4 @@ On a 32-CPU, two-socket container, one knot of grid number 10 (3.6 million state
   not split.
 - tau's rank and level search are two long single jobs on the set-based reducer.
 - Oracle validation calls run in the caller.
-- One knot per run: a roster is not submitted as one graph, so its knots do not share the machine.
+- `compute()` takes one knot; only the Floer engine has many-knot entry points.

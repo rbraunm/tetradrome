@@ -7,7 +7,7 @@ and `docs/backend_matrix.md`.
 
 ## Package
 
-- `database_knotinfo` **2026.6.1**; install: `pip install database_knotinfo` (clean).
+- `database_knotinfo` **2026.11.2**; install: `pip install database_knotinfo` (clean).
 - License: **GPL**. Home: https://github.com/soehms/database_knotinfo (this is the
   same offline KnotInfo data package Sage uses).
 - This is **data**, GPL-licensed, consumed as an optional pip dependency. Querying
@@ -19,14 +19,15 @@ and `docs/backend_matrix.md`.
 ## Shape of the data
 
 - `database_knotinfo.link_list()` -> a `list` of `dict`, **12,967 entries**
-  (knots and links combined), each with **244 columns**.
+  (one descriptor row and 12,966 knots), each with **248 columns**. Links are a
+  separate call, `link_list(proper_links=True)`.
 - Every real column has an `_anon` twin (chirality-anonymized variant). Use the
   plain column; do not pull `_anon` by accident.
 - **There is a descriptor row mixed in** (its `category` value is the literal
   string `"Category"`, names are column descriptions). The importer must filter it
   out -- skip rows where `name == "Name"` / `category == "Category"`.
-- `category` for knots is the crossing number as a string (`"0".."12"`). Links
-  are interleaved in the same list; filter to knots explicitly.
+- `category` is a string: the crossing number for `"0"` and `"3".."12"`, and
+  `"13a"` / `"13n"` for 13 crossings.
 - All values are **strings** and need parsing: `fibered` is `"Y"`/`"N"`,
   polynomials are strings (note odd spacing, e.g. `"t+ t^3-t^4"`), integers are
   strings, missing values are blank `""`, and some are the sentinel

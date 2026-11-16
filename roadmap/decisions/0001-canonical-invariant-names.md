@@ -6,13 +6,12 @@ rename is a cross-codebase change, not a normalizer edit.
 
 ## Context
 
-SPEC 12.4 leaves the exact canonical spelling of each invariant as an explicit
-open decision. The canonical name is chosen on the mathematics, independent of any
-tool; each backend's own spelling is mapped onto it by the normalizer. Where the
-literature offers more than one proper name (e.g. `tau` vs `ozsvath_szabo_tau`,
-`three_genus` vs `seifert_genus`), either is legitimate and we must simply pick
-one. Empirical research (`roadmap/research/`) corrected two backend spellings that
-the SPEC table had wrong or short.
+Each invariant needs one canonical spelling (the SPEC 7 table carries the same set
+beside each tool's spelling). The canonical name is chosen on the mathematics,
+independent of any tool; each backend's own spelling is mapped onto it by the
+normalizer. Where the literature offers more than one proper name (e.g. `tau` vs
+`ozsvath_szabo_tau`, `three_genus` vs `seifert_genus`), either is legitimate and we
+must simply pick one.
 
 ## Decision
 
@@ -66,8 +65,7 @@ Backend spelling is owned by the normalizer. Empirically confirmed mappings that
 differ from a naive guess:
 
 - KnotInfo column `ozsvath_szabo_tau_invariant` -> canonical `ozsvath_szabo_tau`
-  (the SPEC table's `ozsvath_szabo_tau` column name was wrong; see
-  `research/knotinfo.md`).
+  (see `research/knotinfo.md`).
 - KnotInfo column `rasmussen_invariant` -> canonical `rasmussen_s`.
 - `knot_floer_homology` keys `tau` / `seifert_genus` -> `ozsvath_szabo_tau` /
   `three_genus`.
@@ -81,5 +79,5 @@ differ from a naive guess:
 - The normalizer is the single place backend spellings live; adding a backend
   means extending the mapping, not touching the canonical set.
 - Renaming a canonical term is a cross-codebase change and is costed as one.
-- Nothing currently checks this table against `compute()`, so the two can drift
-  silently. A test pinning the supported set against this record is the guard.
+- `tests/test_canonical_names.py` pins `compute()`'s supported set and the SPEC 7 table
+  against this record, so the three cannot drift silently.

@@ -1,59 +1,50 @@
 # Conventions
 
-The fixed vocabulary and rules a result must follow. The goal is that no
-backend-specific spelling or assumption leaks into a user-facing result
-(SPEC 13.3).
+The fixed vocabulary and rules a result follows, so that no tool-specific spelling or
+assumption reaches a user-facing result.
 
 ## Knot identity
 
-A knot's canonical id is its **KnotInfo name**: Hoste-Thistlethwaite (`K11n34`)
-for 11 or more crossings -- the form both `spherogram.Link(...)` and Sage's
-KnotInfo enum accept -- and Rolfsen (`3_1`, `4_1`, `10_124`) for 10 or fewer
-(SPEC 12.4).
+A knot's canonical id is KnotInfo's spelling of its name: `3_1`, `10_124`, `11n_34`.
+`knots.from_name` also accepts the Hoste-Thistlethwaite forms `K11n34` and `11n34` and
+normalizes them. A diagram given by PD code or braid word with no name has no identity.
 
 ## Canonical invariant names
 
-Defined in `roadmap/decisions/0001-canonical-invariant-names.md`, which is the only
-list of them -- it is not repeated here, because copies drift. The canonical name is
-chosen on the mathematics; each backend's spelling is mapped onto it by the
-normalizer. `invariants.compute()` is the authoritative surface for the names that are
-implemented.
-
-Confirmed backend-spelling mappings live in that decision record and in
-`docs/backend_matrix.md` (notably KnotInfo's `ozsvath_szabo_tau_invariant` and the
-Sage-gating of Spherogram's polynomial methods).
+Defined in `roadmap/decisions/0001-canonical-invariant-names.md`. SPEC 7 carries the
+same set beside each tool's spelling; `tests/test_canonical_names.py` keeps the two
+and `invariants.compute()` in step.
 
 ## Diagram notation
 
-All four Spherogram / KnotInfo notations are first-class inputs and map
-name-for-name (SPEC 12.4): PD code (list of 4-tuples) <-> `pd_notation`; DT code
-<-> `dt_notation`; Gauss code <-> `gauss_notation`; braid word <-> `braid_notation`.
-Spherogram's accessors are `PD_code()` and `DT_code()` (capitalized).
+KnotInfo's notations map name-for-name: PD code (list of 4-tuples) <-> `pd_notation`;
+DT code <-> `dt_notation`; Gauss code <-> `gauss_notation`; braid word <->
+`braid_notation`; grid diagram <-> `grid_notation`. Implemented inputs: name, PD code,
+braid word. In a braid word `+j` means strand j crosses over strand j+1.
 
-## Coefficient field and gradings
+## Coefficient field, gradings, chirality
 
-- The first native engine works over **F2**
-  (`roadmap/decisions/0003-native-coefficient-field.md`).
-- Grading conventions (homological / quantum degree, reduced vs unreduced,
-  orientation and crossing-sign choices) must be recorded per backend in the
-  result's `Provenance`, not assumed. A `ConventionMismatch` is raised rather than
-  silently reconciling two conventions. [needs-review: pin the exact grading
-  convention per backend once each adapter is built.]
+- F2 is the unmarked coefficient field; every other ring is named
+  (`roadmap/decisions/0003-native-coefficient-field.md`, decision 0001).
+- The native grading and chirality conventions, and how each compares with KnotInfo,
+  are pinned in `roadmap/design/homology-engine.md` section 8.
+- Each validator's convention against the native value (direct, mirrored, negated) is
+  fixed in its adapter under `src/tetradrome/backends/` and verified by test, not
+  assumed. Two conventions are never reconciled silently: a mismatch raises.
 
-## Parsing oracle data (no silent fallbacks)
+## Parsing oracle data
 
 Oracle values are strings and may be blank or carry a sentinel (KnotInfo `""` or
-`"does not exist"`). These become an explicit `not_available`, never a coerced
-default. A blank read as `0` is a wrong answer, not a missing one
-(`research/knotinfo.md`,
-`roadmap/decisions/0004-validate-by-default-error-policy.md`).
+`"does not exist"`). These are read as missing, never as a default. A blank read as
+`0` is a wrong answer, not a missing one (`roadmap/research/knotinfo.md`, decision
+0004).
 
 ## Claim strength
 
-Every result states its strength: `computation` (a number was produced),
+A reported claim states its strength: `computation` (a number was produced),
 `obstruction` (a property is obstructed), or `theorem_reference` (it rests on a
-cited theorem). These are distinct from `proof`.
+cited theorem). None of these is `proof`.
 
-**Obstruction is not classification (SPEC 18).** A nonzero obstruction can prove a
-knot lacks a property (e.g. not smoothly slice). A zero obstruction does **not**
-prove the property holds. Reporting language must preserve this distinction.
+**Obstruction is not classification.** A nonzero obstruction can prove a knot lacks a
+property (e.g. not smoothly slice). A zero obstruction does not prove the property
+holds. Reports never reduce this to a bare "the knot is slice."

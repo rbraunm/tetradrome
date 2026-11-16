@@ -13,9 +13,10 @@ Four independent facts argue against it as a core dependency, any one sufficient
 
 - **License.** It is GPLv2+; Tetradrome is Apache-2.0. A GPL runtime dependency is a
   copyleft entanglement — shipped as a combined work, GPL terms could reach our code.
-- **Portability.** It ships binary wheels only, with no source distribution, each a
-  glibc/arch-pinned C++ extension. On any platform/Python without a prebuilt wheel it
-  is *uninstallable* — there is nothing to build from. That fails "pure Python, runs
+- **Portability.** It is a compiled C++ extension. Release 1.2.2 ships binary wheels
+  only, each glibc/arch-pinned; releases 1.0 to 1.2.1 also have a source distribution,
+  which needs a C++ compiler to build. On a platform/Python without a prebuilt wheel
+  there is nothing to install without a toolchain. That fails "pure Python, runs
   anywhere."
 - **Mission.** Using it reports someone else's answer, not one we computed. The
   workbench exists to compute the math.
@@ -23,7 +24,7 @@ Four independent facts argue against it as a core dependency, any one sufficient
   resolutions) is exactly what we want to own and accelerate (JIT / NUMA / GPU), not
   rent as an opaque binary.
 
-`SPEC.md` §20 already restricts GPL tools to external-validator status; this ADR
+`SPEC.md` §9 already restricts GPL tools to external-validator status; this ADR
 generalizes that to all compute.
 
 Producing an answer and checking one are separate acts, and conflating them is how
@@ -38,7 +39,7 @@ The core computes its invariants itself. **No external library is a runtime
 dependency of the compute path.** External tools (SnapPy / spherogram, Szabó's HFK
 calculator, KnotJob, SageMath, etc.) may be used **only as opt-in validators /
 cross-checkers**, never as a compute step, never bundled, never required to obtain an
-answer. Such integrations live behind the `SPEC.md` §13.8 adapter contract, isolated
+answer. Such integrations live behind the `SPEC.md` §6 validator contract, isolated
 and clearly labeled as validation.
 
 This holds regardless of an external tool's quality or maintenance status; the

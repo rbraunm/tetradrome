@@ -36,8 +36,7 @@ but are decorated `@_sage_method` and raise unless running inside Sage. So
 - Version exercised: **1.2.2**; install: `pip install knot_floer_homology`
   (compiled clean under the allowed network).
 - Fully **standalone** -- no Sage required.
-- License: pip metadata blank; upstream (Szabo's HFKcalc) is GPL-2.0-or-later
-  per the README's "Built on" -- confirm and record explicitly. [needs-confirm]
+- License: **GPLv2+** (stated on PyPI).
 - Public callables: `pd_to_hfk`, `pd_to_morse`, `hfk`.
 - `pd_to_hfk(L.PD_code())` returns a dict with keys:
   `L_space_knot, epsilon, fibered, modulus, nu, ranks, seifert_genus, tau, total_rank`.
@@ -83,7 +82,6 @@ written up in the licensing decision record rather than left implicit.
 
 ## Open items
 
-- Confirm and record `knot_floer_homology` license explicitly. [needs-confirm]
 - SnapPy install path for the `exterior()` bridge (SPEC 12.4 "Bridges").
 - Sage environment feasibility (heavy; may not fit a pip-only sandbox) -- the
   gate for Khovanov-side invariants. [research]
