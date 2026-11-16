@@ -72,6 +72,53 @@ def f2_kernel(columns: Sequence[frozenset[int]]) -> list[frozenset[int]]:
     return kernel
 
 
+def f2_kernel_escape(columns: Sequence[frozenset[int]], levels: Sequence[int],
+                     image: Sequence[frozenset[int]]) -> tuple[int | None, int]:
+    """For a matrix given column-wise whose column i carries the filtration level ``levels[i]``,
+    and an ``image`` given column-wise over that matrix's column indices: the smallest level L
+    such that the kernel of the columns of level <= L is not contained in the span of ``image``,
+    paired with the rank of ``image``. The level is None when the whole kernel lies in that span.
+
+    One pass instead of a kernel and a rank per level. ``image`` is reduced once. The columns are
+    then reduced in ascending level order, carrying their combinations as `f2_kernel` does, so the
+    relations found by the time a level's columns are done are a basis of that level's kernel;
+    each relation is reduced against ``image`` as it appears, and the first one that does not
+    vanish fixes the level.
+    """
+    image_pivots: dict[int, set[int]] = {}              # leading index -> reduced image column
+    for col in image:
+        v = set(col)
+        while v:
+            lead = max(v)
+            piv = image_pivots.get(lead)
+            if piv is None:
+                image_pivots[lead] = v
+                break
+            v ^= piv
+
+    pivots: dict[int, tuple[set[int], set[int]]] = {}   # leading row -> (column, combo)
+    for i in sorted(range(len(columns)), key=levels.__getitem__):
+        v = set(columns[i])
+        combo = {i}
+        while v:
+            lead = max(v)
+            piv = pivots.get(lead)
+            if piv is None:
+                pivots[lead] = (v, combo)
+                break
+            piv_col, piv_combo = piv
+            v ^= piv_col
+            combo ^= piv_combo
+        if v:
+            continue
+        while combo:                                    # a relation: is it in the image's span?
+            piv = image_pivots.get(max(combo))
+            if piv is None:
+                return levels[i], len(image_pivots)
+            combo ^= piv
+    return None, len(image_pivots)
+
+
 def homology(cx: GradedComplex, *, verify: bool = True) -> dict[int, int]:
     """F2 homology of the complex `cx`, as {degree: dim H^n} for every degree with
     non-zero homology (an omitted degree has H^n = 0).

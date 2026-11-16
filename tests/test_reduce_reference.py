@@ -6,9 +6,18 @@
 The reducer is the gold-master every faster reducer must later match, so these check
 real homology dimensions against hand-computed answers, not just that it runs.
 """
+import random
+
 import pytest
 
-from tetradrome.algebra import GradedComplex, f2_rank, homology, pack_columns
+from tetradrome.algebra import (
+    GradedComplex,
+    f2_kernel,
+    f2_kernel_escape,
+    f2_rank,
+    homology,
+    pack_columns,
+)
 
 
 # ---- f2_rank ------------------------------------------------------------
@@ -75,3 +84,53 @@ def test_homology_negative_dimension_backstop():
     bad = GradedComplex({0: 1, 1: 1, 2: 1}, {0: [{0}], 1: [{0}]})
     with pytest.raises(RuntimeError, match=r"negative homology dimension"):
         homology(bad, verify=False)
+
+
+# ---- f2_kernel_escape ---------------------------------------------------
+
+def _escape_level_by_level(columns, levels, image):
+    """The definition, the way the serial tau walks it: a kernel and a rank per level."""
+    rank_image = f2_rank(pack_columns(image))
+    for level in sorted(set(levels)):
+        below = [k for k in range(len(columns)) if levels[k] <= level]
+        cycles = [frozenset(below[p] for p in relation)
+                  for relation in f2_kernel([columns[k] for k in below])]
+        if f2_rank(pack_columns(list(image) + cycles)) > rank_image:
+            return level, rank_image
+    return None, rank_image
+
+
+def test_f2_kernel_escape_hand_case():
+    # Columns 0 and 1 are equal, so {0, 1} is a relation once level 1 is in; column 2 is zero, a
+    # relation {2} at level 2.
+    columns = [frozenset({0}), frozenset({0}), frozenset()]
+    levels = [0, 1, 2]
+    assert f2_kernel_escape(columns, levels, []) == (1, 0)
+    assert f2_kernel_escape(columns, levels, [frozenset({0, 1})]) == (2, 1)
+    assert f2_kernel_escape(columns, levels, [frozenset({0, 1}), frozenset({2})]) == (None, 2)
+
+
+def test_f2_kernel_escape_ignores_column_order_within_the_input():
+    # The level decides, not the position: the same matrix with its columns listed in reverse.
+    columns = [frozenset(), frozenset({0}), frozenset({0})]
+    levels = [2, 1, 0]
+    assert f2_kernel_escape(columns, levels, [frozenset({1, 2})]) == (2, 1)
+
+
+def test_f2_kernel_escape_matches_level_by_level_definition():
+    generator = random.Random(20261115)
+    outcomes = set()
+    for _ in range(300):
+        rows = generator.randint(2, 7)
+        count = generator.randint(3, 12)
+        columns = [frozenset(r for r in range(rows) if generator.random() < 0.4)
+                   for _ in range(count)]
+        levels = [generator.randint(0, 3) for _ in range(count)]
+        # An image drawn mostly from the kernel, so every outcome occurs.
+        image = [relation for relation in f2_kernel(columns) if generator.random() < 0.6]
+        if generator.random() < 0.3:
+            image.append(frozenset(c for c in range(count) if generator.random() < 0.5))
+        expected = _escape_level_by_level(columns, levels, image)
+        assert f2_kernel_escape(columns, levels, image) == expected
+        outcomes.add(expected[0])
+    assert outcomes == {None, 0, 1, 2, 3}

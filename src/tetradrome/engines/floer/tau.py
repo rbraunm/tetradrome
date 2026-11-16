@@ -19,8 +19,9 @@ Computed over F2 with the shared reducer: from the Maslov 0 / +-1 pieces we take
 B_0 = im(d: C_1 -> C_0) and, level by level, the cycles supported on Alexander <= i (a kernel);
 tau is the first level whose cycles are not all boundaries (an augmented rank exceeds rank d_1).
 
-``tau`` runs this through the scheduler (``scheduling.tau_graph``); ``tau_reference`` is the serial
-pure-Python form it must equal.
+``tau`` runs this through the scheduler (``scheduling.tau_graph``), finding the level in one
+pass over the columns in level order (``algebra.f2_kernel_escape``) rather than a kernel and a
+rank per level. ``tau_reference`` is the serial level-by-level form it must equal.
 """
 from __future__ import annotations
 
