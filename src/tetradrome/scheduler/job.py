@@ -136,3 +136,32 @@ class Job:
                 raise ValueError(
                     f"job {self.key!r} is device-resident but has a non-GPU path; a device-resident "
                     f"result is produced on the device, so every path must be a GPU path")
+
+
+class _Unscoped:
+    """The callable of a scoped job: it hands the original callable its dependencies under the
+    keys that callable was written against. A class, not a closure, so it pickles to a worker."""
+
+    def __init__(self, run: Callable):
+        self.run = run
+
+    def __call__(self, inputs, deps):
+        return self.run(inputs, {_unscoped(dep): value for dep, value in deps.items()})
+
+
+def _unscoped(dep):
+    return Shard(dep.producer[1], dep.key) if isinstance(dep, Shard) else dep[1]
+
+
+def scoped(jobs, scope: Hashable) -> list:
+    """The same jobs under the keys ``(scope, key)``, their dependencies renamed to match, so
+    several copies of one graph shape (one per knot) can sit in one graph without colliding. Each
+    job still sees its dependencies under their original keys."""
+    renamed = []
+    for job in jobs:
+        dependencies = frozenset(
+            Shard((scope, dep.producer), dep.key) if isinstance(dep, Shard) else (scope, dep)
+            for dep in job.dependencies)
+        renamed.append(dataclasses.replace(
+            job, key=(scope, job.key), run=_Unscoped(job.run), dependencies=dependencies))
+    return renamed

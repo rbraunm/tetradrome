@@ -11,7 +11,7 @@ parallel + memory-bounded execution. Design: roadmap/design/scheduler.md.
 from .executor import RunReport, Scheduler
 from .graph import JobGraph
 from .inventory import GPU, Machine, NumaNode, detect_machine
-from .job import ComputePath, Job, Placement, Shard
+from .job import ComputePath, Job, Placement, Shard, scoped
 from .ledger import Allocation, Ledger
 from .placement import (
     Decision,
@@ -24,7 +24,7 @@ from .placement import (
     plan_placement,
 )
 from .routing import Calibration, Execution, route_execution
-from .session import run_to_result
+from .session import run_many, run_to_result
 
 __all__ = [
     "GPU",
@@ -51,5 +51,7 @@ __all__ = [
     "job_feasibility",
     "plan_placement",
     "route_execution",
+    "run_many",
     "run_to_result",
+    "scoped",
 ]

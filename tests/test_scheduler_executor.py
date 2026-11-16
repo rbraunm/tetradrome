@@ -26,6 +26,7 @@ from tetradrome.scheduler import (
     Placement,
     Scheduler,
     Shard,
+    scoped,
 )
 
 _GIB = 1 << 30
@@ -785,3 +786,60 @@ def test_worker_killed_by_a_signal_is_reported_not_waited_for():
     (_, failed_key, text), = report.failures
     assert failed_key == "gone"
     assert f"exited with code {-signal.SIGKILL} without reporting a result" in text
+
+
+# -- several copies of one graph shape in one graph --
+
+def _chain(value):
+    return [
+        _job("gen", produce, {"value": value}),
+        _job("end", passthrough, {"add": 1}, deps=("gen",)),
+    ]
+
+
+def test_scoped_jobs_are_renamed_with_their_dependencies():
+    plain, split = _chain(1)
+    sharded = Job(key="use", run=produce, inputs={}, paths=(_cpu(),),
+                  dependencies={Shard("gen", "half")})
+    renamed = scoped([plain, split, sharded], "k")
+    assert [job.key for job in renamed] == [("k", "gen"), ("k", "end"), ("k", "use")]
+    assert renamed[0].dependencies == frozenset()
+    assert renamed[1].dependencies == {("k", "gen")}
+    assert renamed[2].dependencies == {Shard(("k", "gen"), "half")}
+
+
+def test_scoped_job_sees_its_dependencies_under_their_own_keys():
+    job = scoped([_job("end", passthrough, {"add": 1}, deps=("gen",))], "k")[0]
+    assert job.run({"add": 1}, {("k", "gen"): 10}) == 11
+
+
+def test_two_copies_of_a_graph_run_side_by_side():
+    jobs = scoped(_chain(10), "a") + scoped(_chain(20), "b")
+    report = Scheduler(_machine()).run(JobGraph(jobs))
+    assert report.failures == []
+    assert report.results == {("a", "end"): 11, ("b", "end"): 21}
+
+
+def started_at(inputs, deps):
+    return time.monotonic()
+
+
+def test_ready_jobs_are_tried_in_graph_order():
+    # One core. After "first" finishes, its consumer and the unrelated "other" are both ready; the
+    # consumer comes earlier in the graph, so it runs first even though it became ready later.
+    core = frozenset({min(os.sched_getaffinity(0))})
+    machine = Machine(nodes=(NumaNode(0, core, 8 * _GIB),), gpus=(), mem_cap_bytes=8 * _GIB)
+    jobs = [
+        _job("first", produce, {"value": 1}),
+        _job("consumer", started_at, {}, deps=("first",)),
+        _job("other", started_at, {}),
+    ]
+    report = Scheduler(machine).run(JobGraph(jobs))
+    assert report.failures == []
+    assert report.results["consumer"] < report.results["other"]
+
+
+def test_on_complete_is_called_once_per_finished_job():
+    seen = []
+    Scheduler(_machine(), on_complete=seen.append).run(JobGraph(_chain(1)))
+    assert sorted(seen) == ["end", "gen"]

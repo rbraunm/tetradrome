@@ -104,6 +104,11 @@ class JobGraph:
         """Keys of the jobs that depend directly on ``key``."""
         return tuple(self._dependents[key])
 
+    def producers(self, key: Hashable) -> frozenset:
+        """Keys of the jobs ``key`` depends on directly, a shard dependency counted as its
+        producer."""
+        return self._producers[key]
+
     def component(self, key: Hashable) -> frozenset:
         """Every job connected to ``key`` through dependency edges in either direction.
 

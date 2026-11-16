@@ -19,13 +19,17 @@ siblings are killed, since their results would feed an assembly that can no long
 and their allocations return to the ledger. Every other component keeps running. The run
 finishes and reports which jobs produced results and which components failed and why.
 
-The loop never reserves or forces an order: among ready jobs it admits whatever fits now, so the
-machine stays as full as the work allows, and a job that cannot be placed yet simply waits.
+The loop reserves nothing: among ready jobs it admits whatever fits now, so the machine stays as
+full as the work allows, and a job that cannot be placed yet simply waits. It tries ready jobs in
+the order the graph lists them, a bounded number per pass, so a graph of many components (a roster
+of knots) finishes its earlier components before it starts its later ones: the results a
+component holds are freed as it completes, instead of every component sitting half done.
 """
 from __future__ import annotations
 
 import dataclasses
 import enum
+import heapq
 import logging
 import multiprocessing
 import os
@@ -419,8 +423,11 @@ class Scheduler:
                  spill_dir: str | None = None, spill_floor_bytes: int = 16 * 1024 * 1024,
                  spill_budget_bytes: int = 4 * 1024 * 1024 * 1024,
                  shared_min_consumers: int = 2, shared_floor_bytes: int = 16 * 1024 * 1024,
-                 calibration: Calibration | None = None):
+                 calibration: Calibration | None = None, on_complete=None):
         self.machine = machine
+        # Called with each job's key as it completes, in the scheduler's process: a long run's
+        # way to say how far along it is.
+        self.on_complete = on_complete
         # What earlier runs measured about the handlers; None starts each run uncalibrated.
         self.calibration = calibration
         self.margin = margin
@@ -562,6 +569,15 @@ class Scheduler:
         completed: set = set()
         cancelled: set = set()
         failures: list = []
+        # Readiness is tracked as jobs complete rather than recomputed over the whole graph: how
+        # many producers each job still waits on, and the ready jobs as a heap ordered by their
+        # position in the graph. ``waiting`` is the set of ready jobs not yet started.
+        position = {job.key: index for index, job in enumerate(graph.jobs())}
+        unmet = {key: len(graph.producers(key)) for key in position}
+        waiting: set = {key for key, count in unmet.items() if count == 0}
+        ready_heap: list = [(position[key], key) for key in waiting]
+        heapq.heapify(ready_heap)
+        admit_window = max(64, 4 * self.machine.total_cores)
 
         # Take ownership of the jobs' inputs so they are no longer pinned by the (frozen) jobs in
         # the graph. Each is charged against global RAM and freed when its job is dispatched (an
@@ -648,9 +664,7 @@ class Scheduler:
             # specific free node; that is the deliberate loud-erring side, to surface on labradorite.
             if key in replica_stall_warned:
                 return
-            has_waiting = any(
-                not is_running(job.key) and job.key not in cancelled and job.key != key
-                for job in graph.ready(completed))
+            has_waiting = any(other != key for other in waiting)
             if not has_waiting:
                 return
             has_free = any(ledger.free_cores(node.index) and ledger.free_ram_node(node.index) > 0
@@ -770,6 +784,7 @@ class Scheduler:
             ))
             declared_ram[job.key] = placed.path.ram_bytes
             placement_of[job.key] = placement
+            waiting.discard(job.key)
             inline_outcome = None
             if placement is Placement.INLINE:
                 # Called here and now. The deps are the held results themselves (a shared one is
@@ -846,6 +861,7 @@ class Scheduler:
                     forget_warm(member)     # leave the shared worker up for other components
                 release_resident((Kind.OUTPUT, member))   # whole result, if it produced one
                 release_resident((Kind.INPUT, member))    # its undispatched input, if any
+                waiting.discard(member)
                 member_shards = graph.get(member).shards
                 if member_shards is not None:             # a partitioned producer's shards
                     for shard_key in member_shards:
@@ -901,6 +917,13 @@ class Scheduler:
                 logger.debug("job %r done (warm)", key)
             if status == "ok":
                 completed.add(key)
+                for child in graph.dependents(key):
+                    unmet[child] -= 1
+                    if unmet[child] == 0 and child not in cancelled:
+                        waiting.add(child)
+                        heapq.heappush(ready_heap, (position[child], child))
+                if self.on_complete is not None:
+                    self.on_complete(key)
                 timings[key] = compute_time
                 calibration.observe(float(graph.get(key).cost), placement_of[key], compute_time,
                                     graph.get(key).kind)
@@ -1025,10 +1048,20 @@ class Scheduler:
             return True
 
         def admit() -> bool:
+            # Try the first admit_window ready jobs in graph order; the ones that must wait go
+            # back on the heap. An entry whose job has started or been cancelled since it was
+            # pushed is dropped here.
             did = False
-            for job in graph.ready(completed):
-                if is_running(job.key) or job.key in cancelled:
+            held: list = []
+            while ready_heap and len(held) < admit_window:
+                entry = heapq.heappop(ready_heap)
+                if entry[1] not in waiting:
                     continue
+                held.append(entry)
+            for entry in held:
+                job = graph.get(entry[1])
+                if job.key not in waiting:
+                    continue            # abandoned by a failure earlier in this pass
                 # Show the placer the fresh-worker footprint, not just the working set, so it
                 # cannot admit more processes than the box can actually hold. The GPU path's
                 # warm/fresh decision comes back so launch dispatches it the same way.
@@ -1048,6 +1081,8 @@ class Scheduler:
                 if decision.outcome is Outcome.ADMIT:
                     launch(job, decision.placed, gpu_execution)
                     did = True
+                else:
+                    heapq.heappush(ready_heap, entry)
             return did
 
         def _spill_dir() -> str:
@@ -1108,6 +1143,7 @@ class Scheduler:
                 infeasible.append(error)
         for error in infeasible:
             cancelled |= graph.component(error.job_key)
+        waiting -= cancelled
         if infeasible:
             logger.warning("pre-flight: %d job(s) infeasible, abandoning their lineage: %s",
                            len(infeasible), ", ".join(repr(e.job_key) for e in infeasible))
