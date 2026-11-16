@@ -61,8 +61,10 @@ _TAU_ASSEMBLE = "tau_assemble"
 # bytes), so a slice's working set and the merge's peak are priced by a per-record estimate: a
 # base plus a per-element term, tuned by the scheduler's over-budget warnings the same way every
 # other footprint is. Slice count falls out of n! at this many states per slice, a math
-# granularity, never a worker count.
-_SLICE_STATES = 4096
+# granularity, never a worker count. A slice must run long against its dispatch: at grid number
+# 10, 4096-state slices (0.15 s against 27 ms to dispatch) kept six to thirteen running; 32768
+# (1.2 s) ran a six-knot batch in 139 s against 179 s.
+_SLICE_STATES = 32768
 _GEN_RECORD_BASE = 256
 _GEN_RECORD_PER_N = 128
 # What a forked worker makes private beyond its own working set: the inherited interpreter pages
