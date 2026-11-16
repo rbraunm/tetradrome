@@ -12,67 +12,68 @@ Empty cells are honest: *not implemented (target)* = we don't compute it yet (th
 
 ## How this run was generated
 
-- **Host:** `tetradrome` - Intel(R) Xeon(R) CPU E5-2699 v4 @ 2.20GHz, 4 logical cores, 4.0 GiB RAM
-- **Software:** Linux 6.8.12-29-pve, Python 3.11.2, tetradrome `bc229d5`
-- **Oracle versions:** knot_floer_homology `1.2.2`, tetradrome `0.0.0`
-- **Oracles present:** kfh, snappy, regina, knotjob, javakh, khoho, sage, khoca  |  **absent this run:** none
+- **Host:** `tetradrome` - Intel(R) Xeon(R) CPU E5-2699 v4 @ 2.20GHz, 32 logical cores, 64.0 GiB RAM
+- **Software:** Linux 6.8.12-29-pve, Python 3.11.2, tetradrome `2231aaf`
+- **Oracle versions:** kfh `1.2.2`, snappy `3.3.2`, regina `7.4.1`, knotjob `sha256:b63daf5f6896`, javakh `git:724f8d3`, khoho `git:7ffcad6`, sage `9.5`, khoca `1.5`, knotkit `git:4fdd08f`, khtpp `git:a8be0af`, tetradrome `0.0.0`
+- **Oracles present:** kfh, snappy, regina, knotjob, javakh, khoho, sage, khoca, knotkit, khtpp  |  **absent this run:** none
 - **Knot ladder:** 3_1, 4_1, 5_2, 6_2, 7_4, 8_19 (timings are the median across the ladder)
-- **Timing:** best-of-3 wall seconds per knot, reported in milliseconds; grid Floer engine timing deferred to a CT 250 run
-- **Generated:** 2026-07-04 22:11 UTC
+- **Timing:** best-of-3 wall seconds per knot, reported in milliseconds
+- **Generated:** 2026-11-16 05:45 UTC
 
 ## knot Floer homology -- vs Szabo's HFK Calculator (`knot_floer_homology`)
 
-Tetradrome computes these natively from a grid diagram (Apache-2.0, pure Python, auditable, multi-core/optional-GPU accelerated with every tier checked to reproduce the reference). `knot_floer_homology` wraps Szabo's compiled-C HFKcalc and is a validator only, never a compute backend. Expect the compiled cube to be far faster than the grid engine on a real knot -- that gap is the documented case for the Tier-2 Szabo-cube engine.
+Tetradrome computes these natively from a grid diagram (Apache-2.0, auditable, multi-core/optional-GPU accelerated with every tier checked to reproduce the reference). `knot_floer_homology` wraps Szabo's compiled-C HFKcalc and is a validator only, never a compute backend. Expect it to be far faster than the grid engine on a real knot: it runs the bordered-algebra algorithm, which does not pay the grid's n! -- that gap is the case for a bordered-algebra engine.
 
 | Invariant | Math | In → Out | Status | KnotInfo | Tetradrome | knot_floer_homology | Validation |
 |---|---|---|---|---|---|---|---|
-| **HFK-hat (ranks / polynomial)** | Grid (MOS) knot Floer homology; bigraded ranks, Euler char = Alexander. | PD / grid → bigraded ranks, HFK polynomial | 🚧 landing | ✓ | *pending (CT 250 grid run)* | 0.32 ms | 🔗 oracle ref |
-| **Ozsvath-Szabo tau** | tau from the Alexander filtration on grid homology (concordance, \|tau\| <= g4). | PD / grid → integer | 🚧 landing | ✓ | *not implemented (target)* | same call | 🔗 oracle ref |
-| **Seifert genus (via HFK)** | Top Alexander grading with nonzero HFK (HFK detects genus). | PD / grid → integer | 🚧 landing | ✓ | *not implemented (target)* | same call | 🔗 oracle ref |
+| **HFK-hat (ranks / polynomial)** | Grid (MOS) knot Floer homology; bigraded ranks, Euler char = Alexander. | PD / grid → bigraded ranks, HFK polynomial | ✅ done | ✓ | 384.43 ms | 0.38 ms | ✓ matches KnotInfo |
+| **Ozsvath-Szabo tau** | tau from the Alexander filtration on grid homology (concordance, \|tau\| <= g4). | PD / grid → integer | ✅ done | ✓ | 276.33 ms | same call | ✓ matches KnotInfo |
+| **Seifert genus (via HFK)** | Top Alexander grading with nonzero HFK (HFK detects genus). | PD / grid → integer | ✅ done | ✓ | 381.19 ms | same call | ✓ matches KnotInfo |
 | **Fibered-ness (via HFK)** | HFK detects fibredness (Ni): top Alexander grading has rank 1. | PD / grid → bool | 🔜 near | ✓ | *not implemented (target)* | same call | 🔗 oracle ref |
 | **Hom epsilon** | epsilon from the CFK^infinity structure (concordance). | PD / grid → integer in {-1,0,1} | 🔜 near | ~ | *not implemented (target)* | same call | 🔗 oracle ref |
 | **Ozsvath-Szabo nu** | nu from (tau, epsilon). | PD / grid → integer | 🔜 near | ~ | *not implemented (target)* | same call | 🔗 oracle ref |
 | **L-space knot predicate** | Knot is an L-space knot iff HFK is a thin staircase (all ranks 1). | PD / grid → bool | 🔜 near | ✓ | *not implemented (target)* | same call | 🔗 oracle ref |
 
-## Khovanov-family homology -- vs KnotJob / JavaKh / KnotTheory
+## Khovanov-family homology -- vs KnotJob / Khoca / JavaKh / KhoHo / knotkit / kht++
 
 Native cube-of-resolutions over F2 and Q (and, planned, Z/reduced/odd). KnotInfo's Khovanov columns are themselves KnotJob output. Pure Python and one schema vs Java / Mathematica; reproducible across the acceleration tiers.
 
-| Invariant | Math | In → Out | Status | KnotInfo | Tetradrome | KnotJob | JavaKh | KhoHo | SageMath | Validation |
-|---|---|---|---|---|---|---|---|---|---|---|
-| **Khovanov homology (F2)** | Unreduced Khovanov over F2 from the cube of resolutions; d^2 = 0 checked. | PD → bigraded Betti numbers | ✅ done | ✓ | 10.42 ms | same call ↔ | - | - | same call ✓ | ✓ matches KnotInfo |
-| **Khovanov homology (Q)** | Unreduced Khovanov over Q (exact rational reduction). | PD → bigraded Betti numbers | ✅ done | ✓ | 26.14 ms | 302.92 ms ↔ | 343.22 ms ↔ | 37.79 ms ↔ | same call ✓ | ✓ matches KnotInfo |
-| **Rasmussen s** | s read off the quantum filtration on Lee homology over Q (\|s\|/2 <= g4). | PD → even integer | ✅ done | ✓ | 38.57 ms | same call ↔ | - | - | - | ✓ matches KnotInfo |
-| **Lee homology (Q)** | Lee deformation of Khovanov over Q (2-dim for a knot); the source of s. | PD → filtered homology | ✅ done | ~ | *not implemented (target)* | - | - | - | - | - |
-| **Khovanov homology (Z, torsion)** | Integral Khovanov including torsion; extends the F2/Q engine. | PD → bigraded groups + torsion | 🔧 build | ✓ | *not implemented (target)* | - | - | - | - | - |
-| **Odd Khovanov homology** | Odd Khovanov (Ozsvath-Rasmussen-Szabo), a sibling engine. | PD → bigraded groups | 🔧 build | ✓ | *not implemented (target)* | - | - | - | - | - |
-| **Homological width** | Width of (integral) Khovanov homology. | PD → integer | 🔧 build | ✓ | *not implemented (target)* | - | - | - | - | - |
+| Invariant | Math | In → Out | Status | KnotInfo | Tetradrome | KnotJob | JavaKh | KhoHo | SageMath | Khoca | knotkit | kht++ | Validation |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **Khovanov homology (F2)** | Unreduced Khovanov over F2 from the cube of resolutions; d^2 = 0 checked. | PD → bigraded Betti numbers | ✅ done | ✓ | 16.59 ms | same call ↔ | same call ✓ | - | same call ✓ | 98.24 ms ✓ | 11.36 ms ✓ | same call ✓ | ✓ matches KnotInfo |
+| **Khovanov homology (Q)** | Unreduced Khovanov over Q (exact rational reduction). | PD → bigraded Betti numbers | ✅ done | ✓ | 84.00 ms | 332.55 ms ↔ | 441.97 ms ↔ | 89.58 ms ✓ | same call ✓ | 102.29 ms ✓ | 14.38 ms ✓ | - | ✓ matches KnotInfo |
+| **Rasmussen s** | s read off the quantum filtration on Lee homology over Q (\|s\|/2 <= g4). | PD → even integer | ✅ done | ✓ | 140.08 ms | same call ↔ | - | - | - | - | 25.20 ms ✓ | - | ✓ matches KnotInfo |
+| **Lee homology (Q)** | Lee deformation of Khovanov over Q (2-dim for a knot); the source of s. | PD → filtered homology | 🔜 near | ~ | *not implemented (target)* | - | - | - | - | - | - | - | - |
+| **Khovanov homology (Z, torsion)** | Integral Khovanov including torsion; extends the F2/Q engine. | PD → bigraded groups + torsion | 🔧 build | ✓ | *not implemented (target)* | same call | 385.20 ms | - | - | 109.98 ms | - | - | 🔗 oracle ref |
+| **Khovanov homology (reduced)** | Basepoint-reduced Khovanov; a front-end variant of the F2/Q engine (homology-engine.md section 7, Phase 9). | PD → bigraded groups | 🔧 build | ✓ | *not implemented (target)* | same call | - | - | - | same call | - | 14.21 ms | 🔗 oracle ref |
+| **Odd Khovanov homology** | Odd Khovanov (Ozsvath-Rasmussen-Szabo), a sibling engine. | PD → bigraded groups | 🔧 build | ✓ | *not implemented (target)* | 310.47 ms | - | - | - | - | - | - | 🔗 oracle ref |
+| **Homological width** | Width of (integral) Khovanov homology. | PD → integer | 🔧 build | ✓ | *not implemented (target)* | same call | same call | - | - | same call | - | - | 🔗 oracle ref |
 
-## Classical & polynomial invariants -- vs SageMath / KnotTheory
+## Classical & polynomial invariants -- vs SageMath / Regina
 
-Computed natively from a Seifert matrix or a skein recursion. KnotInfo tabulates the values; Sage is the live computational peer (Spherogram under plain pip is diagram-only). Pure Python, no Sage runtime required.
+Computed natively from a Seifert matrix or a skein recursion. KnotInfo tabulates the values; SageMath and Regina are the live computational peers (Spherogram under plain pip is diagram-only). Conway, two-variable Kauffman, algebraic concordance order and braid index have no provisioned computing peer: SageMath 9.5 lacks them. Pure Python, no Sage runtime required.
 
 | Invariant | Math | In → Out | Status | KnotInfo | Tetradrome | Regina | SageMath | Validation |
 |---|---|---|---|---|---|---|---|---|
-| **Jones polynomial** | Kauffman bracket over the resolution cube. | PD → Laurent polynomial | ✅ done | ✓ | 0.93 ms | 0.06 ms ✓ | 2623.19 ms ↔ | ✓ matches KnotInfo |
-| **Determinant** | \|Delta(-1)\| from the Seifert form. | braid / PD → integer | ✅ done | ✓ | 0.04 ms | - | same call ✓ | ✓ matches KnotInfo |
-| **Signature** | Signature of V + V^T (Seifert form). | braid / PD → integer | ✅ done | ✓ | 0.11 ms | - | same call ↔ | ✓ matches KnotInfo |
-| **Alexander polynomial** | Canonical Alexander from the Seifert form. | braid / PD → Laurent polynomial | ✅ done | ✓ | 0.38 ms | - | same call ✓ | ✓ matches KnotInfo |
-| **Conway polynomial** | Alexander in the Conway variable z = t^.5 - t^-.5. | braid / PD → polynomial | 🔜 near | ✓ | *not implemented (target)* | - | - | - |
-| **HOMFLY-PT polynomial** | HOMFLY-PT skein recursion (crossing resolution / Hecke). | PD → two-variable polynomial | 🔜 near | ✓ | *not implemented (target)* | same call | - | 🔗 oracle ref |
-| **Kauffman polynomial** | Dubrovnik / F two-variable skein. | PD → two-variable polynomial | 🔜 near | ✓ | *not implemented (target)* | - | - | - |
-| **Levine-Tristram signature function** | Signature of (1-w)V + (1-wbar)V^T for w on the unit circle. | braid / PD → step function on S^1 | 🔜 near | ✓ | *not implemented (target)* | - | - | - |
-| **Arf invariant** | Delta(t) mod 8 / Seifert-form Arf. | braid / PD → bit | 🔜 near | ✓ | *not implemented (target)* | - | - | - |
-| **Algebraic concordance order** | Witt class of the Seifert form (Levine's group). | braid / PD → order (int or inf) | 🔜 near | ✓ | *not implemented (target)* | - | - | - |
-| **Braid index** | MFW (HOMFLY) lower bound + Seifert-circle upper bound. | PD / braid → integer | 🔧 build | ✓ | *not implemented (target)* | - | - | - |
+| **Jones polynomial** | Kauffman bracket over the resolution cube. | PD → Laurent polynomial | ✅ done | ✓ | 2.30 ms | 0.08 ms ✓ | 3312.51 ms ↔ | ✓ matches KnotInfo |
+| **Determinant** | \|Delta(-1)\| from the Seifert form. | braid / PD → integer | ✅ done | ✓ | 0.64 ms | same call ✓ | same call ✓ | ✓ matches KnotInfo |
+| **Signature** | Signature of V + V^T (Seifert form). | braid / PD → integer | ✅ done | ✓ | 0.85 ms | - | same call ↔ | ✓ matches KnotInfo |
+| **Alexander polynomial** | Canonical Alexander from the Seifert form. | braid / PD → Laurent polynomial | ✅ done | ✓ | 1.80 ms | 0.08 ms ✓ | same call ✓ | ✓ matches KnotInfo |
+| **Conway polynomial** | Alexander in the Conway variable z = t^.5 - t^-.5. | braid / PD → polynomial | 🔜 near | ✓ | *not implemented (target)* | - | n/a | - |
+| **HOMFLY-PT polynomial** | HOMFLY-PT skein recursion (crossing resolution / Hecke). | PD → two-variable polynomial | 🔜 near | ✓ | *not implemented (target)* | same call | 0.00 ms | 🔗 oracle ref |
+| **Kauffman polynomial** | Dubrovnik / F two-variable skein. | PD → two-variable polynomial | 🔜 near | ✓ | *not implemented (target)* | - | n/a | - |
+| **Levine-Tristram signature function** | Signature of (1-w)V + (1-wbar)V^T for w on the unit circle. | braid / PD → step function on S^1 | 🔜 near | ✓ | *not implemented (target)* | - | 182.38 ms | 🔗 oracle ref |
+| **Arf invariant** | Delta(t) mod 8 / Seifert-form Arf. | braid / PD → bit | 🔜 near | ✓ | *not implemented (target)* | - | 0.90 ms | 🔗 oracle ref |
+| **Algebraic concordance order** | Witt class of the Seifert form (Levine's group). | braid / PD → order (int or inf) | 🔜 near | ✓ | *not implemented (target)* | - | n/a | - |
+| **Braid index** | MFW (HOMFLY) lower bound + Seifert-circle upper bound. | PD / braid → integer | 🔧 build | ✓ | *not implemented (target)* | - | n/a | - |
 
-## Khovanov-Rozansky / sl(N) -- vs Khoca
+## Khovanov-Rozansky / sl(N) -- vs KnotJob (sl(3))
 
-Aspirational higher-homology direction. Khoca demonstrates the computation exists and is the reference target; no native engine yet.
+Aspirational higher-homology direction; no native engine yet. KnotJob computes sl(3) homology from the PD and is the reference target. Khoca's general sl(N) needs a bipartite knot given as a matched diagram -- fed a PD it returns nonsense rather than an error -- so it is not measured here.
 
-| Invariant | Math | In → Out | Status | KnotInfo | Tetradrome | Khoca | Validation |
-|---|---|---|---|---|---|---|---|
-| **sl(N) / Khovanov-Rozansky homology** | Categorified sl(N) invariant (HOMFLY-homology family). | PD → triply-graded groups | 🔬 research | ✗ | *not implemented (target)* | *adapter pending* | - |
+| Invariant | Math | In → Out | Status | KnotInfo | Tetradrome | KnotJob | Khoca | Validation |
+|---|---|---|---|---|---|---|---|---|
+| **sl(N) / Khovanov-Rozansky homology** | Categorified sl(N) invariant (HOMFLY-homology family). | PD → triply-graded groups | 🔬 research | ✗ | *not implemented (target)* | 463.36 ms | n/a | 🔗 oracle ref |
 
 ## Hyperbolic & geometric -- vs SnapPy / SnapPea
 
@@ -80,8 +81,8 @@ A SnapPea-class numerical-geometry engine; build-vs-oracle-only is deliberately 
 
 | Invariant | Math | In → Out | Status | KnotInfo | Tetradrome | SnapPy | Validation |
 |---|---|---|---|---|---|---|---|
-| **Hyperbolic volume** | Volume of the complement via an ideal triangulation solved to high precision. | PD / triangulation → real | 🔬 research | ✓ | *not implemented (target)* | 1.34 ms | 🔗 oracle ref |
-| **Chern-Simons invariant** | Chern-Simons of the hyperbolic structure. | PD / triangulation → real mod 1 | 🔬 research | ✓ | *not implemented (target)* | - | - |
+| **Hyperbolic volume** | Volume of the complement via an ideal triangulation solved to high precision. | PD / triangulation → real | 🔬 research | ✓ | *not implemented (target)* | 1.65 ms | 🔗 oracle ref |
+| **Chern-Simons invariant** | Chern-Simons of the hyperbolic structure. | PD / triangulation → real mod 1 | 🔬 research | ✓ | *not implemented (target)* | 1.81 ms | 🔗 oracle ref |
 | **A-polynomial** | SL2(C) character-variety A-polynomial. | PD / triangulation → two-variable polynomial | 🔬 research | ~ | *not implemented (target)* | - | - |
 
 ## Concordance & 4-genus bounds -- KnotInfo tabulated, no computing program
@@ -111,6 +112,7 @@ The north star: knot invariants reframed as 4D obstructions, knot->4-manifold br
 ## Honest caveats
 
 - **Speed is a target, not a verdict.** Where Tetradrome trails a compiled oracle (notably the n! grid Floer engine vs Szabo's compiled-C HFKcalc), that gap is expected and is the documented case for the Tier-2 Szabo-cube engine. Trailing a compiled tool while staying native, auditable, and portable is the accepted trade.
+- **In-process vs cold-subprocess timings.** These are not all measured the same way. Oracles called in-process from the already-warm Python (`knot_floer_homology`, Regina, SnapPy) report pure computation -- sub-millisecond to a few ms. The subprocess oracles (SageMath, KnotJob, JavaKh, KhoHo) boot a fresh runtime on every call, so their numbers are dominated by startup, not the algorithm: Sage's ~2.6 s is almost entirely launching its stack. A native-vs-subprocess gap (e.g. Jones vs Sage) therefore largely measures process launch, not math; the warm in-process oracles are the fair head-to-head, where Regina actually edges native on Jones. Amortizing that startup with a persistent oracle session is a tracked improvement.
 - **Chirality.** Tetradrome follows KnotInfo's mirror convention; `knot_floer_homology` may report the mirror, so tau / s agreement is judged up to sign.
 - **Host matters.** These are this host's numbers. The grid Floer engine's multi-core scaling shows only on a many-core box (CT 250); a comprehensive run regenerates this file there with every oracle installed.
 - **Acceleration preserves answers.** Every acceleration tier is checked to reproduce the reference exactly; speed never changes a result.
