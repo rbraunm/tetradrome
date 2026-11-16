@@ -11,7 +11,7 @@ number. Keep this hand-authored and reviewed -- it is the spec, the generator on
 
 Status flags (honest about what is real):
   done      -- implemented natively and validated against KnotInfo
-  landing   -- engine in progress (the grid Floer Phase 6 work)
+  landing   -- engine in progress
   near      -- cleanly authorable on machinery we already have (coverage-map Tier 1)
   build     -- a substantial native engine, well-defined (Tier 2)
   bound     -- no program computes it for general knots; we author the bound our invariants

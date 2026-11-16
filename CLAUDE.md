@@ -37,11 +37,11 @@ chain, the fewer versions can silently move a result.
 The core is built to be accelerated (JIT, multi-core/NUMA, optional GPU) WITHOUT changing
 its answers.
 - Every acceleration tier MUST reproduce the reference result exactly -- bit-for-bit, validated independently per tier. A faster tier that disagrees is broken, not "approximate". `d^2 = 0` checks on native complexes hold regardless of tier.
-- The GPU dispatch threshold is a calibratable knob, never a hidden default. VRAM-aware routing reads available VRAM rather than hardcoding a cutoff; the right threshold differs by card.
+- Where a job runs is the scheduler's decision, made from measured speed and the memory each device reports (`roadmap/design/scheduler.md`). Never a hardcoded cutoff: the right answer differs by card.
 
 Per-tier agreement traps to guard against:
 - JIT (Numba) reducer: today's only Numba tier is the F2 packed reducer, which is mod 2 (XOR over uint64 words) and so immune to integer overflow -- this trap does not apply to it. It applies to a FUTURE multimodular Q reducer: Numba compiles to fixed-width ints and wraps silently on overflow, where the pure-Python reference uses arbitrary precision. When that Q reducer is added, ensure intermediate products (a*b before reduction) cannot overflow int64 under the chosen moduli, and that its agreement tests include inputs large enough to expose overflow -- not just small cases.
-- GPU dense kernel: arithmetic is exact (GF(2)/integer, no float), so any disagreement is from reduction order or races -- not rounding. Today the packed-gpu tier runs on the device whenever it is selected; there is no size-based router yet, so GPU agreement is validated on large inputs with a positive device-execution check (the kernel must allocate the device matrix). The VRAM dispatch threshold and CPU fallback are FUTURE/intended design: when that router is added, agreement tests must also exercise inputs on both sides of the threshold, so the GPU path and the CPU fallback are both covered and shown to agree.
+- GPU dense kernel: arithmetic is exact (GF(2)/integer, no float), so any disagreement is from reduction order or races -- not rounding. A backend named explicitly (`packed-gpu`) runs on the device or fails. `auto` gives each reduction job a GPU path and a CPU path: the planner drops a path the machine cannot serve (no device, or more VRAM than the largest device has) and chooses among the rest by measured speed. GPU agreement is validated on large inputs with a positive device-execution check (the kernel must allocate the device matrix), and agreement tests must cover both paths of an `auto` job.
 
 ## No silent fallbacks
 If a requested GPU/JIT/NUMA path is unavailable, fail loudly with a clear message. Never
@@ -68,7 +68,7 @@ engine aims at.
 Exercise each only where its hardware exists; the agreement check must pass before any
 benchmark number means anything.
 - Numba JIT reducer -- any CPU.
-- Batched dense GPU kernel -- a CUDA-capable GPU. Calibrate the VRAM threshold to the actual card; small-VRAM results are a checkpoint, not the final calibration for a larger card.
+- Batched dense GPU kernel -- a CUDA-capable GPU. Timings from a small-VRAM card are a checkpoint, not the measure of a larger one.
 - NUMA-aware core pinning -- a multi-socket host; a no-op on single-socket machines.
 
 Local validation order: baseline pytest; GPU detection + cupy install; JIT agreement
