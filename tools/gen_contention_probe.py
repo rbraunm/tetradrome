@@ -1,28 +1,27 @@
 #!/usr/bin/env python3
-"""Generation contention probe for the grid-Floer engine (diagnostic).
+"""NUMA contention probe for the grid-Floer kernels (diagnostic).
 
-Question this answers: is grid-Floer generation compute-bound or
-memory/allocation-bound? That decides the lever (JIT/vectorize vs a packed
-rewrite that kills per-state object churn) and whether more cores ever help.
+Question: do the scheduled grid kernels keep their per-state speed as more cores run them at
+once -- on one NUMA node's physical cores, on both nodes' physical cores, and on every logical
+CPU? The answer decides whether the scheduler should fill both nodes with one calculation's jobs
+or give each node its own calculation, and whether hyperthread siblings are worth using.
 
-Method: run the REAL per-state work (_generate_slice, alloc-heavy) on N cores
-at once -- pinned, all released together by a barrier -- across a
-topology-aware sweep (solo / one NUMA node / all physical / all logical), and
-watch per-state time degrade with N. Run an allocation-LIGHT twin
-(_grading_slice: gradings only, no per-state tuples/sets) through the same
-sweep. The gap between the two degradation curves separates allocation
-contention from arithmetic/bandwidth contention; process_time vs wall tells
-stalls (more cycles per state) from descheduling.
+Method: run a real slice job on N cores at once, each worker pinned to one CPU and all released
+together by a barrier, for N = 1, one node's physical cores, all physical cores, all logical
+CPUs. Two kinds of job, as the scheduler runs them:
+  generation  -- gradings, differential and target ranks for a slice (`_generate_slice`)
+  histogram   -- gradings only (`_histogram_slice`)
+The kernels are bound in the parent before the workers fork (`prewarm`), so no worker compiles
+inside its timed region.
 
-Reading: if gen-x climbs while grad-x stays flat through the physical-core
-points (1 -> one node -> all phys), the cost is per-state allocation -> a
-packed rewrite is the win and more cores will not help. If both climb together
-across those points, it is arithmetic/bandwidth on the work itself -> JIT or
-vectorize helps but watch bandwidth. A jump only at the all-logical point is
-just HT oversubscription -> physical cores still scale.
+Reading: x is per-state wall time against the same kind's N=1 baseline. Flat through all physical
+cores: the work is compute-bound and both nodes scale, so one calculation may spread over both.
+Climbing at one node's physical cores: shared bandwidth or cache inside a node. Worse on the
+second node than the first (the per-node line): placement or remote memory. A jump only at all
+logical CPUs: hyperthread siblings share a core and add little. cpu/st near wall/st means the
+workers ran, not waited.
 
-Uses only existing tetradrome functions. Peak RAM ~= N * SLICE * ~3KB
-(<= ~20 GB at N=88), well inside 200 GB.
+Peak RAM is about N * SLICE * 2 KB at grid number 10.
 """
 import os
 import time
@@ -30,11 +29,12 @@ import resource
 import statistics
 import multiprocessing as mp
 
+from tetradrome.engines.floer import prewarm  # noqa: F401 -- binds the kernels before forking
 from tetradrome.engines.floer.grid import staircase_grid
-from tetradrome.engines.floer.generation import _generate_slice, _grading_slice
+from tetradrome.engines.floer.generation import _generate_slice, _histogram_slice
 
 N_GRID = 10
-SLICE = 40000            # states per worker; 88 * 40000 < 10! and within RAM
+SLICE = 40000            # states per worker; every worker takes the same first slice
 REPEAT_BASELINE = 3
 
 
@@ -52,53 +52,47 @@ def parse_cpulist(text):
 
 
 def read_topology(allowed):
-    """(node_cpus, node_of, ordered, reps_first_node, n_phys, n_log, fallback).
+    """(node_cpus, node_of, ordered, reps_first_node, n_phys, n_log).
 
     ordered lists allowed cpus as: node0 physical reps, node1 physical reps,
     ..., then the 2nd HT sibling of each -- so ordered[:k] grows by locality
     (fills one socket's physical cores, then the other, then HT siblings)."""
-    try:
-        node_cpus = {}
-        for entry in sorted(os.listdir("/sys/devices/system/node")):
-            if not entry.startswith("node"):
-                continue
-            with open(f"/sys/devices/system/node/{entry}/cpulist") as fh:
-                cpus = sorted(c for c in parse_cpulist(fh.read()) if c in allowed)
-            if cpus:
-                node_cpus[int(entry[4:])] = cpus
-        node_of = {c: nid for nid, cpus in node_cpus.items() for c in cpus}
+    node_cpus = {}
+    for entry in sorted(os.listdir("/sys/devices/system/node")):
+        if not entry.startswith("node"):
+            continue
+        with open(f"/sys/devices/system/node/{entry}/cpulist") as fh:
+            cpus = sorted(c for c in parse_cpulist(fh.read()) if c in allowed)
+        if cpus:
+            node_cpus[int(entry[4:])] = cpus
+    node_of = {c: nid for nid, cpus in node_cpus.items() for c in cpus}
 
-        seen = set()
-        phys = []          # (representative_cpu, [sibling cpus])
-        for cpu in sorted(allowed):
-            if cpu in seen:
-                continue
-            with open(f"/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list") as fh:
-                sibs = sorted(c for c in parse_cpulist(fh.read()) if c in allowed)
-            seen.update(sibs)
-            phys.append((min(sibs), sibs))
-        if not node_cpus or not phys:
-            raise RuntimeError("empty topology")
+    seen = set()
+    phys = []          # (representative_cpu, [sibling cpus])
+    for cpu in sorted(allowed):
+        if cpu in seen:
+            continue
+        with open(f"/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list") as fh:
+            sibs = sorted(c for c in parse_cpulist(fh.read()) if c in allowed)
+        seen.update(sibs)
+        phys.append((min(sibs), sibs))
+    if not node_cpus or not phys:
+        raise RuntimeError("no NUMA or core topology under /sys for the allowed CPUs")
 
-        by_node = {}
-        for rep, sibs in phys:
-            by_node.setdefault(node_of.get(rep, 0), []).append(sibs)
-        ordered = []
-        max_depth = max(len(s) for _, s in phys)
-        for depth in range(max_depth):
-            for nid in sorted(by_node):
-                for sibs in by_node[nid]:
-                    if depth < len(sibs):
-                        ordered.append(sibs[depth])
+    by_node = {}
+    for rep, sibs in phys:
+        by_node.setdefault(node_of[rep], []).append(sibs)
+    ordered = []
+    max_depth = max(len(s) for _, s in phys)
+    for depth in range(max_depth):
+        for nid in sorted(by_node):
+            for sibs in by_node[nid]:
+                if depth < len(sibs):
+                    ordered.append(sibs[depth])
 
-        first_set = set(node_cpus[sorted(node_cpus)[0]])
-        reps_first_node = sum(1 for rep, _ in phys if rep in first_set)
-        return node_cpus, node_of, ordered, reps_first_node, len(phys), len(ordered), False
-    except Exception as exc:
-        print(f"# topology read failed ({exc}); naive fallback "
-              f"(NUMA/HT labels unreliable)", flush=True)
-        a = sorted(allowed)
-        return {0: a}, {c: 0 for c in a}, a, len(a), len(a), len(a), True
+    first_set = set(node_cpus[sorted(node_cpus)[0]])
+    reps_first_node = sum(1 for rep, _ in phys if rep in first_set)
+    return node_cpus, node_of, ordered, reps_first_node, len(phys), len(ordered)
 
 
 def worker(o_markers, x_markers, kind, core, barrier, queue):
@@ -108,10 +102,12 @@ def worker(o_markers, x_markers, kind, core, barrier, queue):
         wall0, cpu0 = time.perf_counter(), time.process_time()
         if kind == "gen":
             result = _generate_slice((o_markers, x_markers, 0, SLICE))
-            produced = len(result)
+            produced = len(result.maslov)
         else:
-            result = _grading_slice((o_markers, x_markers, 0, SLICE))
+            result = _histogram_slice((o_markers, x_markers, 0, SLICE))
             produced = sum(result.values())
+        if produced != SLICE:
+            raise RuntimeError(f"{kind} slice covered {produced} states, expected {SLICE}")
         wall = time.perf_counter() - wall0
         cpu = time.process_time() - cpu0
         rss_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
@@ -166,24 +162,23 @@ def summarize(label, rows, baseline_wall_us, node_of):
 def main():
     allowed = set(os.sched_getaffinity(0))
     (node_cpus, node_of, ordered, reps_first_node,
-     n_phys, n_log, fallback) = read_topology(allowed)
+     n_phys, n_log) = read_topology(allowed)
     sweep = sorted({1, reps_first_node, n_phys, n_log})
     sweep = [n for n in sweep if n <= len(allowed)]
 
     grid = staircase_grid(N_GRID)
     o_markers, x_markers = grid.O, grid.X
 
-    print(f"# generation contention probe  grid n={N_GRID}  slice={SLICE} states/worker")
+    print(f"# NUMA contention probe  grid n={N_GRID}  slice={SLICE} states/worker")
     print("# allowed cores: %d   NUMA: %s" % (
         len(allowed),
         "; ".join(f"node{nid}={len(c)}cpu" for nid, c in sorted(node_cpus.items()))))
-    print(f"# physical cores: {n_phys}   logical: {n_log}   fallback={fallback}")
+    print(f"# physical cores: {n_phys}   logical: {n_log}")
     print(f"# sweep N: {sweep}  (1=solo, {reps_first_node}=one NUMA node phys, "
           f"{n_phys}=all phys, {n_log}=all logical)")
-    print("# x = per-state wall vs the N=1 baseline of the SAME work-kind; "
-          "compare gen-x against grad-x\n")
+    print("# x = per-state wall vs the N=1 baseline of the same kind of job\n")
 
-    for kind, label in (("gen", "generate(alloc-heavy)"), ("grad", "gradings(alloc-light)")):
+    for kind, label in (("gen", "generation slice"), ("hist", "histogram slice")):
         base_core = node_cpus[sorted(node_cpus)[0]][0]
         base_rows = []
         for _ in range(REPEAT_BASELINE):
