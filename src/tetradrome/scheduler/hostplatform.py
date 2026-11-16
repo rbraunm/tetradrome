@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import abc
 import contextlib
+import functools
 import logging
 import os
 import sys
@@ -420,9 +421,10 @@ def _os_release_ids() -> tuple[str, str]:
     return (ids.get("ID", ""), ids.get("ID_LIKE", ""))
 
 
+@functools.lru_cache(maxsize=None)
 def for_host() -> HostPlatform:
-    """The host platform for the OS we are running on. Raises loudly on an unrecognized host so
-    that supporting it is a deliberate addition, not a silent guess."""
+    """The host platform for the OS we are running on, decided once per process. Raises loudly on
+    an unrecognized host so that supporting it is a deliberate addition, not a silent guess."""
     if sys.platform == "win32":
         return WindowsHostPlatform()
     distro_id, id_like = _os_release_ids()

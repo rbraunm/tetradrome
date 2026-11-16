@@ -54,6 +54,11 @@ logger = logging.getLogger(__name__)
 
 _GRACE_SECONDS = 2.0
 
+# The per-worker overhead probe's answers, by what was probed. A worker's import baseline and a
+# device context's size belong to the process and the box, not to one run, and the probe costs a
+# process start, so each is measured once.
+_OVERHEAD_PROBED: dict = {}
+
 # Modules the forkserver imports once so every forked worker inherits them warm, turning a
 # cold ~400ms import per job into a ~1ms fork. The prewarm module goes further than an import: it
 # binds the compiled grid kernels, which a worker would otherwise load on its first call.
@@ -462,6 +467,12 @@ class Scheduler:
                            and session_setup is not None and not explicit_context)
         if worker_shared and not measure_context:
             return 0, (self.context_vram_reserve if explicit_context else 0)
+        probed = (platform.name, type(accelerator).__name__, measure_context)
+        if probed in _OVERHEAD_PROBED:
+            probe_ram, probe_context = _OVERHEAD_PROBED[probed]
+            return (0 if worker_shared else probe_ram,
+                    self.context_vram_reserve if explicit_context
+                    else (probe_context if measure_context else 0))
 
         probe_queue = ctx.Queue()
         proc = ctx.Process(target=_overhead_probe_main,
@@ -476,6 +487,7 @@ class Scheduler:
                 "overhead probe failed; cannot size the per-worker RAM baseline and context "
                 "VRAM this platform and device need.")
         probe_ram, probe_context = measured
+        _OVERHEAD_PROBED[probed] = measured
         ram_baseline = 0 if worker_shared else probe_ram
         if explicit_context:
             context_vram = self.context_vram_reserve
@@ -491,14 +503,18 @@ class Scheduler:
         platform = for_host()
         logger.info("host platform: %s", platform.name)
         ctx = _start_context()
-        result_queue = ctx.Queue()
+        # What only worker jobs need -- the queue their results come back on and the thread that
+        # samples their memory -- is set up when the first one is launched, so a run of inline
+        # jobs costs none of it.
+        worker_side = {"queue": None, "sampler": None}
+        stop = threading.Event()
         sample_queue: queue.Queue = queue.Queue()
         ledger = Ledger(self.machine)
 
         # The accelerator axis: which device vendor is present, if any. It supplies the warm
         # session hooks (a caller-provided pair still overrides) and the context-free VRAM read
         # the overhead probe needs.
-        accelerator = detect_accelerator()
+        accelerator = detect_accelerator() if self.machine.gpus else None
         warm_setup = self.warm_setup
         warm_between = self.warm_between
         if accelerator is not None:
@@ -561,6 +577,14 @@ class Scheduler:
                 cores=frozenset(), declared_ram=size, node_index=None))
         del inputs_store                # the table is the sole owner now
 
+        def result_queue():
+            if worker_side["queue"] is None:
+                worker_side["queue"] = ctx.Queue()
+                worker_side["sampler"] = _Sampler(snapshot, sample_queue, self.sample_interval,
+                                                  stop, platform)
+                worker_side["sampler"].start()
+            return worker_side["queue"]
+
         def is_running(key) -> bool:
             return key in running or key in warm_running or key in inline_running
 
@@ -576,7 +600,7 @@ class Scheduler:
             node = gpu.numa_node if gpu.numa_node is not None else self.machine.nodes[0].index
             cores = next((n.cores for n in self.machine.nodes if n.index == node),
                          self.machine.nodes[0].cores)
-            worker = WarmWorker(ctx, cores, gpu_index, result_queue,
+            worker = WarmWorker(ctx, cores, gpu_index, result_queue(),
                                 warm_setup, warm_between, platform)
             warm_workers[gpu_index] = worker
             if context_vram > 0 or ram_baseline > 0:
@@ -768,7 +792,7 @@ class Scheduler:
             else:
                 proc = ctx.Process(target=_worker_main, args=(
                     job.key, job.run, job_inputs, deps,
-                    placed.cores, placed.gpu_index, result_queue, platform,
+                    placed.cores, placed.gpu_index, result_queue(), platform,
                 ))
                 launched_at[job.key] = time.perf_counter()
                 proc.start()
@@ -958,16 +982,19 @@ class Scheduler:
                 poison(key, payload)
 
         def reap(block) -> bool:
+            results = worker_side["queue"]
+            if results is None:
+                return False            # no worker has been launched, so nothing can be waiting
             got = False
             if block:
                 try:
-                    reap_one(result_queue.get(timeout=self.sample_interval))
+                    reap_one(results.get(timeout=self.sample_interval))
                     got = True
                 except queue.Empty:
                     pass
             while True:
                 try:
-                    reap_one(result_queue.get_nowait())
+                    reap_one(results.get_nowait())
                 except queue.Empty:
                     break
                 got = True
@@ -1085,9 +1112,6 @@ class Scheduler:
             logger.warning("pre-flight: %d job(s) infeasible, abandoning their lineage: %s",
                            len(infeasible), ", ".join(repr(e.job_key) for e in infeasible))
 
-        stop = threading.Event()
-        sampler = _Sampler(snapshot, sample_queue, self.sample_interval, stop, platform)
-        sampler.start()
         total = len(graph)
         try:
             while len(completed) + len(cancelled) < total:
@@ -1109,15 +1133,17 @@ class Scheduler:
                         f"(RAM full and disk budget exhausted); remaining: {remaining}")
         finally:
             stop.set()
-            sampler.join(timeout=1.0)
+            if worker_side["sampler"] is not None:
+                worker_side["sampler"].join(timeout=1.0)
             for key in list(running):
                 stop_worker(key)
             for gpu_index, worker in warm_workers.items():
                 if context_vram > 0 or ram_baseline > 0:
                     ledger.remove(("__warm_context__", gpu_index))
                 worker.shutdown()
-            result_queue.close()
-            result_queue.join_thread()
+            if worker_side["queue"] is not None:
+                worker_side["queue"].close()
+                worker_side["queue"].join_thread()
             # Unlink any shared segment still resident: on a clean run every shared result is freed
             # as its last consumer dispatches, so this catches only the abort path, where leaving
             # POSIX segments around would leak them.
