@@ -107,6 +107,23 @@ The old one-knot-at-a-time path took 5 h 15 min to 5 h 32 min for 43 knots' HFK-
 four processes side by side. The τ run's last five minutes were two knots' single-core rank and
 level jobs.
 
+NUMA contention (`tools/gen_contention_probe.py`, five runs; x is per-state time against one
+worker alone, 15 µs per state for a generation slice and 1.7 µs for a histogram slice):
+
+| Workers at once | Generation slice | Histogram slice |
+|---|---|---|
+| 8, one node's physical cores | x1.4 – 1.6 | x1.0 – 1.1 |
+| 16, both nodes' physical cores | x1.0 – 1.1 | x1.0 – 1.2 |
+| 32, every logical CPU | x1.4 – 2.0 | x2.0 – 3.5 |
+
+- Spreading one calculation's jobs over both nodes costs nothing measurable.
+- Hyperthread siblings add about 20% throughput to generation and lose throughput on histogram
+  slices: 32 histogram workers do less than 16.
+- Not explained: 8 workers on one node run slower than the same node's 8 workers when the other
+  node is also busy, and node 1 runs generation slower than node 0 (19 – 24 against 15 µs). The
+  host runs other guests on these sockets and scales its clock (1.2 to 3.6 GHz), so both may be
+  the host rather than the work.
+
 ## Not scheduled yet
 
 - A Khovanov, Lee or Rasmussen calculation is one job; its build and per-grading reductions are
