@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Randy Braunm
 
-"""knotkit as a SPEC 12.1 validator: the Rasmussen s-invariant.
+"""knotkit as a SPEC 6 validator: the Rasmussen s-invariant.
 
 Self-contained by design: the comparison layer (``scripts/comparison/adapters.py``)
 keeps its own measurement-oriented knotkit path, and the two deliberately do not share
@@ -70,7 +70,7 @@ def parse_s(text: str) -> int:
 
 
 class KnotkitValidator:
-    """Read-only cross-check against knotkit (SPEC 12.1, ADR 0006)."""
+    """Read-only cross-check against knotkit (SPEC 6, ADR 0006)."""
 
     name = "knotkit"
     covered_invariants = _COVERED

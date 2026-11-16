@@ -3,7 +3,7 @@
 
 """The canonical-name record and the code must agree.
 
-Decision 0001 is the only list of canonical invariant names, and SPEC 12.4 carries the
+Decision 0001 is the only list of canonical invariant names, and SPEC 7 carries the
 same set with each backend's spelling alongside. Both drifted from ``compute()`` with
 nothing noticing: the record named ``rasmussen_invariant`` while ``compute()`` accepted
 only ``rasmussen_s``, and ``rational_khovanov_homology`` was in neither. These tests

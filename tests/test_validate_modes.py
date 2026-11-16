@@ -97,7 +97,7 @@ def test_validate_mode_guard_rejects_non_modes(bad):
 # --- mode logic against a wired computed oracle (stub at the registry boundary) ---
 
 class _StubValidator:
-    """A registry-shaped double for an external oracle (SPEC 12.1 contract)."""
+    """A registry-shaped double for an external oracle (SPEC 6 contract)."""
 
     name = "stub_oracle"
     covered_invariants = {"determinant"}

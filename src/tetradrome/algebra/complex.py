@@ -3,7 +3,7 @@
 
 """Graded chain complexes over F2 -- the shared back-end data structure.
 
-This is the invariant-agnostic core (SPEC.md 13.6; homology-engine design section 2):
+This is the invariant-agnostic core (SPEC.md 4; homology-engine design section 2):
 a front end (Khovanov, later Floer) emits one of these per independent grading, and
 the back end reduces it to homology. F2 first (decision 0003): a boundary map is a 0/1
 matrix, and this is the bit-set fast lane for it. The rational coefficients Lee /

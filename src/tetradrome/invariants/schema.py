@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Randy Braunm
 
-"""The result schema (SPEC 11).
+"""The result schema (SPEC 5).
 
 Nothing is returned as a bare value: every invariant result carries how it was
 produced and whether it was validated.
@@ -43,7 +43,7 @@ class ValidatorRecord:
 
 @dataclass(frozen=True)
 class ValidationStatus:
-    """The validators consulted for a result and their verdicts (SPEC 11, ADR 0013).
+    """The validators consulted for a result and their verdicts (SPEC 5, ADR 0013).
 
     A result is validated when at least one validator passed; it has a disagreement when any
     validator that ran disagreed (the fail-loud trigger). ``d_squared_check`` is deliberately

@@ -17,7 +17,7 @@ Two sources of truth, deliberately split (derive, don't duplicate):
 
 1. Wired coverage is LIVE. Everything about a wired oracle -- coverage, availability,
    version -- derives from its validator instance (``covered_invariants`` /
-   ``is_available`` / ``version_info``, the SPEC 12.1 contract). Nothing is restated
+   ``is_available`` / ``version_info``, the SPEC 6 contract). Nothing is restated
    statically.
 2. Unwired exists-anywhere is STATIC. ``_UNWIRED`` names computed oracles that exist in
    the world but that no validator wires -- exactly the set strict names in its
@@ -46,7 +46,7 @@ from .sage_adapter import SageValidator
 
 
 class Validator(Protocol):
-    """The SPEC 12.1 validator contract: read-only cross-checks, never producers.
+    """The SPEC 6 validator contract: read-only cross-checks, never producers.
 
     A validator never produces the value a user receives; it only confirms or
     contradicts the native one (ADR 0006).
@@ -67,7 +67,7 @@ _WIRED: tuple[Validator, ...] = (
 )
 
 # Computed oracles that exist in the world but are NOT wired as validators, per
-# canonical invariant name (sourced from SPEC 12.3 / docs/backend_matrix.md and the
+# canonical invariant name (sourced from docs/backend_matrix.md and the
 # provisioned set in scripts/install_oracles.sh). Floer has no entry: kfh is wired.
 # The classical four have no entries left: regina and sage are both wired (pip SnapPy
 # is Sage-only for all four -- verified empirically -- so it never was a standalone

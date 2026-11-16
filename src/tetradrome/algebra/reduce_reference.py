@@ -5,7 +5,7 @@
 
 This is the faithful reference (homology-engine design section 7, Phase 1) --
 correctness and obviousness over speed. Every later reducer (bit-packed F2, JIT, GPU)
-must agree with it (SPEC.md 4.2 / 13.7). F2 only for now (decision 0003).
+must agree with it (SPEC.md 2). F2 only for now (decision 0003).
 
 For a cochain complex with d^n: C^n -> C^(n+1),
 

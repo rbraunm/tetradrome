@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Randy Braunm
 
-"""Sage as a SPEC 12.1 validator: the classical four plus Khovanov Q/F2 cross-checks.
+"""Sage as a SPEC 6 validator: the classical four plus Khovanov Q/F2 cross-checks.
 
 Sage is provisioned only on CT 250 (apt sagemath, INSTALL_SAGE=1), so on other hosts
 this validator is wired-but-not-installed: strict raises the provisioning gap for any
@@ -180,7 +180,7 @@ def candidate_labels(invariant: str) -> tuple[str, ...]:
 
 
 class SageValidator:
-    """Read-only cross-check against Sage (SPEC 12.1, ADR 0006), transforms verified
+    """Read-only cross-check against Sage (SPEC 6, ADR 0006), transforms verified
     on CT 250 (see the module docstring for the run's provenance)."""
 
     name = "sage"

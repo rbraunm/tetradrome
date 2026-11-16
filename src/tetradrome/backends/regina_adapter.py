@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Randy Braunm
 
-"""Regina as a SPEC 12.1 validator: determinant, Alexander, and Jones cross-checks.
+"""Regina as a SPEC 6 validator: determinant, Alexander, and Jones cross-checks.
 
 Self-contained by design: the comparison layer (``scripts/comparison/adapters.py``)
 keeps its own measurement-oriented Regina path, and the two deliberately do not share
@@ -83,7 +83,7 @@ def _ascending_coefficients(poly: dict[int, int]) -> tuple[int, list[int]]:
 
 
 class ReginaValidator:
-    """Read-only cross-check against Regina's Link engine (SPEC 12.1, ADR 0006)."""
+    """Read-only cross-check against Regina's Link engine (SPEC 6, ADR 0006)."""
 
     name = "regina"
     covered_invariants = _COVERED

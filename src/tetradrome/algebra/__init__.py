@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Randy Braunm
 
-"""The shared, invariant-agnostic algebra back end (SPEC.md 13.6).
+"""The shared, invariant-agnostic algebra back end (SPEC.md 4).
 
 Front ends (Khovanov, Lee, later Floer) emit graded chain complexes; this package
 reduces them to homology. Two lanes behind one interface: an F2 fast lane (decision

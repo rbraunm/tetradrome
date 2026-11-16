@@ -22,7 +22,7 @@ from ..errors import BackendUnavailable, UnknownKnot
 _TABLE: list[dict] | None = None
 _BY_NAME: dict[str, dict] | None = None
 
-# Map our canonical invariant names onto KnotInfo columns (conventions.md, SPEC 12.4).
+# Map our canonical invariant names onto KnotInfo columns (conventions.md, SPEC 7).
 _ORACLE_COLUMN = {
     "determinant": "determinant",
     "signature": "signature",

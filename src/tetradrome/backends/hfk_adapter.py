@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Randy Braunm
 
-"""Szabo's HFK calculator as a validator (SPEC 12.1 / 13.8; ADR 0006).
+"""Szabo's HFK calculator as a validator (SPEC 6; ADR 0006).
 
 ``knot_floer_homology`` (kfh) wraps Szabo's HFKcalc: given a planar diagram it computes HFK-hat,
 the Ozsvath-Szabo tau invariant, and the Seifert genus. This adapter exposes it behind the one
@@ -28,7 +28,7 @@ _COVERED = {"knot_floer_homology"} | set(_KFH_SCALAR)
 
 
 class HFKValidator:
-    """Szabo's HFK calculator (kfh) behind the validator contract (SPEC 12.1)."""
+    """Szabo's HFK calculator (kfh) behind the validator contract (SPEC 6)."""
 
     name = "knot_floer_homology"
     covered_invariants = _COVERED

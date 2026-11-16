@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Randy Braunm
 
-"""Khoca as a SPEC 12.1 validator: unreduced Khovanov over F2 and over Q.
+"""Khoca as a SPEC 6 validator: unreduced Khovanov over F2 and over Q.
 
 Self-contained by design: the comparison layer (``scripts/comparison/adapters.py``)
 keeps its own measurement-oriented khoca path, and the two deliberately do not share
@@ -74,7 +74,7 @@ def raw_khoca(knot, ring: int) -> list:
 
 
 class KhocaValidator:
-    """Read-only cross-check against khoca (SPEC 12.1, ADR 0006)."""
+    """Read-only cross-check against khoca (SPEC 6, ADR 0006)."""
 
     name = "khoca"
     covered_invariants = _COVERED

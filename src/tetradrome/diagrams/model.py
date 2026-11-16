@@ -4,7 +4,7 @@
 """The normalized diagram: Tetradrome's single internal representation of a knot.
 
 Everything downstream (backends, invariants, validation, reports) consumes this,
-not a backend-specific object (SPEC 3, 9).
+not a backend-specific object (SPEC 4).
 """
 from __future__ import annotations
 
