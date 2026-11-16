@@ -94,11 +94,12 @@ def preflight_git() -> str:
         die("on the default branch '%s'. Refusing to commit benchmarks there; check out a "
             "working branch (e.g. claude) and re-run." % branch)
 
-    name = git("config", "user.name").stdout.strip()
-    email = git("config", "user.email").stdout.strip()
-    if not name or not email:
-        die("git identity not configured. Set user.name and user.email "
-            "(git config user.name ... / git config user.email ...) and re-run.")
+    # git var resolves the identity the commit will use, from GIT_AUTHOR_* / GIT_COMMITTER_* as
+    # well as user.name and user.email, and fails when neither gives one.
+    for role in ("GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"):
+        if git("var", role).returncode != 0:
+            die("git has no commit identity. Set user.name and user.email (git config) or the "
+                "GIT_AUTHOR_* and GIT_COMMITTER_* environment variables, and re-run.")
 
     ls = git("ls-remote", "--heads", "origin")
     if ls.returncode != 0:
