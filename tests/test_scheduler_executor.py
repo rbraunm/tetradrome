@@ -8,6 +8,7 @@ dependencies, so these are deterministic regardless of how many cores the host a
 """
 import os
 import pickle
+import signal
 import time
 
 import pytest
@@ -752,3 +753,35 @@ def test_a_shared_calibration_carries_what_one_run_measured_into_the_next():
     # known to outlast a dispatch and the next run sends it to a worker.
     report = scheduler.run(JobGraph([_either("next", "probe", 100.0)]))
     assert report.results["next"] != os.getpid()
+
+
+# -- a worker that dies without reporting --
+
+def vanish(inputs, deps):
+    os._exit(inputs["code"])
+
+
+def killed(inputs, deps):
+    os.kill(os.getpid(), signal.SIGKILL)
+
+
+def test_worker_that_exits_without_reporting_fails_its_component():
+    jobs = [
+        _job("dead", vanish, {"code": 3}),
+        _job("after", passthrough, {"add": 0}, deps=("dead",)),
+        _job("other", produce, {"value": 7}),
+    ]
+    report = Scheduler(_machine()).run(JobGraph(jobs))
+    assert report.results == {"other": 7}
+    (component, failed_key, text), = report.failures
+    assert failed_key == "dead"
+    assert component == {"dead", "after"}
+    assert "exited with code 3 without reporting a result" in text
+
+
+def test_worker_killed_by_a_signal_is_reported_not_waited_for():
+    # What the kernel does to a process that runs the box out of memory.
+    report = Scheduler(_machine()).run(JobGraph([_job("gone", killed, {})]))
+    (_, failed_key, text), = report.failures
+    assert failed_key == "gone"
+    assert f"exited with code {-signal.SIGKILL} without reporting a result" in text

@@ -304,6 +304,9 @@ class WarmWorker:
         # before the free runs.
         self._job_queue.put(("free", key))
 
+    def alive(self) -> bool:
+        return self._proc.is_alive()
+
     def shutdown(self) -> None:
         self._job_queue.put(None)               # let the worker finish the current job and exit
         self._proc.join(timeout=_GRACE_SECONDS)
@@ -970,6 +973,30 @@ class Scheduler:
                 got = True
             return got
 
+        def reap_lost() -> bool:
+            # A worker that exits without posting a result -- killed by the kernel for memory, or
+            # unable to load its job -- would otherwise be waited on forever. Its job fails, and
+            # with it the component, like any other failure.
+            lost = [key for key, proc in running.items() if proc.exitcode is not None]
+            dead_warm = [gpu_index for gpu_index, worker in warm_workers.items()
+                         if not worker.alive()]
+            if not lost and not dead_warm:
+                return False
+            reap(block=False)               # a result posted just before the exit is still queued
+            for key in lost:
+                if key in running:
+                    reap_one((key, "error",
+                              f"the worker for job {key!r} exited with code "
+                              f"{running[key].exitcode} without reporting a result", 0.0))
+            for gpu_index in dead_warm:
+                for key in [k for k, index in warm_running.items() if index == gpu_index]:
+                    reap_one((key, "error",
+                              f"the warm worker on GPU {gpu_index} exited while running job "
+                              f"{key!r}", 0.0))
+                del warm_workers[gpu_index]             # the next warm job starts a new one
+                ledger.discard(("__warm_context__", gpu_index))
+            return True
+
         def admit() -> bool:
             did = False
             for job in graph.ready(completed):
@@ -1070,7 +1097,8 @@ class Scheduler:
                 if progressed:
                     continue
                 if running or warm_running:
-                    reap(block=True)
+                    if not reap(block=True):
+                        reap_lost()
                 elif spill_to_make_room():
                     continue            # freed RAM by spilling a heavy held result; retry admission
                 else:
