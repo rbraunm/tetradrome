@@ -65,10 +65,10 @@ _TAU_ASSEMBLE = "tau_assemble"
 _SLICE_STATES = 4096
 _GEN_RECORD_BASE = 256
 _GEN_RECORD_PER_N = 128
-# What a forked slice worker dirties before it holds any state. The forkserver hands it numpy and
-# the bound kernels (prewarm.py), so this is small: over the slices of a grid-number-10 knot the
-# private peak was at most 12 MiB. A worker that binds the kernels itself needs about 64 MiB.
-_SLICE_FORK_BASE_BYTES = 16 * 2**20
+# What a forked slice worker makes private beyond its own state: the inherited interpreter pages
+# it touches. It grows with how long the worker lives, so it is sized from a loaded machine, where
+# slice workers of a grid-number-10 knot peaked at 76 MB private against a working set of 9 MB.
+_SLICE_FORK_BASE_BYTES = 80 * 2**20
 # A histogram slice holds its states (n int64 each), their two gradings, and the stacked pairs it
 # counts; it builds no differential, so it takes far more states per job than a generation slice.
 _HISTOGRAM_SLICE_STATES = 65536
@@ -207,7 +207,13 @@ def _histogram_merge_run(inputs, deps):
 
 
 def histogram_graph(grid, *, slice_states: int = _HISTOGRAM_SLICE_STATES):
-    """A JobGraph counting generators per ``(Alexander, degree)`` over all n! states, plus the
+    """``histogram_jobs`` as a JobGraph plus its merge key."""
+    jobs, merge_key = histogram_jobs(grid, slice_states=slice_states)
+    return JobGraph(jobs), merge_key
+
+
+def histogram_jobs(grid, *, slice_states: int = _HISTOGRAM_SLICE_STATES) -> tuple:
+    """Jobs counting generators per ``(Alexander, degree)`` over all n! states, plus the
     merge key whose result equals ``grading_histogram_reference(grid)``. Slices are contiguous
     ranges of the permutation space at ``slice_states`` states each, a math granularity like the
     generation slices; the merge sums their counts, so slice order cannot matter."""
@@ -234,7 +240,7 @@ def histogram_graph(grid, *, slice_states: int = _HISTOGRAM_SLICE_STATES):
         paths=(ComputePath(Placement.INLINE, cores=1, ram_bytes=0),),
         dependencies=slice_keys,
     ))
-    return JobGraph(jobs), merge_key
+    return jobs, merge_key
 
 
 def generation_jobs(grid, *, slice_states: int = _SLICE_STATES, merge_shards=None) -> tuple:
@@ -343,7 +349,13 @@ def _tau_assemble_run(inputs, deps):
 
 
 def tau_graph(grid, histogram: dict, *, slice_states: int = _TAU_SLICE_STATES):
-    """A JobGraph for tau plus the assemble key, whose result is ``(Maslov-0 generator count,
+    """``tau_jobs`` as a JobGraph plus its assemble key."""
+    jobs, assemble_key = tau_jobs(grid, histogram, slice_states=slice_states)
+    return JobGraph(jobs), assemble_key
+
+
+def tau_jobs(grid, histogram: dict, *, slice_states: int = _TAU_SLICE_STATES) -> tuple:
+    """The jobs for tau plus the assemble key, whose result is ``(Maslov-0 generator count,
     rank d0, rank d1, level)``: the two ranks that fix dim H_0 of the filtered complex, and the
     first Alexander level carrying the surviving class (None if no level does). Slices grade
     the n! states and build the filtered differential of the Maslov 0 and 1 generators; a merge
@@ -398,7 +410,7 @@ def tau_graph(grid, histogram: dict, *, slice_states: int = _TAU_SLICE_STATES):
         paths=(ComputePath(Placement.INLINE, cores=1, ram_bytes=0),),
         dependencies={shard["alexander"], (_TAU_RANK,), (_TAU_LEVELS,)},
     ))
-    return JobGraph(jobs), assemble_key
+    return jobs, assemble_key
 
 
 def _wired_reduce_run(inputs, deps):
@@ -408,7 +420,13 @@ def _wired_reduce_run(inputs, deps):
 
 
 def whole_knot_graph(grid, histogram: dict, *, backend: str = "bitint"):
-    """One graph from a grid to its Poincare count: generation slices feed a merge partitioned by
+    """``whole_knot_jobs`` as a JobGraph plus its assemble key."""
+    jobs, assemble_key = whole_knot_jobs(grid, histogram, backend=backend)
+    return JobGraph(jobs), assemble_key
+
+
+def whole_knot_jobs(grid, histogram: dict, *, backend: str = "bitint") -> tuple:
+    """The jobs from a grid to its Poincare count: generation slices feed a merge partitioned by
     Alexander grading, each grading is reduced from its own shard (reading only that grading's
     complex, never the whole output), and an assembly folds the per-grading homologies into the
     ``{(Maslov, Alexander): dimension}`` count. Returned as ``(JobGraph, assemble_key)``.
@@ -440,4 +458,4 @@ def whole_knot_graph(grid, histogram: dict, *, backend: str = "bitint"):
         paths=(ComputePath(Placement.INLINE, cores=1, ram_bytes=0),),
         dependencies=reduce_keys,
     ))
-    return JobGraph(jobs), assemble_key
+    return jobs, assemble_key

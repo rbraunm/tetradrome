@@ -31,9 +31,9 @@ from ...algebra import f2_kernel, f2_rank, pack_columns
 from ...errors import UnvalidatedResult
 from .differential import filtered_differential
 from .gradings import alexander, maslov
-from ...scheduler import run_to_result
-from .homology import grading_histogram
-from .scheduling import tau_graph
+from ...scheduler import run_many, run_to_result
+from .homology import grading_histogram, grading_histogram_many
+from .scheduling import tau_graph, tau_jobs
 
 
 def tau(grid, *, mem_cap_bytes: int | None = None, vram_cap_bytes: int | None = None) -> int:
@@ -41,8 +41,36 @@ def tau(grid, *, mem_cap_bytes: int | None = None, vram_cap_bytes: int | None = 
     the scheduler."""
     histogram = grading_histogram(grid, mem_cap_bytes=mem_cap_bytes, vram_cap_bytes=vram_cap_bytes)
     graph, assemble_key = tau_graph(grid, histogram)
-    generators, rank_d0, rank_d1, level = run_to_result(
-        graph, assemble_key, mem_cap_bytes=mem_cap_bytes, vram_cap_bytes=vram_cap_bytes)
+    return _tau_from_assembly(run_to_result(
+        graph, assemble_key, mem_cap_bytes=mem_cap_bytes, vram_cap_bytes=vram_cap_bytes))
+
+
+def tau_many(grids: dict, *, histograms: dict | None = None, mem_cap_bytes: int | None = None,
+             vram_cap_bytes: int | None = None) -> tuple[dict, dict]:
+    """``tau`` for several grids sharing the machine, as ``({name: tau}, {name: why it failed})``:
+    one scheduler run for every grid's histogram (skipped for the grids ``histograms`` already
+    covers), then one for every grid's tau. A grid that fails does not stop the others."""
+    histograms = dict(histograms or {})
+    counted, failures = grading_histogram_many(
+        {name: grid for name, grid in grids.items() if name not in histograms},
+        mem_cap_bytes=mem_cap_bytes, vram_cap_bytes=vram_cap_bytes)
+    histograms.update(counted)
+    assembled, failed = run_many(
+        {name: tau_jobs(grid, histograms[name])
+         for name, grid in grids.items() if name in histograms},
+        what="tau", mem_cap_bytes=mem_cap_bytes, vram_cap_bytes=vram_cap_bytes)
+    failures.update(failed)
+    values = {}
+    for name, assembly in assembled.items():
+        try:
+            values[name] = _tau_from_assembly(assembly)
+        except UnvalidatedResult as error:
+            failures[name] = str(error)
+    return values, failures
+
+
+def _tau_from_assembly(assembly) -> int:
+    generators, rank_d0, rank_d1, level = assembly
     h0_dim = generators - rank_d0 - rank_d1
     if h0_dim != 1:
         raise UnvalidatedResult(

@@ -105,3 +105,37 @@ def pytest_generate_tests(metafunc):
     metafunc.parametrize(
         "floer_knot", roster, ids=[f"{name}_n{n}" for name, n in roster]
     )
+
+
+# --- the roster computed together -----------------------------------------------------
+# The roster tests check one knot each, but the knots are computed as one batch through the
+# scheduler, so they share the machine instead of each waiting for the one before it. A fixture
+# computes only the knots the selected tests ask it about.
+
+def _selected_grids(request, fixture_name: str) -> dict:
+    from tetradrome.engines.floer.grid import GridDiagram
+
+    names = []
+    for item in request.session.items:
+        if fixture_name not in getattr(item, "fixturenames", ()):
+            continue
+        knot = getattr(item, "callspec", None) and item.callspec.params.get("floer_knot")
+        if knot and knot[0] not in names:
+            names.append(knot[0])
+    return {name: GridDiagram.from_knotinfo(name) for name in names}
+
+
+@pytest.fixture(scope="session")
+def floer_hfk(request):
+    """``(ranks by knot, failure text by knot)`` for the roster knots under test."""
+    from tetradrome.engines.floer import hfk_hat_many
+
+    return hfk_hat_many(_selected_grids(request, "floer_hfk"))
+
+
+@pytest.fixture(scope="session")
+def floer_tau(request):
+    """``(tau by knot, failure text by knot)`` for the roster knots under test."""
+    from tetradrome.engines.floer import tau_many
+
+    return tau_many(_selected_grids(request, "floer_tau"))

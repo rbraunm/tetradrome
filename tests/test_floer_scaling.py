@@ -19,7 +19,10 @@ from tetradrome.engines.floer import (
     grid_complexes,
     grid_poincare,
     hfk_hat,
+    hfk_hat_many,
     staircase_grid,
+    tau,
+    tau_many,
 )
 from tetradrome.engines.floer.generation import grading_histogram_reference
 
@@ -69,3 +72,15 @@ def test_histogram_cost_matches_built_complex_cost(name):
     assert max_grading_bytes(histogram) == max(
         predict_size(cx).packed_peak_bytes for cx in complexes.values()
     )
+
+
+def test_many_knots_in_one_graph_match_one_knot_at_a_time():
+    grids = {name: GridDiagram.from_knotinfo(name) for name in AGREEMENT_KNOTS}
+    assert hfk_hat_many(grids) == ({name: hfk_hat(grid) for name, grid in grids.items()}, {})
+    assert tau_many(grids) == ({name: tau(grid) for name, grid in grids.items()}, {})
+
+
+def test_many_knots_reuse_given_histograms():
+    grids = {name: GridDiagram.from_knotinfo(name) for name in AGREEMENT_KNOTS}
+    histograms = {name: grading_histogram(grid) for name, grid in grids.items()}
+    assert tau_many(grids, histograms=histograms) == tau_many(grids)

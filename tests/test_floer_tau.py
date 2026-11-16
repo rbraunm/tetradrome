@@ -23,10 +23,11 @@ from tetradrome.engines.floer.tau import tau_reference
 from tetradrome.scheduler import Scheduler, detect_machine
 
 
-def test_tau_matches_knotinfo(floer_knot):
+def test_tau_matches_knotinfo(floer_knot, floer_tau):
     name, _ = floer_knot
-    grid = GridDiagram.from_knotinfo(name)
-    assert tau(grid) == ki.tau_invariant(name)
+    values, failures = floer_tau
+    assert name not in failures, failures.get(name)
+    assert values[name] == ki.tau_invariant(name)
 
 
 @pytest.mark.parametrize("name", ["3_1", "4_1", "5_1", "5_2", "6_1", "8_19"])

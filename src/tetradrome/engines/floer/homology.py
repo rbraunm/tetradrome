@@ -25,8 +25,14 @@ from __future__ import annotations
 from collections import defaultdict
 
 from ...errors import UnvalidatedResult
-from ...scheduler import run_to_result
-from .scheduling import histogram_graph, reduction_graph, whole_knot_graph
+from ...scheduler import run_many, run_to_result
+from .scheduling import (
+    histogram_graph,
+    histogram_jobs,
+    reduction_graph,
+    whole_knot_graph,
+    whole_knot_jobs,
+)
 
 
 def reduce_complexes(complexes: dict, *, backend: str = "bitint",
@@ -99,8 +105,11 @@ def hfk_hat(grid, *, backend: str = "bitint",
     quotient by reconstruction. With the grid in the standard chirality this matches
     KnotInfo directly.
     """
-    grid_homology = grid_poincare(grid, backend=backend,
-                                  mem_cap_bytes=mem_cap_bytes, vram_cap_bytes=vram_cap_bytes)
+    return _hfk_from_poincare(grid, grid_poincare(
+        grid, backend=backend, mem_cap_bytes=mem_cap_bytes, vram_cap_bytes=vram_cap_bytes))
+
+
+def _hfk_from_poincare(grid, grid_homology: dict) -> dict:
     quotient = grid_homology
     for _ in range(grid.n - 1):
         quotient = _divide_by_V_once(quotient)
@@ -110,6 +119,41 @@ def hfk_hat(grid, *, backend: str = "bitint",
             "grid homology did not factor as HFK-hat (x) V^{n-1}; the V-factor division failed."
         )
     return quotient
+
+
+def grading_histogram_many(grids: dict, *, mem_cap_bytes: int | None = None,
+                           vram_cap_bytes: int | None = None) -> tuple[dict, dict]:
+    """``grading_histogram`` for several grids in one scheduler run, as ``({name: histogram},
+    {name: why it failed})``."""
+    return run_many({name: histogram_jobs(grid) for name, grid in grids.items()},
+                    what="grading histogram",
+                    mem_cap_bytes=mem_cap_bytes, vram_cap_bytes=vram_cap_bytes)
+
+
+def hfk_hat_many(grids: dict, *, backend: str = "bitint", histograms: dict | None = None,
+                 mem_cap_bytes: int | None = None,
+                 vram_cap_bytes: int | None = None) -> tuple[dict, dict]:
+    """``hfk_hat`` for several grids sharing the machine, as ``({name: ranks}, {name: why it
+    failed})``: one scheduler run for every grid's histogram (skipped for the grids ``histograms``
+    already covers), then one for every grid's computation. A grid that fails does not stop the
+    others."""
+    histograms = dict(histograms or {})
+    counted, failures = grading_histogram_many(
+        {name: grid for name, grid in grids.items() if name not in histograms},
+        mem_cap_bytes=mem_cap_bytes, vram_cap_bytes=vram_cap_bytes)
+    histograms.update(counted)
+    poincare, failed = run_many(
+        {name: whole_knot_jobs(grid, histograms[name], backend=backend)
+         for name, grid in grids.items() if name in histograms},
+        what="grid homology", mem_cap_bytes=mem_cap_bytes, vram_cap_bytes=vram_cap_bytes)
+    failures.update(failed)
+    ranks = {}
+    for name, grid_homology in poincare.items():
+        try:
+            ranks[name] = _hfk_from_poincare(grids[name], grid_homology)
+        except UnvalidatedResult as error:
+            failures[name] = str(error)
+    return ranks, failures
 
 
 def seifert_genus(grid, *, backend: str = "bitint",
