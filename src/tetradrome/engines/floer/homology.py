@@ -22,42 +22,11 @@ hardware, so a computation can be held to a tighter budget than the machine.
 """
 from __future__ import annotations
 
-import dataclasses
 from collections import defaultdict
 
-from ...errors import TetradromeError, UnvalidatedResult
-from ...scheduler import Scheduler, detect_machine
+from ...errors import UnvalidatedResult
+from ...scheduler import run_to_result
 from .scheduling import histogram_graph, reduction_graph, whole_knot_graph
-
-
-def _capped_machine(mem_cap_bytes: int | None, vram_cap_bytes: int | None):
-    # The detected machine, optionally lowered to a tighter system-RAM and/or per-GPU VRAM ceiling.
-    # A cap only ever lowers a limit; it never promises more than the hardware has.
-    machine = detect_machine()
-    if mem_cap_bytes is None and vram_cap_bytes is None:
-        return machine
-    capped_ram = (machine.mem_cap_bytes if mem_cap_bytes is None
-                  else min(machine.mem_cap_bytes, mem_cap_bytes))
-    gpus = machine.gpus
-    if vram_cap_bytes is not None:
-        gpus = tuple(dataclasses.replace(gpu, vram_bytes=min(gpu.vram_bytes, vram_cap_bytes))
-                     for gpu in machine.gpus)
-    return dataclasses.replace(machine, mem_cap_bytes=capped_ram, gpus=gpus)
-
-
-def _run_to_result(graph, key, *, mem_cap_bytes, vram_cap_bytes):
-    # Run a graph on the (optionally capped) machine and return its single result, failing loud:
-    # an infeasible job, a failed component, or a missing result all raise rather than hand back a
-    # partial or silently-empty answer.
-    report = Scheduler(_capped_machine(mem_cap_bytes, vram_cap_bytes)).run(graph)
-    if report.infeasible:
-        raise report.infeasible[0]
-    if report.failures:
-        _, failed, text = report.failures[0]
-        raise TetradromeError(f"computation failed at {failed!r}: {text}")
-    if key not in report.results:
-        raise TetradromeError(f"scheduler returned no result for {key!r}")
-    return report.results[key]
 
 
 def reduce_complexes(complexes: dict, *, backend: str = "bitint",
@@ -69,7 +38,7 @@ def reduce_complexes(complexes: dict, *, backend: str = "bitint",
     returns the identical answer as the reference (the agreement discipline).
     """
     graph, assemble_key = reduction_graph(complexes, backend=backend)
-    return _run_to_result(graph, assemble_key,
+    return run_to_result(graph, assemble_key,
                           mem_cap_bytes=mem_cap_bytes, vram_cap_bytes=vram_cap_bytes)
 
 
@@ -79,7 +48,7 @@ def grading_histogram(grid, *, mem_cap_bytes: int | None = None,
     through the scheduler. It builds no differentials and no matrices, so it prices a grid far too
     large to generate or reduce: its dimensions set the reducer's matrix sizes."""
     graph, merge_key = histogram_graph(grid)
-    return _run_to_result(graph, merge_key,
+    return run_to_result(graph, merge_key,
                           mem_cap_bytes=mem_cap_bytes, vram_cap_bytes=vram_cap_bytes)
 
 
@@ -92,7 +61,7 @@ def grid_poincare(grid, *, backend: str = "bitint",
     """
     histogram = grading_histogram(grid, mem_cap_bytes=mem_cap_bytes, vram_cap_bytes=vram_cap_bytes)
     graph, assemble_key = whole_knot_graph(grid, histogram, backend=backend)
-    return _run_to_result(graph, assemble_key,
+    return run_to_result(graph, assemble_key,
                           mem_cap_bytes=mem_cap_bytes, vram_cap_bytes=vram_cap_bytes)
 
 

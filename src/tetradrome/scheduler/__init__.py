@@ -6,7 +6,7 @@
 Domain-agnostic and above the math layers: it knows the machine (cores and RAM per NUMA
 node, GPUs, the real memory ceiling) and runs submitted jobs against it, memory-bounded and
 parallel, with dependencies. The math engines submit work to it rather than each reinventing
-parallel + memory-bounded execution. See roadmap for the design.
+parallel + memory-bounded execution. Design: roadmap/design/scheduler.md.
 """
 from .executor import RunReport, Scheduler
 from .graph import JobGraph
@@ -24,6 +24,7 @@ from .placement import (
     plan_placement,
 )
 from .routing import Calibration, Execution, route_execution
+from .session import run_to_result
 
 __all__ = [
     "GPU",
@@ -50,4 +51,5 @@ __all__ = [
     "job_feasibility",
     "plan_placement",
     "route_execution",
+    "run_to_result",
 ]

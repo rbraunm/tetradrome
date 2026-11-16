@@ -31,7 +31,8 @@ from ...algebra import f2_kernel, f2_rank, pack_columns
 from ...errors import UnvalidatedResult
 from .differential import filtered_differential
 from .gradings import alexander, maslov
-from .homology import _run_to_result, grading_histogram
+from ...scheduler import run_to_result
+from .homology import grading_histogram
 from .scheduling import tau_graph
 
 
@@ -40,7 +41,7 @@ def tau(grid, *, mem_cap_bytes: int | None = None, vram_cap_bytes: int | None = 
     the scheduler."""
     histogram = grading_histogram(grid, mem_cap_bytes=mem_cap_bytes, vram_cap_bytes=vram_cap_bytes)
     graph, assemble_key = tau_graph(grid, histogram)
-    generators, rank_d0, rank_d1, level = _run_to_result(
+    generators, rank_d0, rank_d1, level = run_to_result(
         graph, assemble_key, mem_cap_bytes=mem_cap_bytes, vram_cap_bytes=vram_cap_bytes)
     h0_dim = generators - rank_d0 - rank_d1
     if h0_dim != 1:

@@ -130,7 +130,7 @@ def reduction_jobs(complexes: dict, *, backend: str) -> tuple:
     for alexander, cx in complexes.items():
         key = (_REDUCE, alexander)
         jobs.append(Job(
-            key=key, run=_reduce_run,
+            key=key, run=_reduce_run, kind=f"f2.reduce.{backend}",
             inputs={"complex": cx, "backend": backend},
             paths=_reduction_paths(predict_size(cx).packed_peak_bytes, backend),
             cost=predict_cost(cx),
@@ -221,7 +221,7 @@ def histogram_graph(grid, *, slice_states: int = _HISTOGRAM_SLICE_STATES):
         stop = total * (w + 1) // slice_count
         key = (_HISTOGRAM_SLICE, w)
         jobs.append(Job(
-            key=key, run=_histogram_slice_run,
+            key=key, run=_histogram_slice_run, kind="floer.histogram_slice",
             inputs=(grid.O, grid.X, start, stop),
             paths=(ComputePath(Placement.CPU_PINNED, cores=1,
                                ram_bytes=_SLICE_FORK_BASE_BYTES + (stop - start) * state_bytes),),
@@ -255,7 +255,7 @@ def generation_jobs(grid, *, slice_states: int = _SLICE_STATES, merge_shards=Non
         stop = total * (w + 1) // slice_count
         key = (_SLICE, w)
         jobs.append(Job(
-            key=key, run=_slice_run,
+            key=key, run=_slice_run, kind="floer.generation_slice",
             inputs=(grid.O, grid.X, start, stop),
             paths=(ComputePath(Placement.CPU_PINNED, cores=1,
                                ram_bytes=_SLICE_FORK_BASE_BYTES + (stop - start) * record),),
@@ -264,7 +264,7 @@ def generation_jobs(grid, *, slice_states: int = _SLICE_STATES, merge_shards=Non
         slice_keys.append(key)
     merge_key = (_MERGE,)
     jobs.append(Job(
-        key=merge_key, run=_merge_run, inputs={},
+        key=merge_key, run=_merge_run, inputs={}, kind="floer.generation_merge",
         # The merge holds every slice's records and builds the complexes from them; price the peak
         # at both resident at once.
         paths=(ComputePath(Placement.CPU_PINNED, cores=1,
@@ -364,7 +364,7 @@ def tau_graph(grid, histogram: dict, *, slice_states: int = _TAU_SLICE_STATES):
         stop = total * (w + 1) // slice_count
         key = (_TAU_SLICE, w)
         jobs.append(Job(
-            key=key, run=_tau_slice_run,
+            key=key, run=_tau_slice_run, kind="floer.tau_slice",
             inputs=(grid.O, grid.X, start, stop),
             paths=(ComputePath(Placement.CPU_PINNED, cores=1,
                                ram_bytes=_SLICE_FORK_BASE_BYTES + (stop - start) * record),),
@@ -374,7 +374,7 @@ def tau_graph(grid, histogram: dict, *, slice_states: int = _TAU_SLICE_STATES):
 
     def serial(key, run, columns, dependencies, shards=None):
         return Job(
-            key=key, run=run, inputs={},
+            key=key, run=run, inputs={}, kind=f"floer.{key[0]}",
             paths=(ComputePath(Placement.CPU_PINNED, cores=1,
                                ram_bytes=_TAU_FORK_BASE_BYTES + columns * _TAU_COLUMN_BYTES),),
             dependencies=dependencies, cost=float(columns), shards=shards,
@@ -384,7 +384,7 @@ def tau_graph(grid, histogram: dict, *, slice_states: int = _TAU_SLICE_STATES):
     shard = {name: Shard(merge_key, name) for name in ("d0", "d1", "alexander")}
     columns = count[0] + count[1]
     jobs.append(Job(
-        key=merge_key, run=_tau_merge_run, inputs={},
+        key=merge_key, run=_tau_merge_run, inputs={}, kind="floer.tau_merge",
         paths=(ComputePath(Placement.CPU_PINNED, cores=1,
                            ram_bytes=_SLICE_FORK_BASE_BYTES + 2 * (columns + count[-1]) * record),),
         dependencies=slice_keys, cost=float(columns), shards=frozenset(shard),
@@ -428,6 +428,7 @@ def whole_knot_graph(grid, histogram: dict, *, backend: str = "bitint"):
         key = (_REDUCE, alexander)
         jobs.append(Job(
             key=key, run=_wired_reduce_run, inputs={"backend": backend},
+            kind=f"f2.reduce.{backend}",
             paths=_reduction_paths(grading_peak_bytes(degree_dims), backend),
             cost=grading_cost_ops(degree_dims),
             dependencies={Shard(merge_key, alexander)},

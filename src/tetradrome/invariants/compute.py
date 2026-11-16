@@ -37,6 +37,7 @@ from ..backends import knotinfo_backend, registry
 from ..diagrams import NormalizedDiagram
 from ..engines import floer, khovanov
 from ..errors import UnknownKnot, UnvalidatedResult
+from ..scheduler import ComputePath, Job, JobGraph, Placement, run_to_result
 from . import jones, seifert
 from .schema import InvariantResult, Provenance, ValidationStatus, ValidatorRecord
 
@@ -69,6 +70,38 @@ _FLOER_INVARIANTS = {
     "ozsvath_szabo_tau": (floer.tau, "grid_filtered_tau"),
     "three_genus": (floer.seifert_genus, "grid_hfk_genus"),
 }
+
+
+# What a worker dirties before it holds any of the calculation: the scheduler's measured figure
+# for a pre-warmed worker, as engines/floer/scheduling.py prices its slices.
+_WORKER_BASE_BYTES = 16 * 2**20
+# A cube calculation holds on the order of its 2^c resolution states; priced per state, and
+# tuned, like every footprint, by the scheduler's over-budget warnings.
+_CUBE_STATE_BYTES = 2048
+_SEIFERT_ENTRY_BYTES = 256
+
+
+def _seifert_run(inputs, deps):
+    invariant, braid = inputs
+    return _SEIFERT_INVARIANTS[invariant](seifert.seifert_matrix_from_braid(braid))
+
+
+def _pd_run(inputs, deps):
+    invariant, pd_code = inputs
+    return _PD_INVARIANTS[invariant][0](pd_code)
+
+
+def _scheduled(invariant: str, run, inputs, cost: float, working_bytes: int):
+    """Run one calculation as a scheduler job and return its value. The job can run in this
+    process or in a worker; the scheduler chooses by what it has measured for this invariant
+    (its own kind), and takes the in-process path until it has measured it."""
+    job = Job(
+        key=(invariant,), run=run, inputs=inputs, kind=f"invariant.{invariant}", cost=cost,
+        paths=(ComputePath(Placement.INLINE, cores=1, ram_bytes=working_bytes),
+               ComputePath(Placement.CPU_PINNED, cores=1,
+                           ram_bytes=_WORKER_BASE_BYTES + working_bytes)),
+    )
+    return run_to_result(JobGraph([job]), job.key)
 
 
 def _supported() -> list[str]:
@@ -240,7 +273,10 @@ def compute(
             raise UnknownKnot(
                 "Invariant computation needs a braid word (from_braid) or a KnotInfo identity."
             )
-        value = _SEIFERT_INVARIANTS[invariant](seifert.seifert_matrix_from_braid(braid))
+        strands = max((abs(generator) for generator in braid), default=0) + 1
+        size = len(braid) + strands                  # the Seifert matrix is at most this wide
+        value = _scheduled(invariant, _seifert_run, (invariant, tuple(braid)),
+                           cost=float(size ** 3), working_bytes=size * size * _SEIFERT_ENTRY_BYTES)
         return _finalize(
             knot, invariant, value, "seifert_form_from_braid", inputs, "(braid word)", validate
         )
@@ -251,8 +287,10 @@ def compute(
                 f"{invariant} needs a PD diagram (from_name or from_pd); "
                 "this knot is braid-presented."
             )
-        func, method = _PD_INVARIANTS[invariant]
-        value = func(knot.pd_code)
+        _, method = _PD_INVARIANTS[invariant]
+        states = 2 ** len(knot.pd_code)              # the resolution cube's vertices
+        value = _scheduled(invariant, _pd_run, (invariant, knot.pd_code),
+                           cost=float(states), working_bytes=states * _CUBE_STATE_BYTES)
         d_squared = "pass" if invariant in _RUNS_D_SQUARED else "not_applicable"
         return _finalize(
             knot, invariant, value, method, "pd_code", "(pd)", validate, d_squared=d_squared
