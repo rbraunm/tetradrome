@@ -13,9 +13,11 @@ slice order. Because the slices are contiguous, the merged positions match the s
 exactly, so the scheduled generation reproduces ``grid_complexes`` bit for bit (the agreement
 discipline, across processes).
 
-``grading_histogram`` walks the same permutation space but keeps only the per-grading counts
+The grading histogram walks the same permutation space but keeps only the per-grading counts
 (no differential, no matrices), so it predicts the reducer's dense-matrix dimensions at sizes
-far too large to build -- the input to the reduction-memory model.
+far too large to build -- the input to the reduction-memory model. ``_histogram_slice`` counts one
+slice with the block grading kernel and is what the scheduler fans out;
+``grading_histogram_reference`` is the serial pure-Python walk it must equal.
 """
 from __future__ import annotations
 
@@ -40,9 +42,8 @@ from .grid import GridDiagram
 # ``start + offset``), carrying the slice's global ``start`` so the merge places each block at its
 # rank range. Arrays rather than a list of per-generator records, so the parent's result transport
 # is a near-contiguous copy instead of one tuple per generator. The scheduled path requires numpy
-# (the kernels do); grid_complexes, _grading_slice, and grading_histogram stay pure Python --
-# grid_complexes as the canonical, auditable oracle and the numpy-free escape hatch, the grading
-# walk because it must stay memory-safe at sizes too large to materialize.
+# (the kernels do); grid_complexes, _grading_slice, and grading_histogram_reference stay pure
+# Python: the canonical, auditable oracles and the numpy-free escape hatch.
 _GenerationSlice = namedtuple("_GenerationSlice", "start maslov alexander targetRanks counts")
 
 
@@ -235,13 +236,30 @@ def _grading_slice(args):
     return dict(hist)
 
 
-def grading_histogram(grid) -> dict:
-    """Generator count per ``(Alexander, degree)`` grading over all n! states, gradings only.
+def _histogram_slice(args):
+    """Generator count per (Alexander, degree=-Maslov) over one contiguous slice, by the block
+    grading kernel: the scheduled form of ``_grading_slice``. Holds only its own slice's states,
+    so it is memory-safe at any n."""
+    o_markers, x_markers, start, stop = args
+    if not HAVE_NUMPY:
+        raise BackendUnavailable(
+            "the scheduled grading histogram requires numpy (pip install the 'jit' or 'accel' "
+            "extra); for a pure-Python count without numpy use grading_histogram_reference."
+        )
+    import numpy as np
 
-    Builds no differentials and no matrices, so it is memory-safe at any n (it stores only the
-    O(n^2) grading counts). The dimensions it returns are what set the reducer's dense-matrix
-    sizes, so this is the input to ``dense_reduction_bytes`` -- a memory projection that can be
-    computed for sizes far too large to actually generate or reduce. Walking n! states is itself
-    cheap (gradings only), so it runs serially; the scheduler parallelizes the work that follows.
-    """
+    if start >= stop:
+        return {}
+    grid = GridDiagram(o_markers, x_markers)
+    states = unrank_block(start, stop, grid.n)
+    maslov_values, alexander_values = maslov_alexander_block(states, grid.O, grid.X)
+    gradings, counts = np.unique(
+        np.stack((alexander_values, -maslov_values), axis=1), axis=0, return_counts=True)
+    return {(int(a_grading), int(degree)): int(count)
+            for (a_grading, degree), count in zip(gradings, counts)}
+
+
+def grading_histogram_reference(grid) -> dict:
+    """Generator count per ``(Alexander, degree)`` grading over all n! states: the serial
+    pure-Python walk, kept as the oracle the scheduled histogram is pinned against."""
     return _grading_slice((grid.O, grid.X, 0, math.factorial(grid.n)))

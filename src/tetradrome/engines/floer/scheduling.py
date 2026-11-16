@@ -1,7 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Randy Braunm
 
-"""Adapter: express a knot's F2 reduction as scheduler jobs.
+"""Adapter: express a knot's grid computation as scheduler jobs.
+
+Three graphs. The histogram graph counts generators per grading over slices of the n! states and
+sums them; its result prices everything after it. The whole-knot graph, built from that
+histogram, generates the complexes in slices, merges them partitioned by Alexander grading,
+reduces each grading, and assembles the Poincare count. The reduction graph is the tail of the
+whole-knot graph for complexes that already exist.
 
 A grading's reduction is f2_homology on one complex, and every backend returns the identical
 answer by the agreement discipline, so a reduction's compute paths are a pure performance
@@ -33,12 +39,14 @@ from ...algebra import (
     reduce_host_bytes,
 )
 from ...scheduler import ComputePath, Job, JobGraph, Placement, Shard
-from .generation import _build_complexes, _generate_slice, grading_histogram
+from .generation import _build_complexes, _generate_slice, _histogram_slice
 
 _REDUCE = "reduce"
 _ASSEMBLE = "assemble"
 _SLICE = "gen_slice"
 _MERGE = "gen_merge"
+_HISTOGRAM_SLICE = "hist_slice"
+_HISTOGRAM_MERGE = "hist_merge"
 
 # Generation is not in the cost model (grading_histogram predicts reduction dims, not record
 # bytes), so a slice's working set and the merge's peak are priced by a per-record estimate: a
@@ -48,6 +56,15 @@ _MERGE = "gen_merge"
 _SLICE_STATES = 4096
 _GEN_RECORD_BASE = 256
 _GEN_RECORD_PER_N = 128
+# What a forked slice worker dirties before it holds any state: numpy, the numba kernels, and the
+# interpreter pages it touches. Measured over the 886 slices of a grid-number-10 knot: median
+# 31 MiB private, maximum 64 MiB, against a 6 MiB record estimate.
+_SLICE_FORK_BASE_BYTES = 64 * 2**20
+# A histogram slice holds its states (n int64 each), their two gradings, and the stacked pairs it
+# counts; it builds no differential, so it takes far more states per job than a generation slice.
+_HISTOGRAM_SLICE_STATES = 65536
+_HISTOGRAM_STATE_BASE = 64
+_HISTOGRAM_STATE_PER_N = 8
 
 
 def _reduce_run(inputs, deps):
@@ -161,6 +178,49 @@ def _record_bytes(n: int) -> int:
     return _GEN_RECORD_BASE + _GEN_RECORD_PER_N * n
 
 
+def _histogram_slice_run(inputs, deps):
+    return _histogram_slice(inputs)
+
+
+def _histogram_merge_run(inputs, deps):
+    histogram: dict = defaultdict(int)
+    for counts in deps.values():
+        for grading, count in counts.items():
+            histogram[grading] += count
+    return dict(histogram)
+
+
+def histogram_graph(grid, *, slice_states: int = _HISTOGRAM_SLICE_STATES):
+    """A JobGraph counting generators per ``(Alexander, degree)`` over all n! states, plus the
+    merge key whose result equals ``grading_histogram_reference(grid)``. Slices are contiguous
+    ranges of the permutation space at ``slice_states`` states each, a math granularity like the
+    generation slices; the merge sums their counts, so slice order cannot matter."""
+    total = math.factorial(grid.n)
+    slice_count = max(1, math.ceil(total / slice_states))
+    state_bytes = _HISTOGRAM_STATE_BASE + _HISTOGRAM_STATE_PER_N * grid.n
+    jobs = []
+    slice_keys = []
+    for w in range(slice_count):
+        start = total * w // slice_count
+        stop = total * (w + 1) // slice_count
+        key = (_HISTOGRAM_SLICE, w)
+        jobs.append(Job(
+            key=key, run=_histogram_slice_run,
+            inputs=(grid.O, grid.X, start, stop),
+            paths=(ComputePath(Placement.CPU_PINNED, cores=1,
+                               ram_bytes=_SLICE_FORK_BASE_BYTES + (stop - start) * state_bytes),),
+            cost=float(stop - start),
+        ))
+        slice_keys.append(key)
+    merge_key = (_HISTOGRAM_MERGE,)
+    jobs.append(Job(
+        key=merge_key, run=_histogram_merge_run, inputs={},
+        paths=(ComputePath(Placement.CPU_PINNED, cores=1, ram_bytes=0),),
+        dependencies=slice_keys,
+    ))
+    return JobGraph(jobs), merge_key
+
+
 def generation_jobs(grid, *, slice_states: int = _SLICE_STATES, merge_shards=None) -> tuple:
     """Generation jobs (contiguous lexicographic slices of the n! permutation space) plus the
     merge that folds them into ``{A: GradedComplex}``, as ``(jobs, merge_key)``. The merge depends
@@ -182,7 +242,7 @@ def generation_jobs(grid, *, slice_states: int = _SLICE_STATES, merge_shards=Non
             key=key, run=_slice_run,
             inputs=(grid.O, grid.X, start, stop),
             paths=(ComputePath(Placement.CPU_PINNED, cores=1,
-                               ram_bytes=max((stop - start) * record, 1)),),
+                               ram_bytes=_SLICE_FORK_BASE_BYTES + (stop - start) * record),),
             cost=float(stop - start),
         ))
         slice_keys.append(key)
@@ -213,18 +273,19 @@ def _wired_reduce_run(inputs, deps):
     return f2_homology(complex_for_grading, inputs["backend"])
 
 
-def whole_knot_graph(grid, *, backend: str = "bitint"):
+def whole_knot_graph(grid, histogram: dict, *, backend: str = "bitint"):
     """One graph from a grid to its Poincare count: generation slices feed a merge partitioned by
     Alexander grading, each grading is reduced from its own shard (reading only that grading's
     complex, never the whole output), and an assembly folds the per-grading homologies into the
     ``{(Maslov, Alexander): dimension}`` count. Returned as ``(JobGraph, assemble_key)``.
 
-    The shard set and the per-grading reduction footprints come from the build-time grading
-    histogram: ``grading_peak_bytes`` and ``grading_cost_ops`` over a grading's ``{degree: dim}``
-    equal the materialized complex's predicted peak and cost, so the graph is fully priced before
-    any complex exists. The merge returns exactly those gradings, so the partition matches."""
+    ``histogram`` is the grid's grading histogram (the ``histogram_graph`` result). The shard set
+    and the per-grading reduction footprints come from it: ``grading_peak_bytes`` and
+    ``grading_cost_ops`` over a grading's ``{degree: dim}`` equal the materialized complex's
+    predicted peak and cost, so the graph is fully priced before any complex exists. The merge
+    returns exactly those gradings, so the partition matches."""
     by_grading: dict = defaultdict(dict)
-    for (alexander, degree), count in grading_histogram(grid).items():
+    for (alexander, degree), count in histogram.items():
         by_grading[alexander][degree] = count
     gradings = frozenset(by_grading)
     jobs, merge_key = generation_jobs(grid, merge_shards=gradings)

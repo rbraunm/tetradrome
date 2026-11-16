@@ -4,8 +4,9 @@
 
 """Scaling study for the grid (knot Floer) engine.
 
-Runs the whole grid->Poincare graph through the one compute scheduler and reports, per grid, where
-the n! generator count's cost lands: the summed worker CPU of each phase -- *generation* (slices
+Runs the whole grid->Poincare computation through the one compute scheduler and reports, per grid,
+where the n! generator count's cost lands: the summed worker CPU of each phase -- the *histogram*
+(slices counting generators per grading, which prices the rest), *generation* (slices
 enumerating permutations and computing gradings + differentials), the *merge* (one job folding
 every slice into the per-grading complexes), and *reduction* (the F2 linear algebra) -- against the
 end-to-end wall, plus a parent-versus-worker-children peak memory split. Wall far above the summed
@@ -39,7 +40,7 @@ import time
 from collections import defaultdict
 
 from tetradrome.engines.floer import GridDiagram, staircase_grid
-from tetradrome.engines.floer.scheduling import whole_knot_graph
+from tetradrome.engines.floer.scheduling import histogram_graph, whole_knot_graph
 from tetradrome.scheduler import Scheduler, detect_machine
 
 
@@ -166,8 +167,8 @@ class _TreeSampler:
             self._stop.wait(self._interval)
 
 
-_PHASE = {"gen_slice": "generation", "gen_merge": "merge", "reduce": "reduction",
-          "assemble": "assemble"}
+_PHASE = {"hist_slice": "histogram", "hist_merge": "histogram", "gen_slice": "generation",
+          "gen_merge": "merge", "reduce": "reduction", "assemble": "assemble"}
 
 
 def _capped(machine, mem_cap_bytes):
@@ -178,8 +179,9 @@ def _capped(machine, mem_cap_bytes):
 
 
 def measure(grid, *, backend, mem_cap_bytes=None, interval=0.1):
-    """Run the whole grid->Poincare graph through the scheduler; return the end-to-end wall, the
-    summed worker CPU per phase (generation / merge / reduction) from the RunReport, homology
+    """Run the histogram and then the grid->Poincare graph it prices through the scheduler; return
+    the end-to-end wall over both, the summed worker CPU per phase (histogram / generation / merge
+    / reduction) from the RunReports, homology
     support size, the residence + spill counters, and a parent-vs-worker-children peak PSS
     breakdown (MiB). Fails loud on an infeasible or failed run rather than reporting a partial."""
     sampler = _TreeSampler(os.getpid(), interval) if _proc_metrics_available() else None
@@ -187,19 +189,32 @@ def measure(grid, *, backend, mem_cap_bytes=None, interval=0.1):
         sampler.start()
         sampler.reset()
     machine = _capped(detect_machine(), mem_cap_bytes)
-    graph, key = whole_knot_graph(grid, backend=backend)
-    report, wall = _time(lambda: Scheduler(machine).run(graph))
-    mem = sampler.snapshot() if sampler else None
-    if sampler:
-        sampler.stop()
-    if report.infeasible:
-        raise RuntimeError(f"infeasible on this machine: {report.infeasible[0]}")
-    if report.failures:
-        raise RuntimeError(f"scheduler failed: {report.failures[0][2]}")
+
+    def checked(report):
+        if report.infeasible:
+            raise RuntimeError(f"infeasible on this machine: {report.infeasible[0]}")
+        if report.failures:
+            raise RuntimeError(f"scheduler failed: {report.failures[0][2]}")
+        return report
+
+    def run():
+        pricing_graph, histogram_key = histogram_graph(grid)
+        pricing = checked(Scheduler(machine).run(pricing_graph))
+        graph, key = whole_knot_graph(grid, pricing.results[histogram_key], backend=backend)
+        return pricing, checked(Scheduler(machine).run(graph)), key
+
+    try:
+        (pricing, report, key), wall = _time(run)
+        mem = sampler.snapshot() if sampler else None
+    finally:
+        if sampler:
+            sampler.stop()
     cpu = defaultdict(float)
-    for job_key, seconds in report.timings.items():
-        cpu[_PHASE.get(job_key[0], job_key[0])] += seconds
+    for timings in (pricing.timings, report.timings):
+        for job_key, seconds in timings.items():
+            cpu[_PHASE.get(job_key[0], job_key[0])] += seconds
     return {"wall": wall, "count": math.factorial(grid.n), "support": len(report.results[key]),
+            "hist_s": cpu.get("histogram", 0.0),
             "gen_s": cpu.get("generation", 0.0), "merge_s": cpu.get("merge", 0.0),
             "red_s": cpu.get("reduction", 0.0),
             "shared": report.shared_count, "spilled": report.spill_count, "mem": mem}
@@ -229,14 +244,14 @@ def main():
     mem_cap_bytes = int(args.mem_cap_gib * 2**30) if args.mem_cap_gib else None
     cap_label = f"{args.mem_cap_gib:.0f} GiB" if mem_cap_bytes else "machine"
     print(f"backend={args.backend}  mem-cap={cap_label}  "
-          f"(gen/merge/reduce are summed worker CPU; wall is end-to-end)")
+          f"(hist/gen/merge/reduce are summed worker CPU; wall is end-to-end)")
     if _proc_metrics_available():
         print("memory (MiB): peak PSS -- Par=parent process, Chd=summed worker children; "
               "cgPk=peak cgroup memory.current")
     else:
         print("memory: UNAVAILABLE on this OS (needs Linux /proc + cgroup) -- shown as n/a")
     print()
-    header = (f"{'target':<13}{'n':>3}{'n!':>13}{'wall':>9}{'gen':>8}{'merge':>8}{'reduce':>8}"
+    header = (f"{'target':<13}{'n':>3}{'n!':>13}{'wall':>9}{'hist':>8}{'gen':>8}{'merge':>8}{'reduce':>8}"
               f"{'shr':>4}{'spl':>4}{'parPk':>9}{'chdPk':>9}{'cgPk':>9}{'(M,A)':>7}")
     print(header)
     print("-" * len(header))
@@ -258,7 +273,7 @@ def main():
             mem_cells = (_c(m["parent"]) + _c(m["children"])
                          + (f"{cg:>9.1f}" if cg is not None else f"{'n/a':>9}"))
         print(f"{name:<13}{grid.n:>3}{r['count']:>13,}{r['wall']:>9.3f}"
-              f"{r['gen_s']:>8.2f}{r['merge_s']:>8.2f}{r['red_s']:>8.2f}"
+              f"{r['hist_s']:>8.2f}{r['gen_s']:>8.2f}{r['merge_s']:>8.2f}{r['red_s']:>8.2f}"
               f"{r['shared']:>4}{r['spilled']:>4}{mem_cells}{r['support']:>7}")
 
 

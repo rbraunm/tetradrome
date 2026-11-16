@@ -15,8 +15,8 @@ diagram fixes a chirality only up to the global O<->X swap; HFK-hat is therefore
 up to mirror, (M, A) <-> (-M, -A). The tau invariant (later) pins chirality. The Seifert
 genus is the top Alexander grading carrying nonzero HFK-hat (the genus-detection theorem).
 
-Generation and reduction both run through the one scheduler: it spawns the work, holds the
-memory model, and reproduces the serial reference exactly. ``mem_cap_bytes`` and ``vram_cap_bytes``
+The grading histogram, generation, and reduction all run through the one scheduler: it spawns
+the work, holds the memory model, and reproduces the serial reference exactly. ``mem_cap_bytes`` and ``vram_cap_bytes``
 lower the system-RAM and VRAM ceilings the scheduler runs under, never above the detected
 hardware, so a computation can be held to a tighter budget than the machine.
 """
@@ -27,7 +27,7 @@ from collections import defaultdict
 
 from ...errors import TetradromeError, UnvalidatedResult
 from ...scheduler import Scheduler, detect_machine
-from .scheduling import reduction_graph, whole_knot_graph
+from .scheduling import histogram_graph, reduction_graph, whole_knot_graph
 
 
 def _capped_machine(mem_cap_bytes: int | None, vram_cap_bytes: int | None):
@@ -73,13 +73,25 @@ def reduce_complexes(complexes: dict, *, backend: str = "bitint",
                           mem_cap_bytes=mem_cap_bytes, vram_cap_bytes=vram_cap_bytes)
 
 
+def grading_histogram(grid, *, mem_cap_bytes: int | None = None,
+                      vram_cap_bytes: int | None = None) -> dict:
+    """Generator count per ``(Alexander, degree)`` grading over all n! states, counted in slices
+    through the scheduler. It builds no differentials and no matrices, so it prices a grid far too
+    large to generate or reduce: its dimensions set the reducer's matrix sizes."""
+    graph, merge_key = histogram_graph(grid)
+    return _run_to_result(graph, merge_key,
+                          mem_cap_bytes=mem_cap_bytes, vram_cap_bytes=vram_cap_bytes)
+
+
 def grid_poincare(grid, *, backend: str = "bitint",
                   mem_cap_bytes: int | None = None, vram_cap_bytes: int | None = None) -> dict:
     """Grid (hat) homology as ``{(Maslov, Alexander): dimension}`` over F2, computed end to end
-    through the scheduler: generation, a merge partitioned by Alexander grading, a reduction per
-    grading, and assembly into the Poincare count.
+    through the scheduler: the grading histogram that prices the rest, then generation, a merge
+    partitioned by Alexander grading, a reduction per grading, and assembly into the Poincare
+    count.
     """
-    graph, assemble_key = whole_knot_graph(grid, backend=backend)
+    histogram = grading_histogram(grid, mem_cap_bytes=mem_cap_bytes, vram_cap_bytes=vram_cap_bytes)
+    graph, assemble_key = whole_knot_graph(grid, histogram, backend=backend)
     return _run_to_result(graph, assemble_key,
                           mem_cap_bytes=mem_cap_bytes, vram_cap_bytes=vram_cap_bytes)
 

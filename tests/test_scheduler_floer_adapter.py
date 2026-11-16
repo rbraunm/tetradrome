@@ -12,11 +12,12 @@ from collections import defaultdict
 import pytest
 
 from tetradrome.algebra import available_f2_backends, f2_homology, predict_cost
-from tetradrome.engines.floer.generation import grid_complexes
+from tetradrome.engines.floer.generation import grading_histogram_reference, grid_complexes
 from tetradrome.engines.floer.grid import staircase_grid
 from tetradrome.scheduler import Scheduler, detect_machine
 from tetradrome.engines.floer.scheduling import (
     generation_graph,
+    histogram_graph,
     reduction_graph,
     reduction_jobs,
     whole_knot_graph,
@@ -85,6 +86,18 @@ def test_generation_graph_matches_serial():
             assert produced[a_grading].differential(degree) == serial[a_grading].differential(degree)
 
 
+def test_histogram_graph_matches_serial():
+    # The scheduled histogram counts each slice with the block grading kernel and sums the slices;
+    # the reference walks every state in pure Python. slice_states is forced small so a tiny grid
+    # still splits into several slices, one of them uneven (120 states over four slices of 30).
+    grid = staircase_grid(5)
+    graph, merge_key = histogram_graph(grid, slice_states=32)
+    report = Scheduler(detect_machine()).run(graph)
+    assert report.failures == []
+    assert len(graph) == 5
+    assert report.results[merge_key] == grading_histogram_reference(grid)
+
+
 @pytest.mark.parametrize("backend", _BACKENDS)
 def test_whole_knot_graph_matches_in_process(backend):
     # The end-to-end graph -- generation slices, a merge partitioned by Alexander grading, a reduce
@@ -92,7 +105,7 @@ def test_whole_knot_graph_matches_in_process(backend):
     # count: the same per-grading f2_homology folded the same way, now through the scheduler's
     # spawn, partitioned merge, shard routing, and assembly.
     grid = staircase_grid(5)
-    graph, assemble_key = whole_knot_graph(grid, backend=backend)
+    graph, assemble_key = whole_knot_graph(grid, grading_histogram_reference(grid), backend=backend)
     report = Scheduler(detect_machine()).run(graph)
     assert report.failures == []
     assert report.results[assemble_key] == _inprocess(grid_complexes(grid), backend)

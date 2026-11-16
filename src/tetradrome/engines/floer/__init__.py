@@ -5,7 +5,7 @@
 
 A peer front end to Khovanov: a grid diagram emits graded F2 complexes (one per Alexander
 grading) that the shared algebra back end reduces (bitint by default, GPU where present). The one
-compute scheduler runs both generation and reduction -- spawning the work, holding the memory
+compute scheduler runs the grading histogram, generation, and reduction -- spawning the work, holding the memory
 model, and reproducing the serial reference exactly. Provides the grid model, the Maslov /
 Alexander gradings, the empty-rectangle differentials (bigraded and Alexander-filtered), the
 reduction to HFK-hat with the Seifert genus, the tau invariant, and the synthetic staircase grid
@@ -15,8 +15,8 @@ directly.
 from .differential import differential, filtered_differential
 from .gradings import alexander, alexander_euler_characteristic, maslov
 from .grid import GridDiagram, staircase_grid
-from .generation import grading_histogram, grid_complexes
-from .homology import grid_poincare, hfk_hat, reduce_complexes, seifert_genus
+from .generation import grid_complexes
+from .homology import grading_histogram, grid_poincare, hfk_hat, reduce_complexes, seifert_genus
 from .roster import floer_roster
 from .tau import tau
 

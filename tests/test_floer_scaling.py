@@ -15,12 +15,13 @@ import pytest
 from tetradrome.algebra import dense_reduction_bytes, max_grading_bytes, predict_size
 from tetradrome.engines.floer import (
     GridDiagram,
+    grading_histogram,
     grid_complexes,
     grid_poincare,
     hfk_hat,
     staircase_grid,
 )
-from tetradrome.engines.floer.generation import grading_histogram
+from tetradrome.engines.floer.generation import grading_histogram_reference
 
 AGREEMENT_KNOTS = ["3_1", "4_1", "5_2"]
 
@@ -30,6 +31,12 @@ def test_backends_agree_with_reference(name):
     grid = GridDiagram.from_knotinfo(name)
     reference = grid_poincare(grid, backend="reference")
     assert grid_poincare(grid, backend="bitint") == reference
+
+
+@pytest.mark.parametrize("name", AGREEMENT_KNOTS)
+def test_scheduled_histogram_matches_serial_walk(name):
+    grid = GridDiagram.from_knotinfo(name)
+    assert grading_histogram(grid) == grading_histogram_reference(grid)
 
 
 def test_staircase_grid_is_valid_and_trivial():
