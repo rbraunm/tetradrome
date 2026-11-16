@@ -7,14 +7,16 @@ This pins the adapter against an independent oracle: the same per-grading f2_hom
 into the same Poincare count, computed directly in this process. If the scheduler's spawn,
 dependency passing, and assembly change any answer, this fails.
 """
+import sys
 from collections import defaultdict
 
 import pytest
 
 from tetradrome.algebra import available_f2_backends, f2_homology, predict_cost
 from tetradrome.engines.floer.generation import grading_histogram_reference, grid_complexes
+from tetradrome.engines.floer.differential_jit import HAVE_NUMBA
 from tetradrome.engines.floer.grid import staircase_grid
-from tetradrome.scheduler import Scheduler, detect_machine
+from tetradrome.scheduler import ComputePath, Job, JobGraph, Placement, Scheduler, detect_machine
 from tetradrome.engines.floer.scheduling import (
     generation_graph,
     histogram_graph,
@@ -84,6 +86,25 @@ def test_generation_graph_matches_serial():
         for degree in serial[a_grading].degrees():
             assert produced[a_grading].dim(degree) == serial[a_grading].dim(degree)
             assert produced[a_grading].differential(degree) == serial[a_grading].differential(degree)
+
+
+def _bound_kernels(inputs, deps):
+    from tetradrome.engines.floer import differential_jit, gradings_jit
+
+    return (gradings_jit._kernel is not None, differential_jit._kernel is not None,
+            differential_jit._rank_kernel is not None, differential_jit._unrank_kernel is not None)
+
+
+@pytest.mark.skipif(sys.platform == "win32" or not HAVE_NUMBA,
+                    reason="only a forkserver can hand its workers bound numba kernels")
+def test_workers_start_with_the_grid_kernels_bound():
+    # A worker that had to bind the kernels itself would pay about 0.6 s before any work; the
+    # forkserver binds them once (engines/floer/prewarm.py) and every fork inherits them.
+    probe = Job(key="probe", run=_bound_kernels, inputs={},
+                paths=(ComputePath(Placement.CPU_PINNED, cores=1, ram_bytes=1 << 20),))
+    report = Scheduler(detect_machine()).run(JobGraph([probe]))
+    assert report.failures == []
+    assert report.results["probe"] == (True, True, True, True)
 
 
 def test_histogram_graph_matches_serial():

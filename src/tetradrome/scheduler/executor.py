@@ -53,14 +53,16 @@ logger = logging.getLogger(__name__)
 _GRACE_SECONDS = 2.0
 
 # Modules the forkserver imports once so every forked worker inherits them warm, turning a
-# cold ~400ms import per job into a ~1ms fork. Best-effort: a module that cannot import (e.g.
-# numpy absent) is skipped and that worker just imports it cold, so the pure-Python floor still
-# runs. CUDA is deliberately not warmed here -- a context cannot survive a fork, so a GPU worker
-# initializes its device after forking.
+# cold ~400ms import per job into a ~1ms fork. The prewarm module goes further than an import: it
+# binds the compiled grid kernels, which a worker would otherwise load on its first call.
+# Best-effort: a module that cannot import (e.g. numpy absent) is skipped and that worker just
+# imports it cold, so the pure-Python floor still runs. CUDA is deliberately not warmed here -- a
+# context cannot survive a fork, so a GPU worker initializes its device after forking.
 _FORKSERVER_PRELOAD = [
     "numpy",
     "tetradrome.algebra",
     "tetradrome.engines.floer.scheduling",
+    "tetradrome.engines.floer.prewarm",
     "tetradrome.scheduler.executor",
 ]
 

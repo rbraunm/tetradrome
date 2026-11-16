@@ -65,10 +65,10 @@ _TAU_ASSEMBLE = "tau_assemble"
 _SLICE_STATES = 4096
 _GEN_RECORD_BASE = 256
 _GEN_RECORD_PER_N = 128
-# What a forked slice worker dirties before it holds any state: numpy, the numba kernels, and the
-# interpreter pages it touches. Measured over the 886 slices of a grid-number-10 knot: median
-# 31 MiB private, maximum 64 MiB, against a 6 MiB record estimate.
-_SLICE_FORK_BASE_BYTES = 64 * 2**20
+# What a forked slice worker dirties before it holds any state. The forkserver hands it numpy and
+# the bound kernels (prewarm.py), so this is small: over the slices of a grid-number-10 knot the
+# private peak was at most 12 MiB. A worker that binds the kernels itself needs about 64 MiB.
+_SLICE_FORK_BASE_BYTES = 16 * 2**20
 # A histogram slice holds its states (n int64 each), their two gradings, and the stacked pairs it
 # counts; it builds no differential, so it takes far more states per job than a generation slice.
 _HISTOGRAM_SLICE_STATES = 65536
