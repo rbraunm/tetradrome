@@ -113,11 +113,11 @@ def _supported() -> list[str]:
 def _library_versions(used: tuple[str, ...] = ()) -> tuple[tuple[str, str], ...]:
     """Versions of the computational libraries a result depends on (ADR 0013).
 
-    Always records the interpreter, then each library the computation actually used. The native
-    core uses no third-party computational library (ADR 0006), so a native result records only the
-    interpreter -- that short chain is the native-first argument made concrete, and it is the true
-    record, not the set of libraries that merely happen to be installed. A declared library that is
-    missing is a fail-loud error (the caller claimed to use something absent), never a silent skip.
+    Always records the interpreter, then each library the computation actually used: the true
+    record, not the set of libraries that merely happen to be installed. The Seifert-form and cube
+    engines use none, so their results record only the interpreter; the grid engine's kernels run
+    on numpy and, when it is installed, Numba. A declared library that is missing is a fail-loud
+    error (the caller claimed to use something absent), never a silent skip.
     """
     import platform
     from importlib.metadata import version as _packageVersion
@@ -126,6 +126,13 @@ def _library_versions(used: tuple[str, ...] = ()) -> tuple[tuple[str, str], ...]
     for name in used:
         versions.append((name, _packageVersion(name)))
     return tuple(versions)
+
+
+def _floer_libraries() -> tuple[str, ...]:
+    """The numerical libraries the grid engine's block kernels run on."""
+    from ..engines.floer.differential_jit import HAVE_NUMBA
+
+    return ("numpy", "numba") if HAVE_NUMBA else ("numpy",)
 
 
 def _computed_oracle_gap(invariant, not_installed, could_not_check):
@@ -306,7 +313,8 @@ def compute(
         func, method = _FLOER_INVARIANTS[invariant]
         value = func(grid)
         return _finalize(
-            knot, invariant, value, method, "knotinfo:grid_notation", "(grid)", validate
+            knot, invariant, value, method, "knotinfo:grid_notation", "(grid)", validate,
+            libraries=_floer_libraries(),
         )
 
     raise ValueError(f"compute does not support {invariant!r}; supported: {_supported()}")

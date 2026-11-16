@@ -43,13 +43,16 @@ def test_known_scalar_floer_values():
 
 # --- provenance of the native path ---
 
-def test_floer_provenance_is_native_with_interpreter_only():
+def test_floer_provenance_records_the_libraries_its_kernels_run_on():
     result = invariants.compute(knots.from_name("3_1"), "knot_floer_homology")
     assert result.provenance.backend == "tetradrome-native"
     assert result.provenance.method == "grid_hfk_hat"
     assert result.provenance.inputs == "knotinfo:grid_notation"
-    # The native core uses no third-party computational library (ADR 0006/0013).
-    assert [name for name, _ in result.provenance.library_versions] == ["python"]
+    # The grid kernels run on numpy, compiled by Numba when it is installed (ADR 0013).
+    from tetradrome.engines.floer.differential_jit import HAVE_NUMBA
+
+    expected = ["python", "numpy", "numba"] if HAVE_NUMBA else ["python", "numpy"]
+    assert [name for name, _ in result.provenance.library_versions] == expected
     assert result.validation.d_squared_check == "not_applicable"
 
 
