@@ -139,7 +139,7 @@ def reduction_jobs(complexes: dict, *, backend: str) -> tuple:
     assemble_key = (_ASSEMBLE,)
     jobs.append(Job(
         key=assemble_key, run=_assemble_run, inputs={},
-        paths=(ComputePath(Placement.CPU_PINNED, cores=1, ram_bytes=0),),
+        paths=(ComputePath(Placement.INLINE, cores=1, ram_bytes=0),),
         dependencies=reduce_keys,
     ))
     return jobs, assemble_key
@@ -231,7 +231,7 @@ def histogram_graph(grid, *, slice_states: int = _HISTOGRAM_SLICE_STATES):
     merge_key = (_HISTOGRAM_MERGE,)
     jobs.append(Job(
         key=merge_key, run=_histogram_merge_run, inputs={},
-        paths=(ComputePath(Placement.CPU_PINNED, cores=1, ram_bytes=0),),
+        paths=(ComputePath(Placement.INLINE, cores=1, ram_bytes=0),),
         dependencies=slice_keys,
     ))
     return JobGraph(jobs), merge_key
@@ -395,7 +395,7 @@ def tau_graph(grid, histogram: dict, *, slice_states: int = _TAU_SLICE_STATES):
     assemble_key = (_TAU_ASSEMBLE,)
     jobs.append(Job(
         key=assemble_key, run=_tau_assemble_run, inputs={},
-        paths=(ComputePath(Placement.CPU_PINNED, cores=1, ram_bytes=0),),
+        paths=(ComputePath(Placement.INLINE, cores=1, ram_bytes=0),),
         dependencies={shard["alexander"], (_TAU_RANK,), (_TAU_LEVELS,)},
     ))
     return JobGraph(jobs), assemble_key
@@ -436,7 +436,7 @@ def whole_knot_graph(grid, histogram: dict, *, backend: str = "bitint"):
     assemble_key = (_ASSEMBLE,)
     jobs.append(Job(
         key=assemble_key, run=_assemble_run, inputs={},
-        paths=(ComputePath(Placement.CPU_PINNED, cores=1, ram_bytes=0),),
+        paths=(ComputePath(Placement.INLINE, cores=1, ram_bytes=0),),
         dependencies=reduce_keys,
     ))
     return JobGraph(jobs), assemble_key

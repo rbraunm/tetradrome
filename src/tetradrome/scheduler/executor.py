@@ -3,6 +3,8 @@
 
 """The executor: run a JobGraph to completion, placing each job on the machine.
 
+A job on an inline path is called in this process, at once, and blocks the loop while it runs;
+it is for work cheaper than handing it to a worker. Every other job gets a worker.
 Workers are ephemeral processes under a spawn context, so every job starts from clean state and
 frees all its memory at exit; the only memory in play is the jobs running right now. Each worker
 pins itself to its granted cores (and, for a GPU job, to its granted device) before running. A
@@ -218,6 +220,8 @@ def _augment_for_admission(paths, *, worker_shared, ram_baseline, context_vram, 
                     vram_bytes=path.vram_bytes + context_vram))
             else:
                 augmented.append(path)          # warm: shares the standing worker
+        elif path.placement is Placement.INLINE:
+            augmented.append(path)              # no worker, so no worker baseline
         else:
             augmented.append(dataclasses.replace(path, ram_bytes=path.ram_bytes + fresh_ram))
     return tuple(augmented), gpu_execution
@@ -512,6 +516,7 @@ class Scheduler:
 
         running: dict = {}              # key -> Process, fresh jobs with their own process
         warm_running: dict = {}         # key -> gpu_index, jobs dispatched to a warm worker
+        inline_running: set = set()     # the inline job being called right now, if any
         warm_workers: dict = {}         # gpu_index -> WarmWorker, started lazily
         running_pids: dict = {}         # key -> pid, shared with the sampler under the lock
         pids_lock = threading.Lock()
@@ -550,7 +555,7 @@ class Scheduler:
         del inputs_store                # the table is the sole owner now
 
         def is_running(key) -> bool:
-            return key in running or key in warm_running
+            return key in running or key in warm_running or key in inline_running
 
         def snapshot() -> dict:
             with pids_lock:
@@ -734,7 +739,18 @@ class Scheduler:
             ))
             declared_ram[job.key] = placed.path.ram_bytes
             placement_of[job.key] = placement
-            if warm:
+            inline_outcome = None
+            if placement is Placement.INLINE:
+                # Called here and now. The deps are the held results themselves (a shared one is
+                # read out of its segment), so nothing is pickled in either direction.
+                inline_running.add(job.key)
+                try:
+                    t0 = time.perf_counter()
+                    result = job.run(job_inputs, _resolve_deps(deps))
+                    inline_outcome = (job.key, "ok", result, time.perf_counter() - t0)
+                except Exception:
+                    inline_outcome = (job.key, "error", traceback.format_exc(), 0.0)
+            elif warm:
                 # Small GPU job: serialize it through the held context. Not RAM-sampled -- it is
                 # small by the gate, and only one warm job's footprint is ever live in the shared
                 # pid at a time, so a live sample could not be attributed to it cleanly anyway. A
@@ -768,6 +784,8 @@ class Scheduler:
                 entry.consumers -= 1
                 if entry.consumers == 0:
                     release_resident((Kind.OUTPUT, dep))
+            if inline_outcome is not None:
+                reap_one(inline_outcome)
 
         def forget_warm(key) -> None:
             # Drop a warm job's bookkeeping without touching the shared worker. A stray result
@@ -836,6 +854,10 @@ class Scheduler:
                 proc.join()
                 logger.debug("job %r done: predicted %d, peak private %d",
                              key, declared_ram[key], peak_actual.get(key, 0))
+            elif key in inline_running:
+                inline_running.discard(key)
+                ledger.remove(key)
+                logger.debug("job %r done (inline)", key)
             else:                       # warm: the worker persists, only the allocation clears
                 gpu_completed = warm_running.pop(key)
                 ledger.remove(key)

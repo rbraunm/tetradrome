@@ -6,13 +6,15 @@
 A job is a picklable callable plus its inputs, an ordered list of compute paths it supports
 (fastest first), and the keys of the jobs it depends on. A path declares where it can run and
 what it costs there: a GPU path (device VRAM plus the host core and RAM that feed it), a
-node-pinned CPU path (cores and RAM on one NUMA node), or an unpinned CPU path (cores and RAM
-that may span nodes, slower). The scheduler runs the fastest path the machine can serve; order
+node-pinned CPU path (cores and RAM on one NUMA node), an unpinned CPU path (cores and RAM
+that may span nodes, slower), or an inline path (the scheduler's own process, for work cheaper
+than handing it to a worker). The scheduler runs the fastest path the machine can serve; order
 in the list is the speed ranking.
 
-Jobs run in separate processes, so the callable must be importable (top-level, not a closure)
-and its inputs and result must pickle. A job is invoked as ``run(inputs, deps)`` where ``deps``
-maps each dependency key to that job's result.
+Jobs on the first three run in separate processes, so the callable must be importable (top-level,
+not a closure) and its inputs and result must pickle. An inline job is called directly: it is
+handed the held results themselves, not copies, so it must not modify them. A job is invoked as
+``run(inputs, deps)`` where ``deps`` maps each dependency key to that job's result.
 """
 from __future__ import annotations
 
@@ -26,6 +28,7 @@ class Placement(enum.Enum):
     GPU = "gpu"                    # a CUDA device, plus host cores/RAM to feed it
     CPU_PINNED = "cpu_pinned"      # cores + RAM bound to a single NUMA node
     CPU_UNPINNED = "cpu_unpinned"  # cores + RAM, may span nodes (no locality, slower)
+    INLINE = "inline"              # the scheduler's own process: no worker, nothing pickled
 
 
 @dataclasses.dataclass(frozen=True)
@@ -33,7 +36,8 @@ class ComputePath:
     """One way a job can run: where, and what it costs there.
 
     ``cores`` and ``ram_bytes`` are the host footprint (for a GPU path, the cores and RAM that
-    feed the device). ``vram_bytes`` is device memory and is meaningful only for a GPU path.
+    feed the device). ``vram_bytes`` is device memory and is meaningful only for a GPU path. An
+    inline path runs on the scheduler's own thread: it is charged its RAM, and its ``cores`` is 1.
     """
     placement: Placement
     cores: int
@@ -51,6 +55,8 @@ class ComputePath:
             raise ValueError("a GPU path must declare positive vram_bytes")
         if self.placement is not Placement.GPU and self.vram_bytes != 0:
             raise ValueError("only a GPU path may declare vram_bytes")
+        if self.placement is Placement.INLINE and self.cores != 1:
+            raise ValueError("an inline path runs on the scheduler's one thread (cores must be 1)")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -105,7 +111,6 @@ class Job:
     cost: float = 0.0
     output_bytes: int = 0
     shards: frozenset | None = None
-    device_resident: bool = False
     device_resident: bool = False
 
     def __post_init__(self):

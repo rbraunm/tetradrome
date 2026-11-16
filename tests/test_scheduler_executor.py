@@ -643,3 +643,66 @@ def test_cpu_consumer_downgrades_device_resident_result_to_host(caplog):
     assert report.device_count == 0
     assert report.results["c"] == b"resident-payload"       # CPU consumer read the host result
     assert any("not GPU-only" in r.message for r in caplog.records)
+
+
+# -- the inline path: called in the scheduler's own process --
+
+def _inline():
+    return ComputePath(Placement.INLINE, cores=1, ram_bytes=_SMALL)
+
+
+def whoami(inputs, deps):
+    return os.getpid()
+
+
+def test_inline_job_runs_in_the_scheduler_process():
+    jobs = [
+        Job(key="here", run=whoami, inputs={}, paths=(_inline(),)),
+        _job("there", whoami, {}),
+    ]
+    report = Scheduler(_machine()).run(JobGraph(jobs))
+    assert report.failures == []
+    assert report.results["here"] == os.getpid()
+    assert report.results["there"] != os.getpid()
+
+
+def test_inline_job_sits_between_workers():
+    jobs = [
+        _job("gen", produce, {"value": 10}),
+        Job(key="mid", run=passthrough, inputs={"add": 5}, paths=(_inline(),),
+            dependencies=("gen",)),                                # 10 + 5, in this process
+        _job("end", passthrough, {"add": 1}, deps=("mid",)),       # 15 + 1
+    ]
+    report = Scheduler(_machine()).run(JobGraph(jobs))
+    assert report.results["end"] == 16
+    assert report.timings.keys() == {"gen", "mid", "end"}
+
+
+def test_inline_failure_abandons_its_component_only():
+    jobs = [
+        _job("genX", produce, {"value": 1}),
+        Job(key="boom", run=boom, inputs={}, paths=(_inline(),), dependencies=("genX",)),
+        _job("endX", passthrough, {"add": 0}, deps=("boom",)),
+        _job("genY", produce, {"value": 7}),
+    ]
+    report = Scheduler(_machine()).run(JobGraph(jobs))
+    assert report.results.get("genY") == 7
+    assert {"genX", "boom", "endX"} <= report.cancelled
+    (_, failed_key, text), = report.failures
+    assert failed_key == "boom"
+    assert "kaboom" in text
+
+
+def test_inline_job_reads_a_shared_result():
+    # Two consumers make the producer's result shared by segment; the inline one reads it out of
+    # the segment as a worker would.
+    jobs = [
+        Job(key="src", run=big_blob, inputs={}, paths=(_cpu(),)),
+        Job(key="c0", run=blob_len, inputs={}, paths=(_inline(),), dependencies={"src"}),
+        Job(key="c1", run=blob_len, inputs={}, paths=(_cpu(),), dependencies={"src"}),
+    ]
+    report = Scheduler(_machine(), shared_min_consumers=2,
+                       shared_floor_bytes=_SMALL).run(JobGraph(jobs))
+    assert report.failures == []
+    assert report.results["c0"] == 2 * _SMALL
+    assert report.results["c1"] == 2 * _SMALL

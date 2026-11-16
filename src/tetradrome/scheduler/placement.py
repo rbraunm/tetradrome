@@ -140,6 +140,11 @@ def _capability_gap(machine: Machine, path: ComputePath, margin: float) -> "Path
             return PathGap(path.placement, InfeasibilityAxis.EXCEEDS_RAM,
                            path.ram_bytes, best_node_ram)
         return None
+    if path.placement is Placement.INLINE:
+        if schedulable_cap < path.ram_bytes:
+            return PathGap(path.placement, InfeasibilityAxis.EXCEEDS_RAM,
+                           path.ram_bytes, schedulable_cap)
+        return None
     # CPU_UNPINNED
     if machine.total_cores < path.cores:
         return PathGap(path.placement, InfeasibilityAxis.EXCEEDS_CORES,
@@ -181,6 +186,11 @@ def _place_now(machine: Machine, ledger: Ledger, path: ComputePath,
                 return Placed(path=path, cores=_take(free, path.cores),
                               node_index=node.index, note=note)
         return None
+    if path.placement is Placement.INLINE:
+        # The scheduler's own thread: no worker core to grant, only its RAM to fit.
+        if ledger.global_free_ram() - global_margin < path.ram_bytes:
+            return None
+        return Placed(path=path, cores=frozenset(), note=note)
     # CPU_UNPINNED
     if ledger.global_free_ram() - global_margin < path.ram_bytes:
         return None

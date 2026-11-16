@@ -2,6 +2,8 @@
 # Copyright (c) 2026 Randy Braunm
 
 """Tests for the placement decision: capability vs contention, degradation notes, gating."""
+import pytest
+
 from tetradrome.scheduler import (
     GPU,
     Allocation,
@@ -145,3 +147,35 @@ def test_margin_leaves_headroom_when_it_fits():
     m = _machine(nodes=((0, {0, 1}, 100),), cap=100)
     d = plan_placement(m, Ledger(m), _job("j", (_pinned(1, 90),)), margin=0.03)
     assert d.outcome is Outcome.ADMIT          # 90 <= 97 schedulable
+
+
+def _inline(ram):
+    return ComputePath(Placement.INLINE, 1, ram)
+
+
+def test_inline_admits_on_ram_alone_and_takes_no_core():
+    m = _machine()
+    ledger = Ledger(m)
+    for node in m.nodes:                            # every core is busy
+        ledger.add(Allocation(("busy", node.index), Placement.CPU_PINNED, node.cores, 0, node.index))
+    d = plan_placement(m, ledger, _job("j", (_inline(50),)))
+    assert d.outcome is Outcome.ADMIT
+    assert d.placed.cores == frozenset()
+    assert d.placed.node_index is None
+
+
+def test_inline_waits_while_ram_is_committed():
+    m = _machine()                                  # cap 250
+    ledger = Ledger(m)
+    ledger.add(Allocation("held", Placement.CPU_UNPINNED, frozenset(), 220))
+    assert plan_placement(m, ledger, _job("j", (_inline(50),))).outcome is Outcome.WAIT
+
+
+def test_inline_beyond_the_cap_is_infeasible():
+    error = job_feasibility(_machine(), _job("j", (_inline(251),)))
+    assert [gap.axis for gap in error.gaps] == [InfeasibilityAxis.EXCEEDS_RAM]
+
+
+def test_inline_path_runs_on_one_thread():
+    with pytest.raises(ValueError, match="cores must be 1"):
+        ComputePath(Placement.INLINE, 2, 10)
