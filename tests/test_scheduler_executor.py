@@ -14,6 +14,7 @@ import pytest
 
 from tetradrome.errors import TetradromeError
 from tetradrome.scheduler import (
+    Calibration,
     ComputePath,
     GPU,
     InfeasibilityAxis,
@@ -706,3 +707,48 @@ def test_inline_job_reads_a_shared_result():
     assert report.failures == []
     assert report.results["c0"] == 2 * _SMALL
     assert report.results["c1"] == 2 * _SMALL
+
+
+# -- the planner: measured rates and dispatch overheads choose the path --
+
+def _either(key, kind, cost):
+    return Job(key=key, run=whoami, inputs={}, kind=kind, cost=cost,
+               paths=(ComputePath(Placement.INLINE, cores=1, ram_bytes=_SMALL), _cpu()))
+
+
+def test_a_run_measures_the_dispatch_overhead_of_its_workers():
+    report = Scheduler(_machine()).run(JobGraph([_job("a", produce, {"value": 1})]))
+    overhead = report.calibration.overhead(Placement.CPU_PINNED)
+    assert overhead is not None and overhead > 0.0
+    assert report.calibration.overhead(Placement.CPU_UNPINNED) is None
+
+
+def test_calibrated_scheduler_sends_long_jobs_to_workers_and_short_ones_inline():
+    # One unit of "probe" work is known to take a second; a worker costs 50 ms to dispatch. A
+    # job of 0.01 units is over before a worker would start, so it runs here; a job of 10 units
+    # is not, so it gets a worker though both list the inline path first.
+    calibration = Calibration()
+    calibration.observe(cost=1.0, placement=Placement.CPU_PINNED, seconds=1.0, kind="probe")
+    calibration.observe_overhead(Placement.CPU_PINNED, 0.05)
+    jobs = [_either("short", "probe", 0.01), _either("long", "probe", 10.0)]
+    report = Scheduler(_machine(), calibration=calibration).run(JobGraph(jobs))
+    assert report.failures == []
+    assert report.results["short"] == os.getpid()
+    assert report.results["long"] != os.getpid()
+
+
+def test_uncalibrated_scheduler_follows_the_declared_order():
+    report = Scheduler(_machine()).run(JobGraph([_either("first", "probe", 10.0)]))
+    assert report.results["first"] == os.getpid()
+
+
+def test_a_shared_calibration_carries_what_one_run_measured_into_the_next():
+    calibration = Calibration()
+    scheduler = Scheduler(_machine(), calibration=calibration)
+    scheduler.run(JobGraph([Job(key="warm-up", run=nap, inputs={"seconds": 0.3}, kind="probe",
+                                cost=1.0, paths=(_cpu(),))]))
+    assert calibration.rate(Placement.CPU_PINNED, "probe") >= 0.3
+    # The first run measured about 0.3 s per unit and a worker's dispatch cost, so 100 units is
+    # known to outlast a dispatch and the next run sends it to a worker.
+    report = scheduler.run(JobGraph([_either("next", "probe", 100.0)]))
+    assert report.results["next"] != os.getpid()

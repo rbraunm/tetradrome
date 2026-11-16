@@ -81,6 +81,9 @@ class Job:
     ``cost`` is the predicted work in abstract units (the builder sets it, e.g. from
     ``predict_cost``); the scheduler compares it to measured runtime to calibrate and to decide
     whether a job is substantial enough to warrant its own process. Zero means unpredicted.
+    ``kind`` names the family of jobs whose ``cost`` is in one unit: the scheduler learns its
+    seconds-per-unit rate per kind, so a state-counting slice never informs the prediction for a
+    matrix reduction. Jobs that leave it empty share one unnamed family.
 
     ``output_bytes`` is the declared size of the job's result, the portion of its working set that
     persists in the parent after the job exits and is held until the last consumer drains it. It is
@@ -109,6 +112,7 @@ class Job:
     paths: tuple[ComputePath, ...]
     dependencies: frozenset = dataclasses.field(default_factory=frozenset)
     cost: float = 0.0
+    kind: str = ""
     output_bytes: int = 0
     shards: frozenset | None = None
     device_resident: bool = False

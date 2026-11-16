@@ -1,7 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Randy Braunm
 
-"""Execution routing for GPU jobs: warm held-context worker versus a fresh process.
+"""What the scheduler has measured about its handlers, and the GPU warm-versus-fresh decision.
+
+``Calibration`` holds the measurements: a work rate per job kind and device, and a dispatch
+overhead per placement. Placement uses them to choose among a job's paths; the rest of this
+module uses the GPU rate to route a GPU job to the warm worker or a fresh process.
 
 A GPU job can run in a persistent worker that holds a CUDA context across jobs (fast dispatch,
 but its cupy mempool is shared and must be freed between jobs) or in a fresh process (pays the
@@ -25,6 +29,8 @@ from __future__ import annotations
 
 import enum
 
+from .job import Placement
+
 
 class Execution(enum.Enum):
     """How a GPU job runs: in the warm held-context worker, or in a fresh process."""
@@ -32,44 +38,66 @@ class Execution(enum.Enum):
     FRESH = "fresh"
 
 
+def _device(placement) -> str:
+    """Which code does the work. The inline path and both CPU placements run the same code, so
+    they share a work rate; what separates them is dispatch overhead, which is measured apart."""
+    return "gpu" if placement is Placement.GPU else "cpu"
+
+
 class Calibration:
-    """Per-placement time-per-op estimates, refined from observed runtimes by an EWMA.
+    """What has been measured about the handlers, each figure refined by an EWMA.
 
-    ``predicted_time(cost, placement)`` is ``cost * rate[placement]`` once the placement has been
-    observed, else None. ``observe`` folds each completed job's measured seconds into the rate
-    for its placement: the per-op observation is ``seconds / cost``, blended with the running
-    estimate. A job with no predicted cost (cost <= 0) carries no per-op signal and is skipped.
+    The work rate is seconds per cost unit for a job kind on a device: ``observe`` folds a
+    completed job's ``seconds / cost`` into it, and ``predicted_time(cost, placement, kind)`` is
+    ``cost * rate`` once that kind has run on that device, else None. A job with no predicted cost
+    (cost <= 0) carries no signal and is skipped.
 
-    State is per-run and in memory. Nothing is persisted: a stored rate would silently drift
-    against changed hardware or backends, and a sweep of any size reaches a stable rate within
-    its first few jobs anyway.
+    The dispatch overhead is the seconds a job spends being handed to a placement and reaped,
+    beyond its own run time: zero for the inline path, measured for the others, None until then.
+
+    State is in memory only: a stored figure would silently drift against changed hardware or
+    backends. A Scheduler given no calibration starts a fresh one each run; the engines share one
+    per process (``scheduler.session``), so a sweep's later runs start out calibrated.
     """
 
     def __init__(self, alpha: float = 0.3):
         if not 0.0 < alpha <= 1.0:
             raise ValueError(f"alpha must be in (0, 1], got {alpha}")
         self.alpha = alpha
-        self._rate: dict = {}        # placement -> seconds per op, absent until observed
+        self._rate: dict = {}        # (kind, device) -> seconds per cost unit
+        self._overhead: dict = {}    # placement -> dispatch seconds
 
-    def rate(self, placement):
-        """The current seconds-per-op estimate for a placement, or None if never observed."""
-        return self._rate.get(placement)
+    def _blend(self, table: dict, key, observed: float) -> None:
+        previous = table.get(key)
+        table[key] = (observed if previous is None
+                      else self.alpha * observed + (1.0 - self.alpha) * previous)
 
-    def predicted_time(self, cost: float, placement):
-        """Predicted run seconds for a job, or None if the placement has no rate yet."""
-        rate = self._rate.get(placement)
+    def rate(self, placement, kind: str = ""):
+        """The current seconds-per-cost-unit estimate for a kind on a placement's device, or None
+        if that kind has never run there."""
+        return self._rate.get((kind, _device(placement)))
+
+    def predicted_time(self, cost: float, placement, kind: str = ""):
+        """Predicted run seconds for a job, or None if its kind has no rate on that device yet."""
+        rate = self.rate(placement, kind)
         return None if rate is None else cost * rate
 
-    def observe(self, cost: float, placement, seconds: float) -> None:
-        """Fold a completed job's measured time into the rate for its placement."""
+    def observe(self, cost: float, placement, seconds: float, kind: str = "") -> None:
+        """Fold a completed job's measured run time into the rate for its kind and device."""
         if cost <= 0:
-            return                   # no op-count, so no per-op signal to learn from
-        observed = seconds / cost
-        previous = self._rate.get(placement)
-        if previous is None:
-            self._rate[placement] = observed
-        else:
-            self._rate[placement] = self.alpha * observed + (1.0 - self.alpha) * previous
+            return                   # no cost, so no per-unit signal to learn from
+        self._blend(self._rate, (kind, _device(placement)), seconds / cost)
+
+    def overhead(self, placement):
+        """Dispatch seconds for a placement: 0.0 inline, the measured figure otherwise, or None
+        while it has not been measured."""
+        if placement is Placement.INLINE:
+            return 0.0
+        return self._overhead.get(placement)
+
+    def observe_overhead(self, placement, seconds: float) -> None:
+        """Fold one job's measured dispatch-and-reap time into the placement's overhead."""
+        self._blend(self._overhead, placement, seconds)
 
 
 def route_execution(predicted_vram: int, vram_budget: int, predicted_time,

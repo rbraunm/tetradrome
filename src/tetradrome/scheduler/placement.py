@@ -1,16 +1,24 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Randy Braunm
 
-"""The placement decision: for one ready job, choose the fastest path the machine can serve.
+"""The placement decision: for one ready job, choose the path it runs on, then admit or wait.
 
 Capability versus contention is the core distinction. A path is *capable* if the machine could
 ever serve it -- the resource type exists and total capacity, less the reserved margin, could
-satisfy it -- regardless of what is busy now. The scheduler runs the fastest capable path:
+satisfy it -- regardless of what is busy now. The scheduler picks one capable path:
 
-- if its resources are free now, admit it there (carrying a degradation note when a faster path
-  was skipped because it is not capable on this box -- never because it was merely busy);
+- if its resources are free now, admit it there (carrying a degradation note when a path
+  declared faster was skipped because it is not capable on this box -- never because it was
+  merely busy);
 - if its resources exist but are busy, wait for them (contention never degrades a job);
 - if no declared path is capable, the job is infeasible and fails loud.
+
+Which capable path is picked follows measurement where there is one. A job runs inline when its
+predicted run time is no more than what dispatching a worker costs, because the inline call is
+then done before the worker would have started; past that an inline call only holds up the loop
+and every other job, so a worker path wins. Among worker paths the smallest predicted
+run-plus-dispatch time wins. Wherever a figure is still unmeasured the declared order decides:
+the builder lists a job's paths fastest first.
 
 ``margin`` is a fraction of each node's RAM and of the cap held back from scheduling, so that
 several jobs under-predicting at once still have slack before anything approaches a real limit.
@@ -226,16 +234,45 @@ def _degradation_note(chosen: ComputePath, skipped: list) -> str | None:
             f"{_gap_summary(skipped)}")
 
 
-def plan_placement(machine: Machine, ledger: Ledger, job: Job, margin: float = 0.0) -> Decision:
-    """Decide where (if anywhere) ``job`` should run, given current ledger state and margin."""
+def _choose(capable: list, estimate) -> ComputePath:
+    """The path to run on, from the capable ones in declared order. ``estimate(path)`` returns
+    ``(run_seconds, dispatch_seconds)``, either None while unmeasured."""
+    if estimate is None or len(capable) == 1:
+        return capable[0]
+    figures = [estimate(path) for path in capable]
+    workers = [(path, run, dispatch) for path, (run, dispatch) in zip(capable, figures)
+               if path.placement is not Placement.INLINE]
+    inline = [(path, run) for path, (run, _) in zip(capable, figures)
+              if path.placement is Placement.INLINE]
+    worker = None
+    worker_dispatch = None
+    if workers:
+        worker, _, worker_dispatch = workers[0]
+        if all(run is not None and dispatch is not None for _, run, dispatch in workers):
+            worker, _, worker_dispatch = min(workers, key=lambda item: item[1] + item[2])
+    if not inline:
+        return worker
+    inline_path, inline_run = inline[0]
+    if worker is None:
+        return inline_path
+    if inline_run is None or worker_dispatch is None:
+        return capable[0]
+    return inline_path if inline_run <= worker_dispatch else worker
+
+
+def plan_placement(machine: Machine, ledger: Ledger, job: Job, margin: float = 0.0,
+                   estimate=None) -> Decision:
+    """Decide where (if anywhere) ``job`` should run, given current ledger state and margin.
+    ``estimate``, when given, maps a path to its measured ``(run_seconds, dispatch_seconds)``."""
     skipped: list = []
-    chosen = None
+    capable: list = []
     for path in job.paths:
         gap = _capability_gap(machine, path, margin)
         if gap is None:
-            chosen = path
-            break
-        skipped.append(gap)
+            capable.append(path)
+        elif not capable:
+            skipped.append(gap)         # a declared-faster path this machine cannot serve
+    chosen = _choose(capable, estimate) if capable else None
     if chosen is None:
         # Unreachable: the pre-flight feasibility pass removes every job the machine cannot serve
         # before the loop runs, so a job reaching placement always has a capable path. If this

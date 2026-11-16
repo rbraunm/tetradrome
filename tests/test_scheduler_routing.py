@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Randy Braunm
 
-"""Tests for GPU execution routing: the EWMA calibration and the warm/fresh decision.
+"""Tests for the calibration (rates by kind and device, dispatch overheads) and for GPU execution
+routing, the warm/fresh decision.
 
 Both are pure logic with no device, so the calibration is checked against hand-computed EWMA
 values and the decision is exercised at each trigger and on the boundaries.
@@ -39,6 +40,35 @@ def test_zero_cost_observation_is_ignored():
     cal = Calibration()
     cal.observe(cost=0, placement=Placement.GPU, seconds=5.0)
     assert cal.rate(Placement.GPU) is None
+
+
+def test_cpu_placements_and_the_inline_path_share_one_rate():
+    # The same code does the work on all three; only the GPU is a different rate.
+    cal = Calibration()
+    cal.observe(cost=100, placement=Placement.CPU_PINNED, seconds=1.0)
+    assert cal.rate(Placement.INLINE) == pytest.approx(0.01)
+    assert cal.rate(Placement.CPU_UNPINNED) == pytest.approx(0.01)
+    assert cal.rate(Placement.GPU) is None
+
+
+def test_rates_are_per_kind():
+    cal = Calibration()
+    cal.observe(cost=100, placement=Placement.CPU_PINNED, seconds=1.0, kind="slice")
+    assert cal.predicted_time(50, Placement.INLINE, "slice") == pytest.approx(0.5)
+    assert cal.predicted_time(50, Placement.INLINE, "reduce") is None
+    assert cal.predicted_time(50, Placement.INLINE) is None
+
+
+def test_dispatch_overhead_is_zero_inline_and_measured_elsewhere():
+    cal = Calibration(alpha=0.5)
+    assert cal.overhead(Placement.INLINE) == 0.0
+    assert cal.overhead(Placement.CPU_PINNED) is None
+    cal.observe_overhead(Placement.CPU_PINNED, 0.2)
+    cal.observe_overhead(Placement.CPU_PINNED, 0.4)
+    assert cal.overhead(Placement.CPU_PINNED) == pytest.approx(0.3)
+    assert cal.overhead(Placement.CPU_UNPINNED) is None
+    cal.observe_overhead(Placement.INLINE, 9.0)
+    assert cal.overhead(Placement.INLINE) == 0.0
 
 
 def test_rates_are_per_placement():

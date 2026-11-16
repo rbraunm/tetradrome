@@ -179,3 +179,62 @@ def test_inline_beyond_the_cap_is_infeasible():
 def test_inline_path_runs_on_one_thread():
     with pytest.raises(ValueError, match="cores must be 1"):
         ComputePath(Placement.INLINE, 2, 10)
+
+
+# -- which capable path: measurement where there is one, declared order otherwise --
+
+def _figures(table):
+    """An estimate function from {placement: (run_seconds, dispatch_seconds)}."""
+    return lambda path: table[path.placement]
+
+
+def _both(estimate=None, order=(Placement.INLINE, Placement.CPU_PINNED)):
+    m = _machine()
+    paths = tuple(_inline(10) if placement is Placement.INLINE else _pinned(1, 10)
+                  for placement in order)
+    return plan_placement(m, Ledger(m), _job("j", paths), estimate=estimate).placed.path.placement
+
+
+def test_unmeasured_job_takes_its_first_declared_path():
+    assert _both() is Placement.INLINE
+    assert _both(order=(Placement.CPU_PINNED, Placement.INLINE)) is Placement.CPU_PINNED
+    unknown_run = _figures({Placement.INLINE: (None, 0.0), Placement.CPU_PINNED: (None, 0.05)})
+    assert _both(unknown_run, order=(Placement.CPU_PINNED, Placement.INLINE)) is Placement.CPU_PINNED
+    unknown_dispatch = _figures({Placement.INLINE: (0.001, 0.0), Placement.CPU_PINNED: (0.001, None)})
+    assert _both(unknown_dispatch, order=(Placement.CPU_PINNED, Placement.INLINE)) is Placement.CPU_PINNED
+
+
+def test_job_shorter_than_a_dispatch_runs_inline_even_if_declared_second():
+    quick = _figures({Placement.INLINE: (0.01, 0.0), Placement.CPU_PINNED: (0.01, 0.05)})
+    assert _both(quick, order=(Placement.CPU_PINNED, Placement.INLINE)) is Placement.INLINE
+
+
+def test_job_longer_than_a_dispatch_goes_to_a_worker_even_if_inline_is_declared_first():
+    long = _figures({Placement.INLINE: (2.0, 0.0), Placement.CPU_PINNED: (2.0, 0.05)})
+    assert _both(long) is Placement.CPU_PINNED
+
+
+def test_run_time_equal_to_the_dispatch_time_stays_inline():
+    even = _figures({Placement.INLINE: (0.05, 0.0), Placement.CPU_PINNED: (0.05, 0.05)})
+    assert _both(even) is Placement.INLINE
+
+
+def test_among_worker_paths_the_smallest_run_plus_dispatch_wins():
+    m = _machine(gpus=((0, 100),))
+    job = _job("j", (_gpu(1, 10, 10), _pinned(1, 10)))
+    slow_gpu = _figures({Placement.GPU: (1.0, 3.0), Placement.CPU_PINNED: (2.0, 0.05)})
+    fast_gpu = _figures({Placement.GPU: (0.1, 0.5), Placement.CPU_PINNED: (2.0, 0.05)})
+    half_known = _figures({Placement.GPU: (None, 3.0), Placement.CPU_PINNED: (2.0, 0.05)})
+    assert plan_placement(m, Ledger(m), job, estimate=slow_gpu).placed.path.placement is Placement.CPU_PINNED
+    assert plan_placement(m, Ledger(m), job, estimate=fast_gpu).placed.path.placement is Placement.GPU
+    assert plan_placement(m, Ledger(m), job, estimate=half_known).placed.path.placement is Placement.GPU
+
+
+def test_chosen_worker_path_still_waits_rather_than_falling_back_inline():
+    m = _machine()
+    ledger = Ledger(m)
+    for node in m.nodes:                            # every core is busy
+        ledger.add(Allocation(("busy", node.index), Placement.CPU_PINNED, node.cores, 0, node.index))
+    long = _figures({Placement.INLINE: (2.0, 0.0), Placement.CPU_PINNED: (2.0, 0.05)})
+    job = _job("j", (_inline(10), _pinned(1, 10)))
+    assert plan_placement(m, ledger, job, estimate=long).outcome is Outcome.WAIT

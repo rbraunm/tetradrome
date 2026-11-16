@@ -410,8 +410,11 @@ class Scheduler:
                  warm_setup=None, warm_between=None,
                  spill_dir: str | None = None, spill_floor_bytes: int = 16 * 1024 * 1024,
                  spill_budget_bytes: int = 4 * 1024 * 1024 * 1024,
-                 shared_min_consumers: int = 2, shared_floor_bytes: int = 16 * 1024 * 1024):
+                 shared_min_consumers: int = 2, shared_floor_bytes: int = 16 * 1024 * 1024,
+                 calibration: Calibration | None = None):
         self.machine = machine
+        # What earlier runs measured about the handlers; None starts each run uncalibrated.
+        self.calibration = calibration
         self.margin = margin
         self.sample_interval = sample_interval
         self.numba_cache_dir = numba_cache_dir
@@ -534,7 +537,8 @@ class Scheduler:
         nodes_by_index = {node.index: node for node in self.machine.nodes}
         replica_stall_warned: set = set()           # result keys already warned for stalling dispatch
         placement_of: dict = {}         # key -> the placement it ran on, for calibration
-        calibration = Calibration()
+        launched_at: dict = {}          # key -> when its worker was started, for dispatch overhead
+        calibration = self.calibration if self.calibration is not None else Calibration()
         timings: dict = {}              # key -> measured run seconds, for cost calibration
         completed: set = set()
         cancelled: set = set()
@@ -763,6 +767,7 @@ class Scheduler:
                     job.key, job.run, job_inputs, deps,
                     placed.cores, placed.gpu_index, result_queue, platform,
                 ))
+                launched_at[job.key] = time.perf_counter()
                 proc.start()
                 running[job.key] = proc
                 with pids_lock:
@@ -794,6 +799,7 @@ class Scheduler:
             ledger.remove(key)
 
         def stop_worker(key) -> None:
+            launched_at.pop(key, None)
             proc = running.pop(key)
             with pids_lock:
                 running_pids.pop(key, None)
@@ -852,6 +858,10 @@ class Scheduler:
                     running_pids.pop(key, None)
                 ledger.remove(key)
                 proc.join()
+                turnaround = time.perf_counter() - launched_at.pop(key)
+                if status == "ok":
+                    calibration.observe_overhead(placement_of[key],
+                                                 max(turnaround - compute_time, 0.0))
                 logger.debug("job %r done: predicted %d, peak private %d",
                              key, declared_ram[key], peak_actual.get(key, 0))
             elif key in inline_running:
@@ -865,7 +875,8 @@ class Scheduler:
             if status == "ok":
                 completed.add(key)
                 timings[key] = compute_time
-                calibration.observe(float(graph.get(key).cost), placement_of[key], compute_time)
+                calibration.observe(float(graph.get(key).cost), placement_of[key], compute_time,
+                                    graph.get(key).kind)
                 # The result persists in the parent until its consumers drain it, so charge it
                 # against global RAM like a working-set footprint. A whole result is one held entry;
                 # a partitioned one fans into a held entry per shard, each charged by its own
@@ -967,14 +978,19 @@ class Scheduler:
                 # Show the placer the fresh-worker footprint, not just the working set, so it
                 # cannot admit more processes than the box can actually hold. The GPU path's
                 # warm/fresh decision comes back so launch dispatches it the same way.
-                predicted = calibration.predicted_time(float(job.cost), Placement.GPU)
+                predicted = calibration.predicted_time(float(job.cost), Placement.GPU, job.kind)
                 aug_paths, gpu_execution = _augment_for_admission(
                     job.paths, worker_shared=worker_shared, ram_baseline=ram_baseline,
                     context_vram=context_vram, gpu_budget=gpu_budget, predicted_gpu_time=predicted,
                     context_overhead=self.context_overhead, vram_fraction=self.vram_fraction,
                     time_multiple=self.time_multiple)
                 aug_job = dataclasses.replace(job, paths=aug_paths)
-                decision = plan_placement(self.machine, ledger, aug_job, self.margin)
+
+                def estimate(path, job=job):
+                    return (calibration.predicted_time(float(job.cost), path.placement, job.kind),
+                            calibration.overhead(path.placement))
+
+                decision = plan_placement(self.machine, ledger, aug_job, self.margin, estimate)
                 if decision.outcome is Outcome.ADMIT:
                     launch(job, decision.placed, gpu_execution)
                     did = True
@@ -1026,7 +1042,7 @@ class Scheduler:
         # one bad job does not sink the batch.
         infeasible: list = []
         for job in graph.jobs():
-            predicted = calibration.predicted_time(float(job.cost), Placement.GPU)
+            predicted = calibration.predicted_time(float(job.cost), Placement.GPU, job.kind)
             aug_paths, _ = _augment_for_admission(
                 job.paths, worker_shared=worker_shared, ram_baseline=ram_baseline,
                 context_vram=context_vram, gpu_budget=gpu_budget, predicted_gpu_time=predicted,
