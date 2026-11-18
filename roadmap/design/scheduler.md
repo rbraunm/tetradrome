@@ -98,7 +98,8 @@ For each ready job (`scheduler/placement.py`):
 
 A job gets a physical core to itself while any is free, on either node. It takes the second
 hyperthread of a busy core only when the benchmark measured that two jobs of its kind sharing a
-core finish at least a tenth more than one alone, and the same holds for the kind already there.
+core finish more than one alone (each less than twice as slow), and the same holds for the kind
+already there.
 A kind with no such figure never shares. On the 32-CPU container generation slices share
 (1.5 times slower each, so a third more done) and histogram slices do not (2 times slower each).
 
@@ -141,11 +142,11 @@ On a 32-CPU, two-socket container, one knot of grid number 10 (3.6 million state
 
 | | Seconds |
 |---|---|
-| HFK-hat, end to end | 78 |
-| of which: histogram, generation, merge, reduction (worker CPU) | 16, 130, 15, 93 |
-| tau | 487 |
-| one generation slice of 4096 states, in a ready worker | 0.044 |
-| the same in a worker that binds the kernels itself | 0.63 |
+| HFK-hat, end to end, histogram included | 15 |
+| of which the histogram | 2 |
+| τ, end to end | 314 |
+| handing a job to a waiting worker | 0.002 |
+| starting a worker | 0.020 |
 | a determinant through `compute()`, against 0.04 ms called directly | 0.0003 |
 
 The 185 roster knots of grid number up to 10, as one `run_many` graph each:
@@ -163,6 +164,7 @@ A batch of six grid-number-10 knots, HFK-hat with the histograms already known:
 | slices of 32768 states | 139 | 9.8 |
 | and results kept out of the scheduler's process | 86 | 13.4 |
 | and a merge per Alexander grading, a rank per boundary map | 49 | 25.7 |
+| and long-lived workers, longest chain first, second threads on any measured gain | 46 | 26.5 |
 
 The old one-knot-at-a-time path took 5 h 15 min to 5 h 32 min for 43 knots' HFK-hat per process,
 four processes side by side. The τ run's last five minutes were two knots' single-core rank and

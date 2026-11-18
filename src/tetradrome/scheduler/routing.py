@@ -38,11 +38,6 @@ class Execution(enum.Enum):
     FRESH = "fresh"
 
 
-# Two jobs on one physical core must together finish at least this much more than one alone
-# before the second thread is used; closer than that, measurement noise would decide.
-_SHARE_GAIN = 1.1
-
-
 def _device(placement) -> str:
     """Which code does the work. The inline path and both CPU placements run the same code, so
     they share a work rate; what separates them is dispatch overhead, which is measured apart."""
@@ -112,10 +107,12 @@ class Calibration:
         self._blend("rate", self._rate, (kind, _device(placement)), seconds / cost)
 
     def shares(self, kind: str) -> bool:
-        """Whether a job of ``kind`` should take the second thread of a busy physical core. Only
-        where the benchmark measured that two of them sharing a core do more than one alone."""
+        """Whether a job of ``kind`` should take the second thread of a busy physical core: only
+        where the benchmark measured that two of them sharing a core do more than one alone, each
+        running less than twice as slowly. Near that line the choice hardly matters, so noise in
+        the measurement costs little whichever way it falls."""
         factor = self._sibling.get(kind)
-        return factor is not None and 2.0 / factor >= _SHARE_GAIN
+        return factor is not None and factor < 2.0
 
     def overhead(self, placement):
         """Dispatch seconds for a placement: 0.0 inline, the measured figure otherwise, or None

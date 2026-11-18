@@ -104,9 +104,9 @@ def test_hyperthread_layout_is_part_of_the_machine(tmp_path):
         None, "this machine's processors or GPUs are not the ones measured before")
 
 
-@pytest.mark.parametrize("factor, expected", [(1.0, True), (1.5, True), (1.81, True),
-                                               (1.83, False), (2.0, False), (3.0, False)])
-def test_second_thread_is_used_only_where_two_jobs_do_a_tenth_more_than_one(factor, expected):
+@pytest.mark.parametrize("factor, expected", [(1.0, True), (1.5, True), (1.99, True),
+                                               (2.0, False), (2.01, False), (3.0, False)])
+def test_second_thread_is_used_only_where_two_jobs_do_more_than_one(factor, expected):
     calibration = Calibration()
     calibration.fix({**_FIGURES, "sibling": [{"kind": "slice", "factor": factor}]})
     assert calibration.shares("slice") is expected
