@@ -27,7 +27,7 @@ from pathlib import Path
 
 from .inventory import Machine
 
-_FORMAT = 3
+_FORMAT = 4
 _LIBRARIES = ("numpy", "numba", "cupy", "cupy-cuda11x", "cupy-cuda12x", "cupy-cuda13x")
 
 

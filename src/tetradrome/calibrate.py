@@ -10,8 +10,9 @@ and this software:
 - the work rate of every kind of job (seconds per cost unit);
 - how much slower each kind runs when two jobs share a physical core's two hyperthreads, which
   decides whether the scheduler uses a core's second thread for that kind;
-- what each worker placement costs to dispatch;
-- what a fresh worker costs to start (its RAM baseline and a GPU context's VRAM).
+- what each worker placement costs to dispatch to a waiting worker, and what starting a worker
+  adds;
+- what a fresh worker holds before it does any work (its RAM baseline and a GPU context's VRAM).
 
 The figures are kept by ``scheduler.calibration_store`` and are measured again only when the
 machine's processors or GPUs change, when the code or its numerical libraries change, or when this
@@ -172,19 +173,22 @@ def _sibling_factors(machine, rates) -> list:
     return factors
 
 
-def _dispatch_seconds(machine, placement, worker) -> float:
-    """The median seconds to hand a job with nothing to do to ``placement`` and reap it."""
-    samples = []
-    for index in range(_DISPATCH_SAMPLES):
-        calibration = Calibration()
-        job = Job(key=("dispatch", index), run=_nothing, inputs={},
-                  paths=(ComputePath(placement, cores=1, ram_bytes=1),))
-        report = Scheduler(machine, calibration=calibration, **worker).run(JobGraph([job]))
-        if report.failures or report.infeasible:
-            raise RuntimeError(f"dispatch benchmark failed on {placement.value}: "
-                               f"{report.failures or report.infeasible}")
-        samples.append(calibration.overhead(placement))
-    return statistics.median(samples)
+def _dispatch_seconds(machine, placement, worker) -> tuple:
+    """``(start, dispatch)`` for ``placement``: the seconds that starting a worker adds to a
+    job's dispatch when none is waiting, and the median seconds to hand a job with nothing to do
+    to a waiting worker and reap it. From one run of such jobs in a chain: the first starts the
+    worker and the rest reuse it."""
+    jobs = [Job(key=("dispatch", index), run=_nothing, inputs={},
+                paths=(ComputePath(placement, cores=1, ram_bytes=1),),
+                dependencies=[("dispatch", index - 1)] if index else [])
+            for index in range(_DISPATCH_SAMPLES + 1)]
+    report = Scheduler(machine, calibration=Calibration(), **worker).run(JobGraph(jobs))
+    if report.failures or report.infeasible:
+        raise RuntimeError(f"dispatch benchmark failed on {placement.value}: "
+                           f"{report.failures or report.infeasible}")
+    first, *later = (report.overheads[job.key] for job in jobs)
+    dispatch = statistics.median(later)
+    return max(first - dispatch, 0.0), dispatch
 
 
 def measure(machine) -> dict:
@@ -192,14 +196,16 @@ def measure(machine) -> dict:
     ram_baseline, context_vram = Scheduler(machine).worker_overhead()
     worker = {"worker_ram_baseline": ram_baseline, "context_vram_reserve": context_vram}
     rates = _work_rates(machine, worker)
+    dispatch = {placement: _dispatch_seconds(machine, placement, worker)
+                for placement in (Placement.CPU_PINNED, Placement.CPU_UNPINNED)}
     return {
         "rates": [{"kind": kind, "device": "cpu", "seconds_per_unit": rates[kind]}
                   for kind in sorted(rates)],
         "sibling": _sibling_factors(machine, rates),
-        "overheads": [{"placement": placement.name,
-                       "seconds": _dispatch_seconds(machine, placement, worker)}
-                      for placement in (Placement.CPU_PINNED, Placement.CPU_UNPINNED)],
-        "worker": {"ram_baseline": ram_baseline, "context_vram": context_vram},
+        "overheads": [{"placement": placement.name, "seconds": seconds}
+                      for placement, (_, seconds) in dispatch.items()],
+        "worker": {"ram_baseline": ram_baseline, "context_vram": context_vram,
+                   "start_seconds": dispatch[Placement.CPU_PINNED][0]},
     }
 
 
@@ -235,6 +241,8 @@ def describe(figures: dict) -> str:
         lines.append(line)
     lines += [f"  dispatch to {entry['placement']:<24} {entry['seconds'] * 1000:.1f} ms"
               for entry in figures["overheads"]]
+    lines.append(f"  starting a worker                    "
+                 f"{figures['worker']['start_seconds'] * 1000:.1f} ms")
     lines.append(f"  fresh worker RAM baseline            {figures['worker']['ram_baseline']} bytes")
     lines.append(f"  GPU context VRAM                     {figures['worker']['context_vram']} bytes")
     return "\n".join(lines)

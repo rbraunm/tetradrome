@@ -31,14 +31,17 @@ by the next run.
 | Path | Runs in | Costs | For |
 |---|---|---|---|
 | inline | the scheduler's own process | nothing to dispatch; holds up the loop while it runs | work shorter than a dispatch |
-| CPU pinned | a worker on one NUMA node's cores, its memory first touched there | a fork | most work |
-| CPU unpinned | a worker on any cores | a fork, no locality | work too large for one node |
+| CPU pinned | a pool worker, pinned for the job to CPUs of one NUMA node | a hand-over; a process start when none is waiting | most work |
+| CPU unpinned | a pool worker on any CPUs | the same, no locality | work too large for one node |
 | GPU, warm | the standing worker that holds the device context | queueing behind other warm jobs | small GPU jobs |
 | GPU, fresh | its own process and context | creating a context | large GPU jobs |
 
-Workers are forked from a template process that has already imported numpy and bound the
-compiled grid kernels (`engines/floer/prewarm.py`), so a worker starts ready. On Windows workers
-are spawned cold and each is charged a measured import baseline.
+A run keeps a pool of CPU workers. A worker takes one job after another: it pins itself to the
+job's CPUs, runs it, publishes the result and waits. One left holding more than 128 MiB after a
+job is retired, so what a large job leaves behind is not charged to the jobs after it; the pool
+ends with the run. Workers are forked from a template process that has already imported numpy
+and bound the compiled grid kernels (`engines/floer/prewarm.py`), so a worker starts ready. On
+Windows workers are spawned cold and each is charged a measured import baseline.
 
 ## What is measured
 
@@ -50,7 +53,8 @@ Each handler has a speed and a cost. A benchmark measures them once for a machin
 - **sharing a core**: per kind, a job's time when a physical core's two hyperthreads both run it,
   over its time with the core to itself. Measured with two pinned workers released together, on
   one core while the rest of the machine is idle.
-- **dispatch overhead**: seconds to hand a job with nothing to do to a placement and reap it.
+- **dispatch overhead**: seconds to hand a job with nothing to do to a waiting worker and reap
+  it, and what starting a worker adds when none is waiting (2 ms and 20 ms on the container).
 - **worker start-up**: a fresh worker's RAM baseline and a GPU context's VRAM.
 
 The benchmark runs each engine's `benchmark()` through the scheduler: every Seifert and cube
@@ -98,9 +102,11 @@ core finish at least a tenth more than one alone, and the same holds for the kin
 A kind with no such figure never shares. On the 32-CPU container generation slices share
 (1.5 times slower each, so a third more done) and histogram slices do not (2 times slower each).
 
-Ready jobs are tried in the order the graph lists them, a bounded number per pass. In a graph of
-many calculations (a roster of knots) the earlier ones therefore finish, and free what they
-hold, before the later ones start, instead of every one sitting half done.
+Each pass takes a bounded number of ready jobs in the order the graph lists them, so in a graph
+of many calculations (a roster of knots) the earlier ones finish, and free what they hold, before
+the later ones start. Among those, the job with the longest tail is tried first: the predicted
+time of the longest chain of work from its start to the end of the graph, from each kind's
+measured rate. The work the finish time hangs on therefore starts as early as it can.
 
 Each calculation in a graph has a peak: the largest footprint among its jobs. While anything is
 running, a job is admitted only if the peak of every calculation already started, and of its own,

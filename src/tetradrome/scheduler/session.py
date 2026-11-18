@@ -37,7 +37,8 @@ def capped_machine(mem_cap_bytes: int | None, vram_cap_bytes: int | None) -> Mac
         machine = detect_machine()
         figures = ensure(_calibration, machine)
         _worker.update(worker_ram_baseline=figures["worker"]["ram_baseline"],
-                       context_vram_reserve=figures["worker"]["context_vram"])
+                       context_vram_reserve=figures["worker"]["context_vram"],
+                       worker_start_seconds=figures["worker"]["start_seconds"])
         _machine = machine
     if mem_cap_bytes is None and vram_cap_bytes is None:
         return _machine

@@ -854,6 +854,71 @@ def test_ready_jobs_are_tried_in_graph_order():
     assert report.results["consumer"] < report.results["other"]
 
 
+def test_among_ready_jobs_the_longest_predicted_chain_starts_first():
+    # One core. "feeds" is the shortest job itself but the longest hangs on it, so its chain is
+    # the longest and it runs first; "fed" follows, then the longer of the other two. In graph
+    # order "fed" would have started last.
+    core = frozenset({min(os.sched_getaffinity(0))})
+    machine = Machine(nodes=(NumaNode(0, core, 8 * _GIB),), gpus=(), mem_cap_bytes=8 * _GIB)
+    calibration = Calibration()
+    calibration.fix({"rates": [{"kind": "probe", "device": "cpu", "seconds_per_unit": 1.0}],
+                     "overheads": [], "sibling": []})
+
+    def probe(key, cost, deps=()):
+        return Job(key=key, run=started_at, inputs={}, kind="probe", cost=cost,
+                   paths=(_cpu(),), dependencies=deps)
+
+    jobs = [probe("short", 2.0), probe("long", 5.0), probe("feeds", 1.0),
+            probe("fed", 9.0, deps=("feeds",))]
+    report = Scheduler(machine, calibration=calibration).run(JobGraph(jobs))
+    assert report.failures == []
+    started = report.results
+    assert started["fed"] < started["long"] < started["short"]
+
+
+def pids_so_far(inputs, deps):
+    return [pid for pids in deps.values() for pid in pids] + [os.getpid()]
+
+
+def _pid_chain(length):
+    return [Job(key=index, run=pids_so_far, inputs={}, paths=(_cpu(),),
+                dependencies=[index - 1] if index else [])
+            for index in range(length)]
+
+
+def test_a_run_reuses_its_workers():
+    # Three jobs one after another: one worker process runs them all.
+    report = Scheduler(_machine()).run(JobGraph(_pid_chain(3)))
+    assert report.failures == []
+    first, second, third = report.results[2]
+    assert first == second == third != os.getpid()
+
+
+def test_a_worker_left_holding_too_much_memory_is_retired():
+    # With nothing allowed to be left behind, every job retires its worker and the next job
+    # gets a new one.
+    report = Scheduler(_machine(), pool_retire_bytes=0).run(JobGraph(_pid_chain(3)))
+    assert report.failures == []
+    assert len(set(report.results[2])) == 3
+
+
+def test_a_job_after_a_killed_worker_gets_another_worker():
+    # "die" kills its worker and its component fails. The unrelated job after it still runs.
+    jobs = [Job(key="die", run=killed, inputs={}, paths=(_cpu(),)),
+            Job(key="after", run=produce, inputs={"value": 4}, paths=(_cpu(),))]
+    core = frozenset({min(os.sched_getaffinity(0))})
+    machine = Machine(nodes=(NumaNode(0, core, 8 * _GIB),), gpus=(), mem_cap_bytes=8 * _GIB)
+    report = Scheduler(machine).run(JobGraph(jobs))
+    assert [failed for _, failed, _ in report.failures] == ["die"]
+    assert report.results == {"after": 4}
+
+
+def test_report_carries_each_worker_jobs_dispatch_overhead():
+    report = Scheduler(_machine()).run(JobGraph(_pid_chain(3)))
+    assert sorted(report.overheads) == [0, 1, 2]
+    assert all(seconds >= 0 for seconds in report.overheads.values())
+
+
 def test_on_complete_is_called_once_per_finished_job():
     seen = []
     Scheduler(_machine(), on_complete=seen.append).run(JobGraph(_chain(1)))

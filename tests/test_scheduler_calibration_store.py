@@ -13,7 +13,7 @@ _FIGURES = {
     "rates": [{"kind": "slice", "device": "cpu", "seconds_per_unit": 0.5}],
     "overheads": [{"placement": "CPU_PINNED", "seconds": 0.02}],
     "sibling": [{"kind": "slice", "factor": 1.5}],
-    "worker": {"ram_baseline": 123, "context_vram": 0},
+    "worker": {"ram_baseline": 123, "context_vram": 0, "start_seconds": 0.03},
 }
 
 

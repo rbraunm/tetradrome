@@ -60,6 +60,8 @@ _GRACE_SECONDS = 2.0
 # written to the run's result store and only its location is reported.
 _MESSAGE_BYTES = 64 * 1024
 _STORE_PREFIX = "tetradrome-results-"
+# The placements whose jobs run in the run's pool of long-lived workers.
+_POOLED = (Placement.CPU_PINNED, Placement.CPU_UNPINNED)
 
 # The per-worker overhead probe's answers, by what was probed. A worker's import baseline and a
 # device context's size belong to the process and the box, not to one run, and the probe costs a
@@ -254,6 +256,69 @@ def _overhead_probe_main(result_queue, platform, accelerator, session_setup):
         result_queue.put(None)
         return
     result_queue.put((ram_baseline, context_vram))
+
+
+def _pool_worker_main(job_queue, result_queue, platform):
+    """A long-lived CPU worker. For each job it is sent it pins itself to the job's CPUs, runs it,
+    publishes the result and reports, as a one-job worker does, then waits for the next; None ends
+    it. Each report carries the worker's private bytes after the job's data is dropped, so the
+    scheduler can retire a worker that is left holding too much."""
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""          # a CPU worker must not grab a GPU
+    while True:
+        item = job_queue.get()
+        if item is None:
+            return
+        key, run, inputs, deps, cores, shards, store, token = item
+        del item
+        try:
+            platform.pin(cores)
+            deps = _resolve_deps(deps)
+            t0 = time.perf_counter()
+            result = run(inputs, deps)
+            compute_time = time.perf_counter() - t0
+            report = (key, "ok", _publish_result(key, result, shards, store, token), compute_time)
+        except Exception:
+            report = (key, "error", traceback.format_exc(), 0.0)
+        run = inputs = deps = result = None
+        result_queue.put(report + (platform.private_bytes(os.getpid()),))
+        del report
+
+
+class PoolWorker:
+    """A handle to one long-lived CPU worker: ``dispatch`` sends it a job, whose outcome lands on
+    the run's result queue like any other job's."""
+
+    def __init__(self, ctx, result_queue, platform):
+        self._job_queue = ctx.Queue()
+        self._proc = ctx.Process(target=_pool_worker_main,
+                                 args=(self._job_queue, result_queue, platform))
+        self._proc.start()
+
+    @property
+    def pid(self):
+        return self._proc.pid
+
+    @property
+    def exitcode(self):
+        return self._proc.exitcode
+
+    def is_alive(self) -> bool:
+        return self._proc.is_alive()
+
+    def dispatch(self, key, run, inputs, deps, cores, shards, store, token) -> None:
+        self._job_queue.put((key, run, inputs, deps, cores, shards, store, token))
+
+    def retire(self) -> None:
+        self._job_queue.put(None)               # it exits once it has nothing more to do
+
+    def terminate(self) -> None:
+        self._proc.terminate()
+
+    def kill(self) -> None:
+        self._proc.kill()
+
+    def join(self, timeout=None) -> None:
+        self._proc.join(timeout)
 
 
 def _augment_for_admission(paths, *, worker_shared, ram_baseline, context_vram, gpu_budget,
@@ -473,6 +538,8 @@ class RunReport:
     device_count: int = 0   # how many results were kept resident in GPU VRAM
     device_bytes: int = 0   # total VRAM bytes of those device-resident results
     timings: dict = dataclasses.field(default_factory=dict)
+    # key -> seconds a worker job took beyond its own run time: being handed over and reaped
+    overheads: dict = dataclasses.field(default_factory=dict)
     calibration: "Calibration | None" = None     # final per-placement rates, for inspection
 
 
@@ -488,8 +555,16 @@ class Scheduler:
                  spill_budget_bytes: int = 4 * 1024 * 1024 * 1024,
                  result_dir: str | None = None,
                  calibration: Calibration | None = None, on_complete=None,
-                 worker_ram_baseline: int | None = None):
+                 worker_ram_baseline: int | None = None,
+                 worker_start_seconds: float | None = None,
+                 pool_retire_bytes: int = 128 * 1024 * 1024):
         self.machine = machine
+        # What starting a pool worker adds to a job's dispatch when none is idle, as the benchmark
+        # measured it; None leaves it out of the planner's estimate.
+        self.worker_start_seconds = worker_start_seconds
+        # A pool worker left with more private memory than this after a job is retired, so what a
+        # large job leaves behind is not charged to every job the worker runs after it.
+        self.pool_retire_bytes = pool_retire_bytes
         # A fresh worker's RAM baseline as the benchmark measured it; None measures it here.
         self.worker_ram_baseline = worker_ram_baseline
         # Called with each job's key as it completes, in the scheduler's process: a long run's
@@ -617,7 +692,10 @@ class Scheduler:
             logger.info("CUDA context VRAM (charged per GPU process): %d bytes", context_vram)
         gpu_budget = self.machine.gpus[0].vram_bytes if self.machine.gpus else None
 
-        running: dict = {}              # key -> Process, fresh jobs with their own process
+        running: dict = {}              # key -> the PoolWorker or one-job Process running it
+        pool_idle: list = []            # this run's pool workers with no job, last used last
+        pool_workers: list = []         # every pool worker this run started and has not retired
+        overheads: dict = {}            # key -> dispatch seconds beyond the job's own run
         warm_running: dict = {}         # key -> gpu_index, jobs dispatched to a warm worker
         inline_running: set = set()     # the inline job being called right now, if any
         warm_workers: dict = {}         # gpu_index -> WarmWorker, started lazily
@@ -687,6 +765,23 @@ class Scheduler:
             unfinished[own] -= 1
             if unfinished[own] == 0:
                 started.discard(own)
+        # Each job's tail: the predicted seconds of the longest chain of work from its start to
+        # the end of the graph, from the measured rate of each kind (a kind with no rate counts
+        # as nothing). Among the ready jobs in the window, the longest tail is admitted first, so
+        # the work the finish time hangs on starts as early as it can.
+        tail: dict = {}
+        order = [key for key, count in unmet.items() if count == 0]
+        pending = dict(unmet)
+        for key in order:               # grows as it is walked, into a topological order
+            for child in graph.dependents(key):
+                pending[child] -= 1
+                if pending[child] == 0:
+                    order.append(child)
+        for key in reversed(order):
+            job = graph.get(key)
+            own = calibration.predicted_time(float(job.cost), job.paths[0].placement, job.kind)
+            tail[key] = (own or 0.0) + max((tail[child] for child in graph.dependents(key)),
+                                           default=0.0)
 
         # Take ownership of the jobs' inputs so they are no longer pinned by the (frozen) jobs in
         # the graph. Each is charged against global RAM and freed when its job is dispatched (an
@@ -850,6 +945,20 @@ class Scheduler:
                     job.key, job.run, job_inputs, deps, job.shards, store(), token,
                     keep_on_device=keep_on_device)
                 warm_running[job.key] = placed.gpu_index
+            elif placement in _POOLED:
+                while pool_idle and not pool_idle[-1].is_alive():
+                    pool_workers.remove(pool_idle.pop())     # it died while idle
+                if pool_idle:
+                    worker = pool_idle.pop()
+                else:
+                    worker = PoolWorker(ctx, result_queue(), platform)
+                    pool_workers.append(worker)
+                launched_at[job.key] = time.perf_counter()
+                worker.dispatch(job.key, job.run, job_inputs, deps, placed.cores,
+                                job.shards, store(), token)
+                running[job.key] = worker
+                with pids_lock:
+                    running_pids[job.key] = worker.pid
             else:
                 proc = ctx.Process(target=_worker_main, args=(
                     job.key, job.run, job_inputs, deps,
@@ -895,6 +1004,8 @@ class Scheduler:
             with pids_lock:
                 running_pids.pop(key, None)
             ledger.remove(key)
+            if proc in pool_workers:
+                pool_workers.remove(proc)
             proc.terminate()
             proc.join(timeout=_GRACE_SECONDS)
             if proc.is_alive():
@@ -961,21 +1072,27 @@ class Scheduler:
             return held.size
 
         def reap_one(item) -> None:
-            key, status, payload, compute_time = item
+            key, status, payload, compute_time, *retained = item
             if not is_running(key):
                 return                  # stale message from a job already reaped or killed
             leaves_more.pop(key, None)
             gpu_completed = None        # the GPU a warm job ran on, kept for a device-resident result
-            if key in running:          # fresh: its own process to reap
+            if key in running:          # a worker process ran it
                 proc = running.pop(key)
                 with pids_lock:
                     running_pids.pop(key, None)
                 ledger.remove(key)
-                proc.join()
+                if not isinstance(proc, PoolWorker):
+                    proc.join()                         # a one-job process: reap it
+                elif not retained or retained[0] is None or retained[0] > self.pool_retire_bytes:
+                    pool_workers.remove(proc)
+                    proc.retire()
+                else:
+                    pool_idle.append(proc)
                 turnaround = time.perf_counter() - launched_at.pop(key)
                 if status == "ok":
-                    calibration.observe_overhead(placement_of[key],
-                                                 max(turnaround - compute_time, 0.0))
+                    overheads[key] = max(turnaround - compute_time, 0.0)
+                    calibration.observe_overhead(placement_of[key], overheads[key])
                 logger.debug("job %r done: predicted %d, peak private %d",
                              key, declared_ram[key], peak_actual.get(key, 0))
             elif key in inline_running:
@@ -1094,9 +1211,9 @@ class Scheduler:
             return True
 
         def admit() -> bool:
-            # Try the first admit_window ready jobs in graph order; the ones that must wait go
-            # back on the heap. An entry whose job has started or been cancelled since it was
-            # pushed is dropped here.
+            # Take the first admit_window ready jobs in graph order and try them longest tail
+            # first; the ones that must wait go back on the heap. An entry whose job has started
+            # or been cancelled since it was pushed is dropped here.
             did = False
             held: list = []
             while ready_heap and len(held) < admit_window:
@@ -1104,6 +1221,7 @@ class Scheduler:
                 if entry[1] not in waiting:
                     continue
                 held.append(entry)
+            held.sort(key=lambda entry: (-tail[entry[1]], entry[0]))
             for entry in held:
                 job = graph.get(entry[1])
                 if job.key not in waiting:
@@ -1123,8 +1241,12 @@ class Scheduler:
                 aug_job = dataclasses.replace(job, paths=aug_paths)
 
                 def estimate(path, job=job):
+                    dispatch = calibration.overhead(path.placement)
+                    if (dispatch is not None and self.worker_start_seconds is not None
+                            and path.placement in _POOLED and not pool_idle):
+                        dispatch += self.worker_start_seconds
                     return (calibration.predicted_time(float(job.cost), path.placement, job.kind),
-                            calibration.overhead(path.placement))
+                            dispatch)
 
                 decision = plan_placement(self.machine, ledger, aug_job, self.margin, estimate,
                                           calibration.shares)
@@ -1237,6 +1359,13 @@ class Scheduler:
                 worker_side["sampler"].join(timeout=1.0)
             for key in list(running):
                 stop_worker(key)
+            for worker in pool_workers:
+                worker.retire()
+            for worker in pool_workers:
+                worker.join(timeout=_GRACE_SECONDS)
+                if worker.is_alive():
+                    worker.kill()
+                    worker.join()
             for gpu_index, worker in warm_workers.items():
                 if context_vram > 0 or ram_baseline > 0:
                     ledger.remove(("__warm_context__", gpu_index))
@@ -1255,4 +1384,4 @@ class Scheduler:
                          stored_bytes=stored_state["bytes"],
                          device_count=device_state["count"],
                          device_bytes=device_state["bytes"],
-                         timings=timings, calibration=calibration)
+                         timings=timings, overheads=overheads, calibration=calibration)

@@ -66,6 +66,13 @@ def test_first_use_measures_each_worker_placement(first_use):
     assert all(entry["seconds"] > 0 for entry in figures["overheads"])
 
 
+def test_first_use_measures_starting_a_worker_apart_from_dispatching_to_one(first_use):
+    _, _, figures, _ = first_use
+    assert sorted(figures["worker"]) == ["context_vram", "ram_baseline", "start_seconds"]
+    # Starting a process costs more than handing a job to one that is waiting.
+    assert figures["worker"]["start_seconds"] > figures["overheads"][0]["seconds"]
+
+
 def test_first_use_measures_sharing_a_core_for_every_kind_where_cores_have_two_threads(
         first_use, machine):
     _, _, figures, _ = first_use
