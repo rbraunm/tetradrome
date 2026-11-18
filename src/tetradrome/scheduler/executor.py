@@ -423,8 +423,11 @@ class Scheduler:
                  spill_dir: str | None = None, spill_floor_bytes: int = 16 * 1024 * 1024,
                  spill_budget_bytes: int = 4 * 1024 * 1024 * 1024,
                  shared_min_consumers: int = 2, shared_floor_bytes: int = 16 * 1024 * 1024,
-                 calibration: Calibration | None = None, on_complete=None):
+                 calibration: Calibration | None = None, on_complete=None,
+                 worker_ram_baseline: int | None = None):
         self.machine = machine
+        # A fresh worker's RAM baseline as the benchmark measured it; None measures it here.
+        self.worker_ram_baseline = worker_ram_baseline
         # Called with each job's key as it completes, in the scheduler's process: a long run's
         # way to say how far along it is.
         self.on_complete = on_complete
@@ -472,12 +475,14 @@ class Scheduler:
         explicit_context = self.context_vram_reserve is not None
         measure_context = (accelerator is not None and bool(self.machine.gpus)
                            and session_setup is not None and not explicit_context)
-        if worker_shared and not measure_context:
-            return 0, (self.context_vram_reserve if explicit_context else 0)
+        measure_ram = not worker_shared and self.worker_ram_baseline is None
+        if not measure_ram and not measure_context:
+            return (0 if worker_shared else self.worker_ram_baseline,
+                    self.context_vram_reserve if explicit_context else 0)
         probed = (platform.name, type(accelerator).__name__, measure_context)
         if probed in _OVERHEAD_PROBED:
             probe_ram, probe_context = _OVERHEAD_PROBED[probed]
-            return (0 if worker_shared else probe_ram,
+            return (0 if worker_shared else (probe_ram if measure_ram else self.worker_ram_baseline),
                     self.context_vram_reserve if explicit_context
                     else (probe_context if measure_context else 0))
 
@@ -495,7 +500,8 @@ class Scheduler:
                 "VRAM this platform and device need.")
         probe_ram, probe_context = measured
         _OVERHEAD_PROBED[probed] = measured
-        ram_baseline = 0 if worker_shared else probe_ram
+        ram_baseline = 0 if worker_shared else (probe_ram if measure_ram
+                                                else self.worker_ram_baseline)
         if explicit_context:
             context_vram = self.context_vram_reserve
         elif measure_context:
@@ -503,6 +509,15 @@ class Scheduler:
         else:
             context_vram = 0
         return ram_baseline, context_vram
+
+    def worker_overhead(self) -> tuple:
+        """``(RAM baseline, context VRAM)`` as a run on this machine charges them per fresh worker
+        and per GPU process."""
+        accelerator = detect_accelerator() if self.machine.gpus else None
+        warm_setup = self.warm_setup
+        if accelerator is not None and warm_setup is None:
+            warm_setup = accelerator.session_setup()
+        return self._measure_overhead(_start_context(), for_host(), accelerator, warm_setup)
 
     def run(self, graph: JobGraph) -> RunReport:
         if self.numba_cache_dir:

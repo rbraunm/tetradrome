@@ -4,10 +4,10 @@
 
 Every engine calculation enters through ``run_to_result`` (one calculation) or ``run_many``
 (several independent ones sharing the machine), so one calibration serves the whole process. It
-starts from the figures stored for this code on this machine, and each run stores the figures it
-has finished measuring (``calibration_store``). The machine is detected once per process for the
-same reason a small calculation can afford to come through here at all: probing the topology
-costs more than many of them do.
+holds the benchmark's figures for this machine and software; the first calculation makes sure
+they exist, measuring them if not (``tetradrome.calibrate``). The machine is detected once per
+process for the same reason a small calculation can afford to come through here at all: probing
+the topology costs more than many of them do.
 """
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ import dataclasses
 import logging
 
 from ..errors import TetradromeError
-from . import calibration_store
 from .executor import Scheduler
 from .graph import JobGraph
 from .inventory import Machine, detect_machine
@@ -26,18 +25,20 @@ logger = logging.getLogger(__name__)
 
 _calibration = Calibration()
 _machine: Machine | None = None
-_store_directory = None
+_worker: dict = {}
 
 
 def capped_machine(mem_cap_bytes: int | None, vram_cap_bytes: int | None) -> Machine:
     """The detected machine, optionally lowered to a tighter system-RAM and/or per-GPU VRAM
     ceiling. A cap only ever lowers a limit; it never promises more than the hardware has."""
-    global _machine, _store_directory
+    global _machine
     if _machine is None:
-        _machine = detect_machine()
-        _store_directory = calibration_store.store_directory()
-        calibration_store.load(_calibration, _machine, _store_directory,
-                               calibration_store.code_version())
+        from ..calibrate import ensure          # the benchmark imports the engines, which import this
+        machine = detect_machine()
+        figures = ensure(_calibration, machine)
+        _worker.update(worker_ram_baseline=figures["worker"]["ram_baseline"],
+                       context_vram_reserve=figures["worker"]["context_vram"])
+        _machine = machine
     if mem_cap_bytes is None and vram_cap_bytes is None:
         return _machine
     capped_ram = (_machine.mem_cap_bytes if mem_cap_bytes is None
@@ -66,12 +67,9 @@ def run_to_result(graph, key, *, mem_cap_bytes: int | None = None,
 
 
 def _run(graph, mem_cap_bytes, vram_cap_bytes, on_complete=None):
-    scheduler = Scheduler(capped_machine(mem_cap_bytes, vram_cap_bytes), calibration=_calibration,
-                          on_complete=on_complete)
-    report = scheduler.run(graph)
-    calibration_store.save(_calibration, _machine, _store_directory,
-                           calibration_store.code_version())
-    return report
+    machine = capped_machine(mem_cap_bytes, vram_cap_bytes)
+    scheduler = Scheduler(machine, calibration=_calibration, on_complete=on_complete, **_worker)
+    return scheduler.run(graph)
 
 
 def run_many(parts: dict, *, what: str, mem_cap_bytes: int | None = None,

@@ -37,20 +37,39 @@ are spawned cold and each is charged a measured import baseline.
 
 ## What is measured
 
-Each handler has a speed and a cost, both measured while jobs run (`scheduler/routing.py`, shared
-through `scheduler/session.py`):
+Each handler has a speed and a cost. A benchmark measures them once for a machine and its software
+(`tetradrome/calibrate.py`), and every calculation after that starts out with them:
 
 - **work rate**: seconds per cost unit, per kind and device. The inline path and both CPU
-  placements run the same code, so they share a rate; the GPU has its own.
-- **dispatch overhead**: seconds to hand a job to a placement and reap it, beyond its run time.
-- **memory**: a worker's private bytes are sampled; the ledger charges the larger of declared and
-  measured, and logs a job that exceeds its declaration.
+  placements run the same code, so they share a rate.
+- **dispatch overhead**: seconds to hand a job with nothing to do to a placement and reap it.
+- **worker start-up**: a fresh worker's RAM baseline and a GPU context's VRAM.
 
-Work rates and dispatch overheads are measured once per code version and machine and kept
-(`scheduler/calibration_store.py`): one JSON file per machine in the user's cache directory
-(`TETRADROME_CACHE_DIR` moves it). A figure is stored after eight measurements and is not measured
-again. Any change to the package's source discards the file; a figure the file lacks is measured.
-A worker's start-up memory is still probed once per process.
+The benchmark runs each engine's `benchmark()` through the scheduler: every Seifert and cube
+invariant of one six-crossing knot, and the histogram, HFK-hat and τ graphs of its grid (grid
+number 8). It takes the fastest of three passes, about 7 s on the 32-CPU container.
+
+The figures are one JSON file per machine in the user's cache directory (`TETRADROME_CACHE_DIR`
+moves it; `scheduler/calibration_store.py`). They are used while both keys hold:
+
+- **the machine**: processor model, the CPUs the scheduler may use with their NUMA layout, and the
+  GPUs. Not RAM, load, uptime or kernel, so a reboot changes nothing.
+- **the software**: a hash of the package's source, and the versions of the interpreter, numpy,
+  Numba and cupy.
+
+When a key has changed or there are no figures, the first calculation runs the benchmark and logs
+that it is doing so and why. `python -m tetradrome.calibrate` runs it on demand, for a change the
+keys do not see; the provisioner runs it at install.
+
+While jobs run, a worker's private memory is sampled; the ledger charges the larger of declared
+and measured, and logs a job that exceeds its declaration. A kind the benchmark does not cover is
+learned while jobs run, for the life of the process.
+
+Open:
+
+- One rate per kind. A kind whose time per unit changes with its size is predicted roughly.
+- GPU rates are not benchmarked; there has been no GPU host to build that on.
+- Two processes that both find no figures both run the benchmark, and slow each other's.
 
 ## The planner
 

@@ -34,7 +34,7 @@ from typing import Literal
 
 from .._version import __version__
 from ..backends import knotinfo_backend, registry
-from ..diagrams import NormalizedDiagram
+from ..diagrams import NormalizedDiagram, build
 from ..engines import floer, khovanov
 from ..errors import UnknownKnot, UnvalidatedResult
 from ..scheduler import ComputePath, Job, JobGraph, Placement, run_to_result
@@ -91,17 +91,48 @@ def _pd_run(inputs, deps):
     return _PD_INVARIANTS[invariant][0](pd_code)
 
 
-def _scheduled(invariant: str, run, inputs, cost: float, working_bytes: int):
-    """Run one calculation as a scheduler job and return its value. The job can run in this
-    process or in a worker; the scheduler chooses by what it has measured for this invariant
-    (its own kind), and takes the in-process path until it has measured it."""
-    job = Job(
+def _job(invariant: str, run, inputs, cost: float, working_bytes: int) -> Job:
+    """One calculation as a scheduler job. It can run in this process or in a worker; the
+    scheduler chooses by the benchmark's figure for this invariant (its own kind)."""
+    return Job(
         key=(invariant,), run=run, inputs=inputs, kind=f"invariant.{invariant}", cost=cost,
         paths=(ComputePath(Placement.INLINE, cores=1, ram_bytes=working_bytes),
                ComputePath(Placement.CPU_PINNED, cores=1,
                            ram_bytes=_WORKER_BASE_BYTES + working_bytes)),
     )
+
+
+def _seifert_job(invariant: str, braid) -> Job:
+    strands = max((abs(generator) for generator in braid), default=0) + 1
+    size = len(braid) + strands                      # the Seifert matrix is at most this wide
+    return _job(invariant, _seifert_run, (invariant, tuple(braid)),
+                cost=float(size ** 3), working_bytes=size * size * _SEIFERT_ENTRY_BYTES)
+
+
+def _pd_job(invariant: str, pd_code) -> Job:
+    states = 2 ** len(pd_code)                       # the resolution cube's vertices
+    return _job(invariant, _pd_run, (invariant, pd_code),
+                cost=float(states), working_bytes=states * _CUBE_STATE_BYTES)
+
+
+def _scheduled(job: Job):
     return run_to_result(JobGraph([job]), job.key)
+
+
+# The knot the benchmark computes the Seifert and cube invariants of: six crossings, between the
+# smallest table knots and the ones whose cube takes most of a second.
+_BENCHMARK_KNOT = "6_2"
+
+
+def benchmark(run) -> None:
+    """The Seifert and cube engines' representative calculations for ``tetradrome.calibrate``:
+    every invariant of one knot, each run through ``run(graph, key)``."""
+    knot = build.from_name(_BENCHMARK_KNOT)
+    braid = knotinfo_backend.braid_word(knot.identity)
+    jobs = [_seifert_job(invariant, braid) for invariant in _SEIFERT_INVARIANTS]
+    jobs += [_pd_job(invariant, knot.pd_code) for invariant in _PD_INVARIANTS]
+    for job in jobs:
+        run(JobGraph([job]), job.key)
 
 
 def _supported() -> list[str]:
@@ -280,10 +311,7 @@ def compute(
             raise UnknownKnot(
                 "Invariant computation needs a braid word (from_braid) or a KnotInfo identity."
             )
-        strands = max((abs(generator) for generator in braid), default=0) + 1
-        size = len(braid) + strands                  # the Seifert matrix is at most this wide
-        value = _scheduled(invariant, _seifert_run, (invariant, tuple(braid)),
-                           cost=float(size ** 3), working_bytes=size * size * _SEIFERT_ENTRY_BYTES)
+        value = _scheduled(_seifert_job(invariant, braid))
         return _finalize(
             knot, invariant, value, "seifert_form_from_braid", inputs, "(braid word)", validate
         )
@@ -295,9 +323,7 @@ def compute(
                 "this knot is braid-presented."
             )
         _, method = _PD_INVARIANTS[invariant]
-        states = 2 ** len(knot.pd_code)              # the resolution cube's vertices
-        value = _scheduled(invariant, _pd_run, (invariant, knot.pd_code),
-                           cost=float(states), working_bytes=states * _CUBE_STATE_BYTES)
+        value = _scheduled(_pd_job(invariant, knot.pd_code))
         d_squared = "pass" if invariant in _RUNS_D_SQUARED else "not_applicable"
         return _finalize(
             knot, invariant, value, method, "pd_code", "(pd)", validate, d_squared=d_squared

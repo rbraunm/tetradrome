@@ -277,7 +277,7 @@ def preflight(node: Node) -> None:
 
 
 def plan_cpus(node: Node, args) -> list[int]:
-    print("[1/10] Reading the node's CPU and memory layout...")
+    print("[1/11] Reading the node's CPU and memory layout...")
     topology = parse_topology(node.capture(TOPOLOGY_PROBE).stdout)
     if topology.cgroup != "cgroup2fs":
         raise ProvisionError(
@@ -297,7 +297,7 @@ def plan_cpus(node: Node, args) -> list[int]:
 
 
 def ensure_template(node: Node, template: str, template_storage: str) -> None:
-    print(f"[2/10] Ensuring template {template} is cached on {template_storage}...")
+    print(f"[2/11] Ensuring template {template} is cached on {template_storage}...")
     if template in node.capture(f"pveam list {template_storage}").stdout:
         print("  already cached.")
         return
@@ -307,7 +307,7 @@ def ensure_template(node: Node, template: str, template_storage: str) -> None:
 
 def create_container(node: Node, args, cpus: list[int]) -> None:
     ctid = args.ctid
-    print(f"[3/10] Creating LXC {ctid} ({args.hostname})...")
+    print(f"[3/11] Creating LXC {ctid} ({args.hostname})...")
     if node.capture(f"pct status {ctid}").returncode == 0:
         if not args.recreate:
             raise ProvisionError(
@@ -356,7 +356,7 @@ def create_container(node: Node, args, cpus: list[int]) -> None:
 
 
 def wait_for_network(node: Node, ctid: int) -> None:
-    print("[4/10] Waiting for container network...")
+    print("[4/11] Waiting for container network...")
     node.exec_in(ctid, 'for i in $(seq 1 30); do '
                        'getent hosts github.com >/dev/null 2>&1 && exit 0; sleep 2; done; '
                        'echo "no network in container after 60s" >&2; exit 1')
@@ -380,7 +380,7 @@ def clear_install_service_policy(node: Node, ctid: int) -> None:
 
 
 def install_base_packages(node: Node, args) -> None:
-    print("[5/10] Installing base packages...")
+    print("[5/11] Installing base packages...")
     packages = f"{BASE_PACKAGES} {args.apt}".strip()
     node.exec_in(args.ctid,
                  "export DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8\n"
@@ -447,7 +447,7 @@ def write_login_file(login: Login, include_password: bool = True) -> str:
 
 def setup_login(node: Node, args, name: str, save_login) -> Login:
     ctid = args.ctid
-    print(f"[6/10] Enabling sshd and the {args.ssh_user!r} login...")
+    print(f"[6/11] Enabling sshd and the {args.ssh_user!r} login...")
     user = shlex.quote(args.ssh_user)
     node.exec_in(ctid,
                  f"id -u {user} >/dev/null 2>&1 || useradd --create-home --shell /bin/bash {user}\n"
@@ -488,7 +488,7 @@ def setup_login(node: Node, args, name: str, save_login) -> Login:
 
 def install_repo(node: Node, args, name: str) -> None:
     extras = f"[{args.extras}]" if args.extras else ""
-    print(f"[7/10] Installing {args.repo} ({args.branch}"
+    print(f"[7/11] Installing {args.repo} ({args.branch}"
           f"{', extras: ' + args.extras if args.extras else ''})...")
     base = f"/opt/{name}"
     node.exec_in(args.ctid,
@@ -520,9 +520,9 @@ def install_oracles(node: Node, args, name: str) -> None:
     every oracle build recipe lives -- pointed at the container venv with SageMath enabled, then
     prove every oracle is discoverable so a broken install fails here."""
     if args.skip_oracles:
-        print("[8/10] Skipping comparison-oracle install (--skip-oracles).")
+        print("[8/11] Skipping comparison-oracle install (--skip-oracles).")
         return
-    print("[8/10] Installing comparison oracles (all engines + SageMath) via the in-repo script...")
+    print("[8/11] Installing comparison oracles (all engines + SageMath) via the in-repo script...")
     base = f"/opt/{name}"
     script = f"{base}/src/scripts/install_oracles.sh"
     debug_env = "DEBUG=1 " if node.verbose else ""
@@ -550,7 +550,7 @@ def install_oracles(node: Node, args, name: str) -> None:
 
 
 def setup_mdns(node: Node, ctid: int, mdns_name: str) -> None:
-    print(f"[9/10] Advertising {mdns_name}.local over mDNS (Avahi)...")
+    print(f"[9/11] Advertising {mdns_name}.local over mDNS (Avahi)...")
     node.exec_in(ctid,
                  f"sed -ri 's/^#?host-name=.*/host-name={mdns_name}/' /etc/avahi/avahi-daemon.conf\n"
                  "systemctl enable --now avahi-daemon\n"
@@ -561,11 +561,20 @@ def setup_mdns(node: Node, ctid: int, mdns_name: str) -> None:
     print(f"  advertising {mdns_name}.local via Avahi.")
 
 
+def benchmark_machine(node: Node, args, login: Login) -> None:
+    print(f"[10/11] Benchmarking the container as {login.user!r}, so calculations start out "
+          "knowing what their jobs cost here...")
+    node.exec_in(args.ctid,
+                 f"cd {login.repo} && runuser -u {shlex.quote(login.user)} -- "
+                 f"{login.python} -m tetradrome.calibrate",
+                 stream=True)
+
+
 def smoke_test(node: Node, args, login: Login) -> None:
     if not args.smoke:
-        print("[10/10] No --smoke command given; skipping smoke test.")
+        print("[11/11] No --smoke command given; skipping smoke test.")
         return
-    print(f"[10/10] Smoke test as {login.user!r}: {args.smoke}")
+    print(f"[11/11] Smoke test as {login.user!r}: {args.smoke}")
     node.exec_in(args.ctid,
                  f"cd {login.repo} && runuser -u {shlex.quote(login.user)} -- {login.python} {args.smoke}",
                  stream=True)
@@ -618,6 +627,7 @@ def provision(args, client, save_login=write_login_file) -> Login:
     node.exec_in(args.ctid, f"chown -R {shlex.quote(login.user)}: {owned}\n")
     setup_mdns(node, args.ctid, login.mdns_name)
     clear_install_service_policy(node, args.ctid)
+    benchmark_machine(node, args, login)
     smoke_test(node, args, login)
     report(login)
     return login

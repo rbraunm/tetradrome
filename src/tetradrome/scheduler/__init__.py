@@ -8,6 +8,7 @@ node, GPUs, the real memory ceiling) and runs submitted jobs against it, memory-
 parallel, with dependencies. The math engines submit work to it rather than each reinventing
 parallel + memory-bounded execution. Design: roadmap/design/scheduler.md.
 """
+from . import calibration_store
 from .executor import RunReport, Scheduler
 from .graph import JobGraph
 from .inventory import GPU, Machine, NumaNode, detect_machine

@@ -73,6 +73,10 @@ word has no PD, Regina reads only PDs, and KnotInfo has no row for T(2,15), so u
 or soft it raises `UnvalidatedResult` naming the missing oracle. Knots can also be given as
 PD codes with `td.knots.from_pd`.
 
+The first calculation on a machine benchmarks it for a few seconds, so the scheduler knows what
+each kind of job costs there, and keeps the figures. It repeats this only when the machine's
+processors or GPUs change or the code does. `python -m tetradrome.calibrate` runs it on demand.
+
 ## Requirements
 
 - Python 3.11+ (3.13 targeted).

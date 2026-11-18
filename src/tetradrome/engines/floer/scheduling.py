@@ -44,6 +44,7 @@ from ...algebra import (
 from ...errors import TetradromeError
 from ...scheduler import ComputePath, Job, JobGraph, Placement, Shard
 from .generation import _build_complexes, _generate_slice, _histogram_slice, _tau_slice
+from .grid import GridDiagram
 
 _REDUCE = "reduce"
 _ASSEMBLE = "assemble"
@@ -419,6 +420,20 @@ def _wired_reduce_run(inputs, deps):
     # The single dep is this grading's complex -- the merge shard addressed by Shard(merge_key, A).
     (complex_for_grading,) = deps.values()
     return f2_homology(complex_for_grading, inputs["backend"])
+
+
+# The knot the benchmark runs: grid number 8, the largest whose three calculations take seconds.
+# A real knot, because the unknot's complexes reduce far faster per operation than a knot's do.
+_BENCHMARK_KNOT = "6_2"
+
+
+def benchmark(run) -> None:
+    """The Floer engine's representative calculations for ``tetradrome.calibrate``: the histogram,
+    HFK-hat and tau graphs of one knot's grid, each run through ``run(graph, key)``."""
+    grid = GridDiagram.from_knotinfo(_BENCHMARK_KNOT)
+    histogram = run(*histogram_graph(grid))
+    run(*whole_knot_graph(grid, histogram))
+    run(*tau_graph(grid, histogram))
 
 
 def whole_knot_graph(grid, histogram: dict, *, backend: str = "bitint"):

@@ -21,17 +21,19 @@ own. See roadmap/design/homology-engine.md section 7.
 from __future__ import annotations
 
 import os
+import tempfile
 
 import pytest
 
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _scheduler_calibration_store(tmp_path_factory):
-    """Keep the suite's scheduler measurements out of the user's cache and start it measuring:
-    tests run the code being changed, whose figures are not the installed code's."""
+def _scheduler_calibration_store():
+    """Keep the suite's benchmark figures apart from the user's. The directory outlives the
+    session, so the suite benchmarks the machine once per change to the code, not once per run."""
     previous = os.environ.get("TETRADROME_CACHE_DIR")
-    os.environ["TETRADROME_CACHE_DIR"] = str(tmp_path_factory.mktemp("calibration"))
+    os.environ["TETRADROME_CACHE_DIR"] = os.path.join(tempfile.gettempdir(),
+                                                      "tetradrome-test-calibration")
     yield
     if previous is None:
         del os.environ["TETRADROME_CACHE_DIR"]
