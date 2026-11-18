@@ -143,7 +143,7 @@ def test_failed_job_carries_no_timing():
 # -- warm worker: persistent, serial, frees between jobs --
 
 from tetradrome.scheduler.executor import (                            # noqa: E402
-    WarmWorker, _augment_for_admission, _overhead_probe_main, _start_context)
+    WarmWorker, _augment_for_admission, _fetch, _overhead_probe_main, _start_context)
 from tetradrome.scheduler.routing import Execution                     # noqa: E402
 from tetradrome.scheduler.hostplatform import for_host                    # noqa: E402
 
@@ -172,12 +172,12 @@ def test_warm_worker_runs_jobs_serially_in_one_process():
                         between=warm_between, platform=for_host())
     try:
         for key in ("a", "b", "c"):
-            worker.dispatch(key, report_warm_state, {}, {})
+            worker.dispatch(key, report_warm_state, {}, {}, None, None, key)
         results = {}
         for _ in range(3):
             key, status, payload, _seconds = result_queue.get(timeout=30)
             assert status == "ok"
-            results[key] = payload
+            results[key] = _fetch(payload)
     finally:
         worker.shutdown()
     # setup ran once before any job; between ran once per finished job, so the count climbs 0,1,2.
@@ -193,12 +193,12 @@ def test_warm_worker_survives_a_failing_job():
     worker = WarmWorker(ctx, frozenset(os.sched_getaffinity(0)), None, result_queue,
                         platform=for_host())
     try:
-        worker.dispatch("bad", boom, {}, {})
-        worker.dispatch("good", produce, {"value": 7}, {})
+        worker.dispatch("bad", boom, {}, {}, None, None, "bad")
+        worker.dispatch("good", produce, {"value": 7}, {}, None, None, "good")
         outcomes = {}
         for _ in range(2):
             key, status, payload, _seconds = result_queue.get(timeout=30)
-            outcomes[key] = (status, payload)
+            outcomes[key] = (status, _fetch(payload) if status == "ok" else payload)
     finally:
         worker.shutdown()
     assert outcomes["bad"][0] == "error"
@@ -473,13 +473,16 @@ def test_shard_dependency_on_undeclared_shard_is_rejected():
         JobGraph([producer, bad])
 
 
-def test_partitioned_producer_returning_wrong_shards_fails_loud():
+def test_partitioned_producer_returning_wrong_shards_fails_its_component():
     producer = Job(key="src", run=split_wrong, inputs={}, paths=(_cpu(),),
                    shards=frozenset({"a", "b"}))
     consumer = Job(key="use_a", run=echo_shard, inputs={}, paths=(_cpu(),),
                    dependencies={Shard("src", "a")})
-    with pytest.raises(TetradromeError):
-        Scheduler(_machine()).run(JobGraph([producer, consumer]))
+    report = Scheduler(_machine()).run(JobGraph([producer, consumer]))
+    (_, failed_key, text), = report.failures
+    assert failed_key == "src"
+    assert "must return exactly its declared shards" in text
+    assert report.cancelled == {"src", "use_a"}
 
 
 def big_blob(inputs, deps):
@@ -491,78 +494,69 @@ def blob_len(inputs, deps):
     return len(only)
 
 
-def test_shared_residence_materializes_one_segment_for_many_consumers():
-    # A large result with several consumers is materialized once into a shared-memory segment the
-    # consumers map, not pickled into each worker. Every consumer reads it intact, and exactly one
-    # segment is made regardless of fan-out.
+def test_large_result_is_stored_once_by_its_worker_and_read_by_every_consumer(tmp_path):
+    # A result too large for its completion message is written to the result store by the worker
+    # that computed it: once, however many jobs consume it. Each consumer reads it there.
     producer = Job(key="src", run=big_blob, inputs={}, paths=(_cpu(),))
     consumers = [Job(key=f"c{i}", run=blob_len, inputs={}, paths=(_cpu(),),
                      dependencies={"src"}) for i in range(3)]
-    report = Scheduler(_machine(), shared_min_consumers=2,
-                       shared_floor_bytes=_SMALL).run(JobGraph([producer, *consumers]))
+    report = Scheduler(_machine(), result_dir=str(tmp_path)).run(JobGraph([producer, *consumers]))
     assert report.failures == []
-    assert all(report.results[f"c{i}"] == 2 * _SMALL for i in range(3))   # each read the blob
-    assert report.shared_count == 1                                       # one segment, not 3 copies
-    assert report.shared_bytes >= 2 * _SMALL
+    assert all(report.results[f"c{i}"] == 2 * _SMALL for i in range(3))
+    assert report.stored_count == 1
+    assert report.stored_bytes == len(pickle.dumps(bytes(2 * _SMALL), pickle.HIGHEST_PROTOCOL))
     assert "src" not in report.results
 
 
-def test_low_fanout_result_stays_private():
-    # Below the consumer threshold, a result is a private copy -- no segment.
-    producer = Job(key="src", run=big_blob, inputs={}, paths=(_cpu(),))
-    consumer = Job(key="c0", run=blob_len, inputs={}, paths=(_cpu(),), dependencies={"src"})
-    report = Scheduler(_machine(), shared_min_consumers=2,
-                       shared_floor_bytes=_SMALL).run(JobGraph([producer, consumer]))
-    assert report.results["c0"] == 2 * _SMALL
-    assert report.shared_count == 0
+def test_small_result_rides_in_its_completion_message(tmp_path):
+    jobs = [_job("gen", produce, {"value": 5}),
+            _job("end", passthrough, {"add": 1}, deps=("gen",))]
+    report = Scheduler(_machine(), result_dir=str(tmp_path)).run(JobGraph(jobs))
+    assert report.results == {"end": 6}
+    assert report.stored_count == 0
 
 
-def test_shared_result_gets_one_replica_per_node():
-    # A result shared by pinned consumers on different nodes is replicated per node. Two nodes share
-    # one real core, so they run in sequence, and node sizing forces the second consumer onto
-    # node 1: c0 (small) lands on node 0, c1 (large) fits only node 1, so the result is
-    # materialized once per node -- two segments, each charged on its own node. The core is one
-    # this process may use: CPU 0 is outside the mask on a host pinned to other CPUs.
-    core = frozenset({min(os.sched_getaffinity(0))})
-    node0 = NumaNode(0, core, 5 * _SMALL)
-    node1 = NumaNode(1, core, 20 * _SMALL)
-    m = Machine(nodes=(node0, node1), gpus=(), mem_cap_bytes=25 * _SMALL)
-    small = ComputePath(Placement.CPU_PINNED, cores=1, ram_bytes=_SMALL)
-    large = ComputePath(Placement.CPU_PINNED, cores=1, ram_bytes=10 * _SMALL)
-    g = JobGraph([
-        Job(key="src", run=big_blob, inputs={}, paths=(small,)),
-        Job(key="c0", run=blob_len, inputs={}, paths=(small,), dependencies={"src"}),
-        Job(key="c1", run=blob_len, inputs={}, paths=(large,), dependencies={"src"}),
-    ])
-    report = Scheduler(m, shared_min_consumers=2, shared_floor_bytes=_SMALL).run(g)
+def value_and_stored_files(inputs, deps):
+    (value,) = deps.values()
+    return value, sorted(name for _, _, names in os.walk(inputs["root"]) for name in names)
+
+
+def test_a_stored_result_with_one_consumer_is_deleted_by_that_consumer(tmp_path):
+    # "src" is stored, read by "len" alone, and so handed over to it. By the time "after" runs,
+    # the store holds nothing.
+    jobs = [
+        Job(key="src", run=big_blob, inputs={}, paths=(_cpu(),)),
+        Job(key="len", run=blob_len, inputs={}, paths=(_cpu(),), dependencies={"src"}),
+        Job(key="after", run=value_and_stored_files, inputs={"root": str(tmp_path)},
+            paths=(_cpu(),), dependencies={"len"}),
+    ]
+    report = Scheduler(_machine(), result_dir=str(tmp_path)).run(JobGraph(jobs))
     assert report.failures == []
-    assert report.results["c0"] == 2 * _SMALL and report.results["c1"] == 2 * _SMALL
-    assert report.shared_count == 2                      # one segment per node
-    one_replica = len(pickle.dumps(bytes(2 * _SMALL)))   # the segment holds the pickled blob
-    assert report.shared_bytes == 2 * one_replica
+    assert report.stored_count == 1
+    assert report.results["after"] == (2 * _SMALL, [])
 
 
-def test_replica_creation_warns_when_dispatch_stalls(caplog):
-    # Building a replica is synchronous in the main loop; with several ready consumers and free
-    # capacity, it stalls dispatch, which must surface a warning (once).
-    producer = Job(key="src", run=big_blob, inputs={}, paths=(_cpu(),))
-    consumers = [Job(key=f"c{i}", run=blob_len, inputs={}, paths=(_cpu(),),
-                     dependencies={"src"}) for i in range(3)]
-    with caplog.at_level("WARNING"):
-        report = Scheduler(_machine(), shared_min_consumers=2,
-                           shared_floor_bytes=_SMALL).run(JobGraph([producer, *consumers]))
-    assert report.shared_count == 1
-    assert sum("stalled dispatch" in r.message for r in caplog.records) == 1
+def test_the_result_store_is_removed_when_the_run_ends(tmp_path):
+    # A stored terminal result is read into the report, and the store goes with the run.
+    report = Scheduler(_machine(), result_dir=str(tmp_path)).run(
+        JobGraph([Job(key="src", run=big_blob, inputs={}, paths=(_cpu(),))]))
+    assert report.results["src"] == bytes(2 * _SMALL)
+    assert report.stored_count == 1
+    assert os.listdir(tmp_path) == []
 
 
-def test_no_stall_warning_without_waiting_work(caplog):
-    # One consumer: nothing else is queued, so replicating it stalls nothing and must not warn.
-    producer = Job(key="src", run=big_blob, inputs={}, paths=(_cpu(),))
-    consumer = Job(key="c0", run=blob_len, inputs={}, paths=(_cpu(),), dependencies={"src"})
-    with caplog.at_level("WARNING"):
-        Scheduler(_machine(), shared_min_consumers=2,
-                  shared_floor_bytes=_SMALL).run(JobGraph([producer, consumer]))
-    assert not any("stalled dispatch" in r.message for r in caplog.records)
+def test_a_store_left_by_a_dead_process_is_removed_and_a_live_one_kept(tmp_path):
+    process = _start_context().Process(target=time.sleep, args=(0,))
+    process.start()
+    process.join()
+    abandoned = tmp_path / f"tetradrome-results-{process.pid}-left"
+    abandoned.mkdir()
+    (abandoned / "00000001").write_bytes(b"x")
+    mine = tmp_path / f"tetradrome-results-{os.getpid()}-other-run"
+    mine.mkdir()
+    Scheduler(_machine(), result_dir=str(tmp_path)).run(
+        JobGraph([Job(key="src", run=big_blob, inputs={}, paths=(_cpu(),))]))
+    assert sorted(entry.name for entry in tmp_path.iterdir()) == [mine.name]
 
 
 # -- device-resident results (fabricated device buffer, plain warm worker stands in for CUDA) --
@@ -696,17 +690,17 @@ def test_inline_failure_abandons_its_component_only():
     assert "kaboom" in text
 
 
-def test_inline_job_reads_a_shared_result():
-    # Two consumers make the producer's result shared by segment; the inline one reads it out of
-    # the segment as a worker would.
+def test_inline_job_reads_a_stored_result():
+    # The producer's result is stored by its worker; the inline consumer reads it from the store
+    # as a worker would.
     jobs = [
         Job(key="src", run=big_blob, inputs={}, paths=(_cpu(),)),
         Job(key="c0", run=blob_len, inputs={}, paths=(_inline(),), dependencies={"src"}),
         Job(key="c1", run=blob_len, inputs={}, paths=(_cpu(),), dependencies={"src"}),
     ]
-    report = Scheduler(_machine(), shared_min_consumers=2,
-                       shared_floor_bytes=_SMALL).run(JobGraph(jobs))
+    report = Scheduler(_machine()).run(JobGraph(jobs))
     assert report.failures == []
+    assert report.stored_count == 1
     assert report.results["c0"] == 2 * _SMALL
     assert report.results["c1"] == 2 * _SMALL
 

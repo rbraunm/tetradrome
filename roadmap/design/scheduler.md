@@ -17,9 +17,14 @@ A job is a callable with its inputs, the jobs it depends on, and:
 - **kind**: the family of jobs that share that unit, so measurements of one family never
   predict another.
 
-A job's result is held until its last consumer has it. A result can be partitioned into shards
-so a consumer takes only its part, and a large result with several consumers is placed in shared
-memory once per NUMA node.
+A result never passes through the scheduler's process as a value. The process that computed it
+serializes it: up to 64 KiB rides in the job's completion message, and anything larger is written
+to the run's result store, a directory in RAM-backed `/dev/shm` where the system has one, with
+only its location reported. A consumer reads it in its own process. A stored result with one
+consumer is handed over, and that consumer deletes the file; one with several is deleted when the
+last of them has finished. A result can be partitioned into shards so a consumer takes only its
+part. The store is removed when the run ends, and a store left by a process that died is removed
+by the next run.
 
 ## Handlers
 
@@ -134,6 +139,14 @@ The 185 roster knots of grid number up to 10, as one `run_many` graph each:
 |---|---|
 | HFK-hat for all 185, sharing the machine with four other processes | 3,730 |
 | τ for all 185, alone | 1,358 |
+
+A batch of six grid-number-10 knots, HFK-hat with the histograms already known:
+
+| | Seconds | CPUs busy, average |
+|---|---|---|
+| generation slices of 4096 states | 179 | 9.3 |
+| slices of 32768 states | 139 | 9.8 |
+| and results kept out of the scheduler's process | 86 | 13.4 |
 
 The old one-knot-at-a-time path took 5 h 15 min to 5 h 32 min for 43 knots' HFK-hat per process,
 four processes side by side. The τ run's last five minutes were two knots' single-core rank and

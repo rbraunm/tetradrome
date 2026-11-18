@@ -217,7 +217,7 @@ def measure(grid, *, backend, mem_cap_bytes=None, interval=0.1):
             "hist_s": cpu.get("histogram", 0.0),
             "gen_s": cpu.get("generation", 0.0), "merge_s": cpu.get("merge", 0.0),
             "red_s": cpu.get("reduction", 0.0),
-            "shared": report.shared_count, "spilled": report.spill_count, "mem": mem}
+            "stored": report.stored_count, "spilled": report.spill_count, "mem": mem}
 
 
 def main():

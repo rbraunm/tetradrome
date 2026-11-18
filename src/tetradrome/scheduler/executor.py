@@ -41,7 +41,6 @@ import tempfile
 import threading
 import time
 import traceback
-from multiprocessing.shared_memory import SharedMemory
 from typing import NamedTuple
 
 from ..errors import TetradromeError
@@ -57,6 +56,10 @@ from .routing import Calibration, Execution, route_execution
 logger = logging.getLogger(__name__)
 
 _GRACE_SECONDS = 2.0
+# A serialized result at most this large rides in its job's completion message; a larger one is
+# written to the run's result store and only its location is reported.
+_MESSAGE_BYTES = 64 * 1024
+_STORE_PREFIX = "tetradrome-results-"
 
 # The per-worker overhead probe's answers, by what was probed. A worker's import baseline and a
 # device context's size belong to the process and the box, not to one run, and the probe costs a
@@ -89,13 +92,15 @@ def _start_context():
     return context
 
 
-class SharedRef(NamedTuple):
-    """A dependency handed to a worker by reference rather than value: its payload lives in a
-    shared-memory segment the parent created and owns. The worker attaches the segment by name,
-    reads ``size`` bytes, unpickles a private copy, and closes -- it never unlinks. Small and
-    picklable, so only this reference rides into each worker, not a private copy of the payload."""
-    name: str
+class Held(NamedTuple):
+    """A serialized result as the scheduler holds it and hands it on: the pickled bytes themselves
+    (``data``) or the file they were written to (``location``). It is made where the result was
+    computed and read where it is needed, so the value itself never passes through the scheduler's
+    process. ``consume`` tells a stored result's only consumer to delete the file once read."""
     size: int
+    data: bytes | None = None
+    location: str | None = None
+    consume: bool = False
 
 
 class DeviceRef(NamedTuple):
@@ -114,42 +119,94 @@ class DeviceHandle(NamedTuple):
     nbytes: int
 
 
-def _attach_segment(name):
-    """Attach a shared segment created elsewhere, for reading only. The creating parent owns the
-    segment and is the sole unlinker. Within one multiprocessing program the resource_tracker is
-    shared, so the parent's unlink already unregisters the name -- an attaching worker must not
-    unregister (that would remove the entry first and make the parent's unlink fail) and must not
-    unlink. Python 3.13's ``track=False`` keeps the attach out of the tracker entirely; on 3.12 a
-    plain attach only adds a duplicate the parent's unlink clears, and the worker never unlinks."""
+def _pid_alive(pid: int) -> bool:
+    if sys.platform == "win32":
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        query_limited_information = 0x1000
+        handle = kernel32.OpenProcess(query_limited_information, False, pid)
+        if not handle:
+            return False
+        code = ctypes.c_ulong()
+        kernel32.GetExitCodeProcess(ctypes.c_void_p(handle), ctypes.byref(code))
+        kernel32.CloseHandle(ctypes.c_void_p(handle))
+        still_active = 259
+        return code.value == still_active
     try:
-        return SharedMemory(name=name, track=False)          # 3.13+: attach untracked
-    except TypeError:
-        return SharedMemory(name=name)                       # <=3.12: parent's unlink cleans up
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _new_store(root: str | None) -> str:
+    """A fresh directory for one run's stored results: under ``root``, else in RAM-backed
+    /dev/shm where the system has it, else the temp directory. It is named for this process, and
+    stores whose process is gone (it was killed before it could clean up) are removed first."""
+    if root is None:
+        root = ("/dev/shm" if os.path.isdir("/dev/shm") and os.access("/dev/shm", os.W_OK)
+                else tempfile.gettempdir())
+    for name in os.listdir(root):
+        owner = name[len(_STORE_PREFIX):].split("-", 1)[0]
+        if name.startswith(_STORE_PREFIX) and owner.isdigit() and not _pid_alive(int(owner)):
+            shutil.rmtree(os.path.join(root, name), ignore_errors=True)
+    return tempfile.mkdtemp(prefix=f"{_STORE_PREFIX}{os.getpid()}-", dir=root)
+
+
+def _publish(value, store, name: str) -> Held:
+    """Serialize one result, or one shard of one, where it was computed. ``store`` is the result
+    store's directory, or a callable giving it, asked only when the result is too large for the
+    message."""
+    data = pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
+    if len(data) <= _MESSAGE_BYTES:
+        return Held(len(data), data=data)
+    location = os.path.join(store() if callable(store) else store, name)
+    with open(location, "wb") as stored:
+        stored.write(data)
+    return Held(len(data), location=location)
+
+
+def _publish_result(key, result, shards, store, token: str):
+    """What a finished job posts: one Held, or for a partitioned job one per declared shard."""
+    if shards is None:
+        return _publish(result, store, token)
+    if not isinstance(result, dict) or set(result) != set(shards):
+        raise TetradromeError(
+            f"partitioned job {key!r} must return exactly its declared shards {set(shards)}; got "
+            f"{set(result) if isinstance(result, dict) else type(result).__name__}")
+    return {shard_key: _publish(part, store, f"{token}.{index}")
+            for index, (shard_key, part) in enumerate(result.items())}
+
+
+def _fetch(held: Held):
+    """The value behind a Held."""
+    if held.data is not None:
+        return pickle.loads(held.data)
+    with open(held.location, "rb") as stored:
+        value = pickle.load(stored)
+    if held.consume:
+        os.remove(held.location)
+    return value
 
 
 def _resolve_deps(deps):
-    """Replace any SharedRef in a worker's deps with a private copy read from its segment. Attach,
-    read the exact byte range, unpickle, and close immediately -- the unpickled object is the
-    worker's own; the segment stays owned by the parent."""
-    resolved = {}
-    for dep_key, value in deps.items():
-        if isinstance(value, SharedRef):
-            shm = _attach_segment(value.name)
-            try:
-                resolved[dep_key] = pickle.loads(bytes(shm.buf[:value.size]))
-            finally:
-                shm.close()
-        else:
-            resolved[dep_key] = value
-    return resolved
+    """A job's dependencies as values: each Held is read here, in the process that runs the job."""
+    return {dep_key: (_fetch(value) if isinstance(value, Held) else value)
+            for dep_key, value in deps.items()}
 
 
-def _worker_main(key, run, inputs, deps, cores, gpu_index, result_queue, platform):
-    """Top-level worker entry, picklable for spawn: pin, time the run, report one message.
+def _worker_main(key, run, inputs, deps, cores, gpu_index, result_queue, platform,
+                 shards, store, token):
+    """Top-level worker entry, picklable for spawn: pin, time the run, publish the result, report
+    one message.
 
-    The reported time covers only ``run`` itself, not affinity or device setup, so it is the
-    work the cost model predicts. A failure reports no time (0.0): a job that did not finish
-    carries no usable runtime, and including partial times would poison the calibration.
+    The reported time covers only ``run`` itself, not affinity, device setup or reading and
+    writing results, so it is the work the cost model predicts. A failure reports no time (0.0): a
+    job that did not finish carries no usable runtime, and including partial times would poison
+    the calibration.
     """
     try:
         platform.pin(cores)
@@ -157,14 +214,15 @@ def _worker_main(key, run, inputs, deps, cores, gpu_index, result_queue, platfor
             os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_index)
         else:
             os.environ["CUDA_VISIBLE_DEVICES"] = ""   # a CPU-placed worker must not grab a GPU
-        deps = _resolve_deps(deps)            # pull any shared-segment deps into private copies
+        deps = _resolve_deps(deps)
         t0 = time.perf_counter()
         result = run(inputs, deps)
         compute_time = time.perf_counter() - t0
+        posted = _publish_result(key, result, shards, store, token)
     except Exception:
         result_queue.put((key, "error", traceback.format_exc(), 0.0))
         return
-    result_queue.put((key, "ok", result, compute_time))
+    result_queue.put((key, "ok", posted, compute_time))
 
 
 def _overhead_probe_main(result_queue, platform, accelerator, session_setup):
@@ -262,9 +320,9 @@ def _warm_worker_main(cores, gpu_index, job_queue, result_queue, setup, between,
         if item[0] == "free":              # parent says a device-resident result's last reader is done
             device_resident.pop(item[1], None)
             continue
-        _, key, run, inputs, deps, keep = item
+        _, key, run, inputs, deps, keep, shards, store, token = item
         try:
-            deps = _resolve_deps(deps)        # pull any shared-segment deps into private copies
+            deps = _resolve_deps(deps)
             deps = {dep_key: (device_resident[value.key] if isinstance(value, DeviceRef) else value)
                     for dep_key, value in deps.items()}
             t0 = time.perf_counter()
@@ -274,7 +332,8 @@ def _warm_worker_main(cores, gpu_index, job_queue, result_queue, setup, between,
                 device_resident[key] = result
                 result_queue.put((key, "ok", DeviceHandle(key, result.nbytes), elapsed))
             else:
-                result_queue.put((key, "ok", result, elapsed))
+                result_queue.put((key, "ok", _publish_result(key, result, shards, store, token),
+                                  elapsed))
         except Exception:
             result_queue.put((key, "error", traceback.format_exc(), 0.0))
         finally:
@@ -304,8 +363,9 @@ class WarmWorker:
     def pid(self):
         return self._proc.pid
 
-    def dispatch(self, key, run, inputs, deps, keep_on_device=False) -> None:
-        self._job_queue.put(("job", key, run, inputs, deps, keep_on_device))
+    def dispatch(self, key, run, inputs, deps, shards, store, token,
+                 keep_on_device=False) -> None:
+        self._job_queue.put(("job", key, run, inputs, deps, keep_on_device, shards, store, token))
 
     def free_device(self, key) -> None:
         # Tell the worker a device-resident result's last reader has finished, so it can drop the
@@ -347,14 +407,10 @@ class _Sampler(threading.Thread):
 
 
 class Residence(enum.Enum):
-    """Where a resident blob physically lives. HOST_PRIVATE and DISK are the everyday two;
-    HOST_SHARED is one copy in shared host RAM that many consumers map instead of each getting a
-    private pickled copy (the base form is a single segment, and per-NUMA-node replicas layer on
-    for pinned consumers); DEVICE (resident in GPU VRAM) is reserved so adding it fills a slot
-    rather than reshaping the table."""
-    HOST_PRIVATE = "host_private"   # a private copy in the parent's RAM (the default)
-    DISK = "disk"                   # spilled to a file under memory pressure
-    HOST_SHARED = "host_shared"     # one shared-RAM segment many consumers map (per locality domain)
+    """Where a resident blob physically lives."""
+    HOST_PRIVATE = "host_private"   # in the scheduler process's RAM: an input, or a small result's bytes
+    STORED = "stored"               # a file in the run's result store, written by the job's worker
+    DISK = "disk"                   # spilled to a file on disk under memory pressure
     DEVICE = "device"               # resident in a warm worker's GPU VRAM, read on-device
 
 
@@ -367,20 +423,28 @@ class Kind(enum.Enum):
 @dataclasses.dataclass
 class Resident:
     """One resident blob -- a held result or a detached static input -- tracked uniformly. The
-    residence says where it is and therefore how to free it (drop the RAM charge if HOST_PRIVATE,
-    delete the file if DISK); size is the charged bytes either way; payload holds the value while
-    HOST_PRIVATE and location the file path while DISK; consumers counts dependents still to be
-    dispatched for an OUTPUT and is unused for an INPUT (consumed once at its own dispatch)."""
+    residence says where it is and therefore how to free it. ``size`` is the charged bytes.
+    ``payload`` is an input's object, or a small result's pickled bytes; ``location`` is the file of
+    a stored or spilled blob. For a result, ``fanout`` is how many jobs consume it, ``consumers``
+    how many of those are still to be served, and ``reading`` how many are running now with a
+    reference to its file."""
     kind: Kind
     residence: Residence
     size: int
     payload: object = None
     location: str | None = None
     consumers: int = 0
-    shareable: bool = False         # fan-out and size cleared the threshold: share rather than copy
-    handle: object = None           # HOST_SHARED: {domain: SharedMemory}, one segment per locality
-                                    # domain (None = base, or a NUMA node index); reserved for DEVICE
+    fanout: int = 0
+    reading: int = 0
     gpu_index: int | None = None    # DEVICE: which GPU's warm worker holds the resident buffer
+
+    @property
+    def by_reference(self) -> bool:
+        """Read by its consumers during their runs, so it must outlive their dispatch: a device
+        buffer, or a file more than one job consumes. (A file with one consumer is handed over to
+        it, and bytes held here are copied into each consumer when it is started.)"""
+        return self.residence is Residence.DEVICE or (self.location is not None
+                                                      and self.fanout > 1)
 
 
 @dataclasses.dataclass
@@ -404,8 +468,8 @@ class RunReport:
     infeasible: tuple = ()  # InfeasibleJobError per job infeasible on the bare machine
     spilled_bytes: int = 0  # total held-result bytes written to disk under pressure (0 = none)
     spill_count: int = 0    # how many held results were spilled (the degraded path fired if > 0)
-    shared_count: int = 0   # how many results were materialized into a shared-memory segment
-    shared_bytes: int = 0   # total size of those segments
+    stored_count: int = 0   # how many results (or shards) their workers wrote to the result store
+    stored_bytes: int = 0   # total size of those
     device_count: int = 0   # how many results were kept resident in GPU VRAM
     device_bytes: int = 0   # total VRAM bytes of those device-resident results
     timings: dict = dataclasses.field(default_factory=dict)
@@ -422,7 +486,7 @@ class Scheduler:
                  warm_setup=None, warm_between=None,
                  spill_dir: str | None = None, spill_floor_bytes: int = 16 * 1024 * 1024,
                  spill_budget_bytes: int = 4 * 1024 * 1024 * 1024,
-                 shared_min_consumers: int = 2, shared_floor_bytes: int = 16 * 1024 * 1024,
+                 result_dir: str | None = None,
                  calibration: Calibration | None = None, on_complete=None,
                  worker_ram_baseline: int | None = None):
         self.machine = machine
@@ -456,13 +520,8 @@ class Scheduler:
         self.spill_dir = spill_dir
         self.spill_floor_bytes = spill_floor_bytes
         self.spill_budget_bytes = spill_budget_bytes
-        # Shared residence: a held result with at least this many consumers and at least this many
-        # bytes is materialized once into a shared-memory segment the consumers map, instead of a
-        # private pickled copy per consumer (serialize once, transmit once). The defaults are
-        # conservative -- multi-consumer and large -- so small or low-fan-out results stay private;
-        # both are policy knobs to sweep, not heuristics.
-        self.shared_min_consumers = shared_min_consumers
-        self.shared_floor_bytes = shared_floor_bytes
+        # Where each run makes its result store (None: RAM-backed /dev/shm where there is one).
+        self.result_dir = result_dir
 
     def _measure_overhead(self, ctx, platform, accelerator, session_setup):
         """The per-process overhead admission must charge: the per-worker RAM baseline (zero where
@@ -573,10 +632,8 @@ class Scheduler:
         # reporting are one uniform mechanism rather than four parallel dicts.
         resident: dict = {}
         spill_state = {"dir": None, "count": 0, "total_bytes": 0, "disk_used": 0}
-        shared_state = {"count": 0, "bytes": 0}     # results materialized into shared segments
+        stored_state = {"dir": None, "count": 0, "bytes": 0}   # the result store and its use
         device_state = {"count": 0, "bytes": 0}     # results kept resident in GPU VRAM
-        nodes_by_index = {node.index: node for node in self.machine.nodes}
-        replica_stall_warned: set = set()           # result keys already warned for stalling dispatch
         placement_of: dict = {}         # key -> the placement it ran on, for calibration
         launched_at: dict = {}          # key -> when its worker was started, for dispatch overhead
         calibration = self.calibration if self.calibration is not None else Calibration()
@@ -607,6 +664,11 @@ class Scheduler:
                 job_key=("__input__", input_key), placement=Placement.CPU_UNPINNED,
                 cores=frozenset(), declared_ram=size, node_index=None))
         del inputs_store                # the table is the sole owner now
+
+        def store() -> str:
+            if stored_state["dir"] is None:
+                stored_state["dir"] = _new_store(self.result_dir)
+            return stored_state["dir"]
 
         def result_queue():
             if worker_side["queue"] is None:
@@ -645,111 +707,37 @@ class Scheduler:
                     gpu_index=gpu_index, declared_vram=context_vram))
             return worker
 
-        def release_resident(table_key) -> None:
-            # Drop one resident blob: a HOST_PRIVATE one releases its global-RAM charge, a DISK one
-            # deletes its spill file and reclaims the disk budget, a HOST_SHARED one (last consumer
-            # dispatched) closes and unlinks its segment -- the parent is the sole unlinker. No-op if
-            # already gone.
+        def release_resident(table_key, handed_over=False) -> None:
+            # Drop one resident blob and what it is charged: RAM, the disk budget of a spilled
+            # one, or a device buffer. Its file is deleted too, unless it was handed over to its
+            # only consumer, which deletes it after reading. No-op if already gone.
             entry = resident.pop(table_key, None)
             if entry is None:
                 return
             kind, key = table_key
-            charge = "__input__" if kind is Kind.INPUT else "__output__"
-            if entry.residence is Residence.DISK:
-                os.remove(entry.location)
-                spill_state["disk_used"] -= entry.size
-            elif entry.residence is Residence.HOST_SHARED:
-                for domain, segment in entry.handle.items():
-                    ledger.discard(("__output__", (key, domain)))
-                    segment.close()
-                    segment.unlink()
-            elif entry.residence is Residence.DEVICE:
+            if entry.residence is Residence.DEVICE:
                 ledger.discard(("__output__", key))
                 worker = warm_workers.get(entry.gpu_index)
                 if worker is not None:
                     worker.free_device(key)         # drop the buffer from the worker's registry
+                return
+            if entry.residence is Residence.DISK:
+                spill_state["disk_used"] -= entry.size
             else:
-                ledger.discard((charge, key))
+                ledger.discard(("__input__" if kind is Kind.INPUT else "__output__", key))
+            if entry.location is not None and not handed_over:
+                os.remove(entry.location)
 
-        def _warn_if_stalling(key, domain) -> None:
-            # Materializing a replica is a synchronous write in the main loop, so it delays
-            # dispatch of everything else. Warn (once per result) when that write coincides with
-            # work that could be running: a ready job not yet started and a node with both free
-            # cores and free RAM. It can fire when the specific waiting job would not fit the
-            # specific free node; that is the deliberate loud-erring side, to surface on labradorite.
-            if key in replica_stall_warned:
-                return
-            has_waiting = any(other != key for other in waiting)
-            if not has_waiting:
-                return
-            has_free = any(ledger.free_cores(node.index) and ledger.free_ram_node(node.index) > 0
-                           for node in self.machine.nodes)
-            if not has_free:
-                return
-            replica_stall_warned.add(key)
-            where = "the base segment" if domain is None else f"node {domain}"
-            logger.warning("replicating shared result %r to %s stalled dispatch while ready jobs "
-                           "and free NUMA capacity were available", key, where)
-
-        def _make_replica(entry, key, domain, source):
-            # Create one locality domain's segment for a shared result and charge it. A node domain
-            # writes inside local_to so its pages first-touch on that node and is charged against
-            # that node's RAM; the base domain (None) writes unbound and is charged globally. source
-            # is the bytes (first replica) or an existing replica's buffer (a node-local copy of one
-            # already made). Each replica is real RAM, charged at full size -- locality is not free.
-            _warn_if_stalling(key, domain)
-            segment = SharedMemory(create=True, size=entry.size)
-            if domain is None:
-                segment.buf[:entry.size] = source
-                node_index = None
-            else:
-                with platform.local_to(nodes_by_index[domain].cores):
-                    segment.buf[:entry.size] = source
-                node_index = domain
-            ledger.add(Allocation(
-                job_key=("__output__", (key, domain)), placement=Placement.CPU_UNPINNED,
-                cores=frozenset(), declared_ram=entry.size, node_index=node_index))
-            entry.handle[domain] = segment
-            shared_state["count"] += 1
-            shared_state["bytes"] += entry.size
-            assert len(entry.handle) <= len(self.machine.nodes) + 1, "more replicas than locality domains"
-            return segment
-
-        def _load_dep(dep, domain):
-            # A consumer's view of a producer's result. A shareable result is materialized into a
-            # shared-memory segment on the first consumer's dispatch (serialize once, drop the
-            # private copy); thereafter each consumer is handed a small SharedRef to a segment in
-            # its locality domain -- its NUMA node for a pinned consumer (a local replica, copied
-            # from an existing one if new), or any existing replica for an unpinned one, which has
-            # no locality to honor. A plain result is copied; a spilled one is read from disk.
+        def _load_dep(dep):
+            # A consumer's reference to a producer's result: the bytes themselves when they are
+            # held here, else the file, which the consumer reads in its own process. A file with
+            # one consumer is handed over: that consumer deletes it once read.
             entry = resident[(Kind.OUTPUT, dep)]
             if entry.residence is Residence.DEVICE:
                 return DeviceRef(dep)               # warm consumer resolves it from the worker registry
-            if entry.residence is Residence.HOST_SHARED:
-                if domain in entry.handle:
-                    segment = entry.handle[domain]
-                elif domain is None:
-                    segment = next(iter(entry.handle.values()))     # unpinned: reuse any replica
-                else:
-                    segment = _make_replica(entry, dep, domain,
-                                            next(iter(entry.handle.values())).buf[:entry.size])
-                return SharedRef(segment.name, entry.size)
-            if entry.residence is Residence.DISK:
-                with open(entry.location, "rb") as f:
-                    return pickle.load(f)
-            if entry.shareable:
-                data = pickle.dumps(entry.payload)
-                entry.residence = Residence.HOST_SHARED
-                entry.payload = None
-                entry.size = len(data)                  # exact segment bytes the readers slice to
-                entry.handle = {}
-                ledger.discard(("__output__", dep))     # recharge per replica, not as one whole copy
-                segment = _make_replica(entry, dep, domain, data)
-                if shared_state["count"] == 1:
-                    logger.info("sharing result %r across %d consumers via %d-byte segment(s)",
-                                dep, entry.consumers, len(data))
-                return SharedRef(segment.name, entry.size)
-            return entry.payload
+            if entry.location is None:
+                return Held(entry.size, data=entry.payload)
+            return Held(entry.size, location=entry.location, consume=not entry.by_reference)
 
         def _load_input(key):
             # The job's input lives in the resident table (it was detached from the job), on disk if
@@ -761,8 +749,6 @@ class Scheduler:
             return entry.payload
 
         def launch(job, placed, gpu_execution) -> None:
-            # A pinned consumer maps a replica local to its node; everyone else (unpinned, GPU) maps
-            # the base segment, which has no node to honor.
             placement = placed.path.placement
             warm = placement is Placement.GPU and gpu_execution is Execution.WARM
             # Device residence is a performance optimization, not a correctness requirement: a buffer
@@ -787,9 +773,9 @@ class Scheduler:
                                "warm to read the buffer in-context, which serializes it on the GPU",
                                job.key)
                 warm = True
-            domain = placed.node_index if placement is Placement.CPU_PINNED else None
-            deps = {dep: _load_dep(dep, domain) for dep in job.dependencies}
+            deps = {dep: _load_dep(dep) for dep in job.dependencies}
             job_inputs = _load_input(job.key)
+            token = f"{position[job.key]:08d}"
             # placed.path is the admission view: its footprint already includes the per-process
             # overhead for a fresh worker, and is the bare working set for a warm one.
             ledger.add(Allocation(
@@ -803,13 +789,16 @@ class Scheduler:
             waiting.discard(job.key)
             inline_outcome = None
             if placement is Placement.INLINE:
-                # Called here and now. The deps are the held results themselves (a shared one is
-                # read out of its segment), so nothing is pickled in either direction.
+                # Called here and now, and published like a worker's result.
                 inline_running.add(job.key)
                 try:
+                    values = _resolve_deps(deps)
                     t0 = time.perf_counter()
-                    result = job.run(job_inputs, _resolve_deps(deps))
-                    inline_outcome = (job.key, "ok", result, time.perf_counter() - t0)
+                    result = job.run(job_inputs, values)
+                    elapsed = time.perf_counter() - t0
+                    inline_outcome = (job.key, "ok",
+                                      _publish_result(job.key, result, job.shards, store, token),
+                                      elapsed)
                 except Exception:
                     inline_outcome = (job.key, "error", traceback.format_exc(), 0.0)
             elif warm:
@@ -818,12 +807,14 @@ class Scheduler:
                 # pid at a time, so a live sample could not be attributed to it cleanly anyway. A
                 # device-resident job keeps its result in the worker's VRAM rather than returning it.
                 ensure_warm(placed.gpu_index).dispatch(
-                    job.key, job.run, job_inputs, deps, keep_on_device=keep_on_device)
+                    job.key, job.run, job_inputs, deps, job.shards, store(), token,
+                    keep_on_device=keep_on_device)
                 warm_running[job.key] = placed.gpu_index
             else:
                 proc = ctx.Process(target=_worker_main, args=(
                     job.key, job.run, job_inputs, deps,
                     placed.cores, placed.gpu_index, result_queue(), platform,
+                    job.shards, store(), token,
                 ))
                 launched_at[job.key] = time.perf_counter()
                 proc.start()
@@ -835,18 +826,18 @@ class Scheduler:
             # The input has been copied into the worker, so its parent-side copy is no longer
             # needed -- this job is its only consumer. Release it.
             release_resident((Kind.INPUT, job.key))
-            # The deps have been copied into the worker (started or dispatched), so each producer's
-            # held result (or shard) is no longer needed by this consumer -- except a by-reference
-            # dep (a shared segment, or a device-resident buffer), which the worker reads during its
-            # run, not at dispatch, so it is freed at the consumer's completion instead (see
-            # reap_one). Drop a copied dep once its last consumer has been dispatched.
+            # This consumer now has each dep it was sent by value or handed over, so drop those
+            # once their last consumer has been started. A by-reference dep is read during the
+            # run, so it is counted as being read and released when its readers have finished
+            # (see reap_one).
             for dep in job.dependencies:
                 entry = resident[(Kind.OUTPUT, dep)]
-                if entry.residence in (Residence.HOST_SHARED, Residence.DEVICE):
+                if entry.by_reference:
+                    entry.reading += 1
                     continue
                 entry.consumers -= 1
                 if entry.consumers == 0:
-                    release_resident((Kind.OUTPUT, dep))
+                    release_resident((Kind.OUTPUT, dep), handed_over=entry.location is not None)
             if inline_outcome is not None:
                 reap_one(inline_outcome)
 
@@ -905,6 +896,24 @@ class Scheduler:
                     logger.warning("job %r exceeded predicted memory: predicted %d, private %d",
                                    key, declared_ram[key], private)
             return got
+
+        def hold(ref, held, fanout, declared=0) -> int:
+            # Take charge of a published result: bytes that came in the message stay here, a
+            # stored one stays in its file. Either way it is charged against global RAM until its
+            # consumers have it. Returns the measured size.
+            size = max(declared, held.size)
+            ledger.add(Allocation(
+                job_key=("__output__", ref), placement=Placement.CPU_UNPINNED,
+                cores=frozenset(), declared_ram=size, node_index=None))
+            resident[(Kind.OUTPUT, ref)] = Resident(
+                kind=Kind.OUTPUT,
+                residence=Residence.HOST_PRIVATE if held.location is None else Residence.STORED,
+                size=size, payload=held.data, location=held.location,
+                consumers=fanout, fanout=fanout)
+            if held.location is not None:
+                stored_state["count"] += 1
+                stored_state["bytes"] += held.size
+            return held.size
 
         def reap_one(item) -> None:
             key, status, payload, compute_time = item
@@ -969,49 +978,23 @@ class Scheduler:
                     logger.info("result %r resident in VRAM on gpu %s (%d bytes), %d consumer(s)",
                                 key, gpu_completed, payload.nbytes, fanout)
                 elif job_shards is None:
-                    measured_out = len(pickle.dumps(payload))
-                    size = max(declared_out, measured_out)
-                    fanout = len(graph.dependents(key))
-                    ledger.add(Allocation(
-                        job_key=("__output__", key), placement=Placement.CPU_UNPINNED,
-                        cores=frozenset(), declared_ram=size, node_index=None))
-                    resident[(Kind.OUTPUT, key)] = Resident(
-                        kind=Kind.OUTPUT, residence=Residence.HOST_PRIVATE, size=size,
-                        payload=payload, consumers=fanout,
-                        shareable=(fanout >= self.shared_min_consumers
-                                   and size >= self.shared_floor_bytes))
+                    measured_out = hold(key, payload, len(graph.dependents(key)), declared_out)
                 else:
-                    if not isinstance(payload, dict) or set(payload) != set(job_shards):
-                        raise TetradromeError(
-                            f"partitioned job {key!r} must return exactly its declared shards "
-                            f"{set(job_shards)}; got "
-                            f"{set(payload) if isinstance(payload, dict) else type(payload).__name__}")
                     consumers = {c: graph.get(c).dependencies for c in graph.dependents(key)}
-                    measured_out = 0
-                    for shard_key, shard_payload in payload.items():
-                        shard_ref = Shard(key, shard_key)
-                        shard_size = len(pickle.dumps(shard_payload))
-                        shard_fanout = sum(1 for deps in consumers.values() if shard_ref in deps)
-                        measured_out += shard_size
-                        ledger.add(Allocation(
-                            job_key=("__output__", shard_ref), placement=Placement.CPU_UNPINNED,
-                            cores=frozenset(), declared_ram=shard_size, node_index=None))
-                        resident[(Kind.OUTPUT, shard_ref)] = Resident(
-                            kind=Kind.OUTPUT, residence=Residence.HOST_PRIVATE, size=shard_size,
-                            payload=shard_payload, consumers=shard_fanout,
-                            shareable=(shard_fanout >= self.shared_min_consumers
-                                       and shard_size >= self.shared_floor_bytes))
+                    measured_out = sum(
+                        hold(Shard(key, shard_key), held,
+                             sum(1 for deps in consumers.values() if Shard(key, shard_key) in deps))
+                        for shard_key, held in payload.items())
                 if declared_out and measured_out > declared_out and key not in output_over_warned:
                     output_over_warned.add(key)
                     logger.warning("job %r output exceeded declared budget: declared %d, actual %d",
                                    key, declared_out, measured_out)
-                # This job has finished, so it has finished reading any by-reference deps (read at
-                # the start of its run): shared segments and device-resident buffers. Decrement
-                # those; the segment or buffer is released once its last reader completes. Copied
-                # deps were already released at dispatch.
+                # This job has finished, so it has finished reading its by-reference deps. Each is
+                # released once its last reader completes. The others were released at dispatch.
                 for dep in graph.get(key).dependencies:
                     entry = resident.get((Kind.OUTPUT, dep))
-                    if entry is not None and entry.residence in (Residence.HOST_SHARED, Residence.DEVICE):
+                    if entry is not None and entry.by_reference:
+                        entry.reading -= 1
                         entry.consumers -= 1
                         if entry.consumers == 0:
                             release_resident((Kind.OUTPUT, dep))
@@ -1109,23 +1092,30 @@ class Scheduler:
             return spill_state["dir"]
 
         def spill_to_make_room() -> bool:
-            # Free RAM by writing the largest HOST_PRIVATE blob above the floor that still fits the
-            # disk budget out to disk, releasing its global-RAM charge. Held results and the resident
-            # inputs of not-yet-dispatched jobs are eligible alike; heavy blobs only (the floor) and
-            # largest first, so each spill reclaims the most RAM for one write and small, fast data
-            # never thrashes through disk. Returns whether one was spilled; False means nothing is
-            # left to spill, the true all-tiers-full dead-end.
+            # Free RAM by moving the largest blob above the floor that still fits the disk budget
+            # out to disk, releasing its global-RAM charge. Held results and the resident inputs of
+            # not-yet-dispatched jobs are eligible alike, except a result a running job is reading;
+            # heavy blobs only (the floor) and largest first, so each spill reclaims the most RAM
+            # for one write and small, fast data never thrashes through disk. Returns whether one
+            # was spilled; False means nothing is left to spill, the true all-tiers-full dead-end.
             candidates = sorted(
                 ((tablekey, entry) for tablekey, entry in resident.items()
-                 if entry.residence is Residence.HOST_PRIVATE and entry.size >= self.spill_floor_bytes),
+                 if entry.residence in (Residence.HOST_PRIVATE, Residence.STORED)
+                 and entry.reading == 0 and entry.size >= self.spill_floor_bytes),
                 key=lambda item: item[1].size, reverse=True)
             for tablekey, entry in candidates:
                 if spill_state["disk_used"] + entry.size > self.spill_budget_bytes:
                     continue                     # this heavy blob will not fit the disk budget
                 kind, key = tablekey
                 path = os.path.join(_spill_dir(), f"{spill_state['count']:06d}.pkl")
-                with open(path, "wb") as f:
-                    pickle.dump(entry.payload, f)
+                if entry.residence is Residence.STORED:
+                    shutil.move(entry.location, path)
+                else:
+                    with open(path, "wb") as f:
+                        if kind is Kind.OUTPUT:
+                            f.write(entry.payload)          # a result is held already pickled
+                        else:
+                            pickle.dump(entry.payload, f)
                 charge = "__input__" if kind is Kind.INPUT else "__output__"
                 ledger.remove((charge, key))
                 entry.residence = Residence.DISK
@@ -1166,6 +1156,7 @@ class Scheduler:
                            len(infeasible), ", ".join(repr(e.job_key) for e in infeasible))
 
         total = len(graph)
+        final_results: dict = {}
         try:
             while len(completed) + len(cancelled) < total:
                 progressed = drain_samples()
@@ -1184,6 +1175,12 @@ class Scheduler:
                     raise TetradromeError(
                         "scheduler stalled with nothing running and nothing left to spill "
                         f"(RAM full and disk budget exhausted); remaining: {remaining}")
+            # Surviving held results: terminals never drained, plus any producer whose poisoned
+            # consumers were never dispatched. Read before the stores below are removed.
+            for (kind, key), entry in resident.items():
+                if kind is Kind.OUTPUT and entry.residence is not Residence.DEVICE:
+                    final_results[key] = _fetch(Held(entry.size, data=entry.payload,
+                                                     location=entry.location))
         finally:
             stop.set()
             if worker_side["sampler"] is not None:
@@ -1197,28 +1194,15 @@ class Scheduler:
             if worker_side["queue"] is not None:
                 worker_side["queue"].close()
                 worker_side["queue"].join_thread()
-            # Unlink any shared segment still resident: on a clean run every shared result is freed
-            # as its last consumer dispatches, so this catches only the abort path, where leaving
-            # POSIX segments around would leak them.
-            for entry in resident.values():
-                if entry.residence is Residence.HOST_SHARED and entry.handle:
-                    for segment in entry.handle.values():
-                        segment.close()
-                        segment.unlink()
-            if spill_state["dir"] is not None:
-                shutil.rmtree(spill_state["dir"], ignore_errors=True)
-        # Surviving held results: terminals never drained, plus any producer whose poisoned
-        # consumers were never dispatched. As before, a spilled result is not restored here -- the
-        # report is the RAM-resident ones (the spilled-terminal edge is a separate, deliberate fix).
-        final_results = {key: entry.payload
-                         for (kind, key), entry in resident.items()
-                         if kind is Kind.OUTPUT and entry.residence is Residence.HOST_PRIVATE}
+            for directory in (stored_state["dir"], spill_state["dir"]):
+                if directory is not None:
+                    shutil.rmtree(directory, ignore_errors=True)
         return RunReport(results=final_results, failures=failures,
                          cancelled=frozenset(cancelled), infeasible=tuple(infeasible),
                          spilled_bytes=spill_state["total_bytes"],
                          spill_count=spill_state["count"],
-                         shared_count=shared_state["count"],
-                         shared_bytes=shared_state["bytes"],
+                         stored_count=stored_state["count"],
+                         stored_bytes=stored_state["bytes"],
                          device_count=device_state["count"],
                          device_bytes=device_state["bytes"],
                          timings=timings, calibration=calibration)
