@@ -117,6 +117,9 @@ raises on any failure, so no partial answer is returned.
   one's answer or failure (`hfk_hat_many`, `tau_many`).
 - Prices every job before it runs. The Floer engine first runs a histogram graph (generators per
   grading) and builds the main graph from its result.
+- Cuts its work where the mathematics is independent, so no long job stands alone. HFK-hat's
+  slices are split by Alexander grading, each grading is merged by its own job, and each boundary
+  map's rank is its own job; no job holds more than one grading.
 - Keeps a serial pure-Python form of each calculation as the oracle its scheduled form is tested
   against (`grid_complexes`, `grading_histogram_reference`, `tau_reference`).
 
@@ -147,6 +150,7 @@ A batch of six grid-number-10 knots, HFK-hat with the histograms already known:
 | generation slices of 4096 states | 179 | 9.3 |
 | slices of 32768 states | 139 | 9.8 |
 | and results kept out of the scheduler's process | 86 | 13.4 |
+| and a merge per Alexander grading, a rank per boundary map | 49 | 25.7 |
 
 The old one-knot-at-a-time path took 5 h 15 min to 5 h 32 min for 43 knots' HFK-hat per process,
 four processes side by side. The τ run's last five minutes were two knots' single-core rank and

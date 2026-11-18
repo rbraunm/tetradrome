@@ -31,25 +31,30 @@ from array import array
 from collections import defaultdict
 
 from ...algebra import (
+    GradedComplex,
     available_f2_backends,
+    best_available_backend,
+    dense_block_bytes,
+    dense_block_ops,
     f2_homology,
     f2_kernel_escape,
     f2_rank,
-    grading_cost_ops,
-    grading_peak_bytes,
     predict_cost,
     predict_size,
+    rank_backend,
     reduce_host_bytes,
 )
 from ...errors import TetradromeError
 from ...scheduler import ComputePath, Job, JobGraph, Placement, Shard
-from .generation import _build_complexes, _generate_slice, _histogram_slice, _tau_slice
+from .generation import _generate_slice, _histogram_slice, _tau_slice
 from .grid import GridDiagram
 
 _REDUCE = "reduce"
 _ASSEMBLE = "assemble"
 _SLICE = "gen_slice"
 _MERGE = "gen_merge"
+_COLLECT = "gen_collect"
+_RANK = "rank"
 _HISTOGRAM_SLICE = "hist_slice"
 _HISTOGRAM_MERGE = "hist_merge"
 _TAU_SLICE = "tau_slice"
@@ -156,41 +161,106 @@ def reduction_graph(complexes: dict, *, backend: str):
 
 
 def _slice_run(inputs, deps):
-    return _generate_slice(inputs)
-
-
-def _merge_run(inputs, deps):
-    # Assemble the slices (each a _GenerationSlice of arrays carrying its global start) into global
-    # rank-indexed arrays -- rank is the array index, since the slices tile [0, n!) contiguously --
-    # plus a CSR of the differential targets (a flat target-rank array with per-generator offsets),
-    # then build the complexes. No per-generator Python on the fold; positions still land in
-    # lexicographic (= rank) order, so the result equals grid_complexes.
+    """One generation slice split by Alexander grading: for each grading asked for, its generators
+    in this slice as ``(ranks, maslov, counts, targets)``, in rank order, with each generator's
+    ``counts`` differential targets (lexicographic ranks) flattened in the same order."""
     import numpy as np
 
-    slices = list(deps.values())
-    total = sum(int(s.maslov.shape[0]) for s in slices)
-    maslov = np.empty(total, dtype=np.int64)
-    alexander = np.empty(total, dtype=np.int64)
-    counts = np.empty(total, dtype=np.int64)
-    blocks = []
-    for s in slices:
-        size = int(s.maslov.shape[0])
-        if size == 0:
-            continue
-        lo = s.start
-        hi = lo + size
-        maslov[lo:hi] = s.maslov
-        alexander[lo:hi] = s.alexander
-        counts[lo:hi] = s.counts
-        keep = np.arange(s.targetRanks.shape[1]) < s.counts[:, None]
-        blocks.append((lo, s.targetRanks[keep]))         # this slice's valid targets, in rank order
-    blocks.sort(key=lambda block: block[0])              # by start, so all targets are in rank order
-    targets_flat = (np.concatenate([targets for _, targets in blocks])
-                    if blocks else np.empty(0, dtype=np.int64))
-    offsets = np.empty(total + 1, dtype=np.int64)
-    offsets[0] = 0
-    np.cumsum(counts, out=offsets[1:])
-    return _build_complexes(maslov, alexander, targets_flat, offsets)
+    o_markers, x_markers, start, stop, gradings = inputs
+    generated = _generate_slice((o_markers, x_markers, start, stop))
+    ranks = generated.start + np.arange(generated.maslov.shape[0], dtype=np.int64)
+    valid = np.arange(generated.targetRanks.shape[1]) < generated.counts[:, None]
+    parts = {}
+    for alexander in gradings:
+        members = generated.alexander == alexander
+        parts[alexander] = (ranks[members], generated.maslov[members], generated.counts[members],
+                            generated.targetRanks[members][valid[members]])
+    return parts
+
+
+def _index_array(values):
+    # One memcpy into GradedComplex's 4-byte CSC typecode (its width is asserted at import there).
+    import numpy as np
+
+    buffer = array("i")
+    buffer.frombytes(np.ascontiguousarray(values, dtype=np.int32).tobytes())
+    return buffer
+
+
+def _grading_merge_run(inputs, deps):
+    """One Alexander grading's boundary maps, from that grading's share of every slice:
+    ``{degree: (indices, indptr)}``, the CSC of the map out of each degree in ``inputs["degrees"]``.
+    A generator's position within its degree is its place in rank order and each column's rows are
+    sorted, so the maps are the ones ``grid_complexes`` builds, byte for byte. The differential
+    keeps the Alexander grading and raises the degree by one, so every target is found in this
+    grading, one degree up; the merge raises if one is not."""
+    import numpy as np
+
+    parts = sorted((part for part in deps.values() if part[0].shape[0]),
+                   key=lambda part: int(part[0][0]))
+    ranks, maslov, counts, targets = (
+        np.concatenate([part[index] for part in parts]) if parts else np.empty(0, dtype=np.int64)
+        for index in range(4))
+    degree = -maslov
+    source_degree = np.repeat(degree, counts)
+    maps = {}
+    for d in inputs["degrees"]:
+        in_degree = degree == d
+        rows = ranks[degree == d + 1]                        # ascending: a target's row is its index
+        if (int(in_degree.sum()), rows.shape[0]) != (inputs["dims"][d], inputs["dims"][d + 1]):
+            raise TetradromeError(
+                f"generated {int(in_degree.sum())} and {rows.shape[0]} generators in degrees {d} "
+                f"and {d + 1}; the grading histogram counted {inputs['dims'][d]} and "
+                f"{inputs['dims'][d + 1]}")
+        entries = targets[source_degree == d]
+        positions = np.searchsorted(rows, entries)
+        found = positions < rows.shape[0]
+        found[found] = rows[positions[found]] == entries[found]
+        if not found.all():
+            raise TetradromeError(
+                f"{int((~found).sum())} differential target(s) out of degree {d} are not "
+                f"generators of degree {d + 1} in the same Alexander grading")
+        column_counts = counts[in_degree]
+        column_of = np.repeat(np.arange(column_counts.shape[0]), column_counts)
+        positions = positions[np.lexsort((positions, column_of))]
+        indptr = np.empty(column_counts.shape[0] + 1, dtype=np.int64)
+        indptr[0] = 0
+        np.cumsum(column_counts, out=indptr[1:])
+        maps[d] = (_index_array(positions), _index_array(indptr))
+    return maps
+
+
+def _collect_run(inputs, deps):
+    # {A: GradedComplex} from every grading's maps. A map with no entries is left out, as
+    # GradedComplex stores it.
+    by_grading: dict = defaultdict(dict)
+    for shard, (indices, indptr) in deps.items():
+        if len(indices):
+            by_grading[shard.producer[1]][shard.key] = (indices, indptr)
+    return {alexander: GradedComplex.from_csc(dims, by_grading[alexander])
+            for alexander, dims in inputs["dims"].items()}
+
+
+def _rank_run(inputs, deps):
+    (boundary,) = deps.values()
+    backend = best_available_backend() if inputs["backend"] == "auto" else inputs["backend"]
+    return rank_backend(backend)(boundary, inputs["rows"])
+
+
+def _rank_assemble_run(inputs, deps):
+    """The Poincare count ``{(Maslov, Alexander): dimension}`` from every boundary map's rank and
+    the chain dimensions the histogram counted."""
+    rank = {key[1:]: value for key, value in deps.items()}      # key is (_RANK, alexander, degree)
+    poincare = {}
+    for (alexander, degree), dimension in inputs["dims"].items():
+        betti = (dimension - rank.get((alexander, degree), 0)
+                 - rank.get((alexander, degree - 1), 0))
+        if betti < 0:
+            raise RuntimeError(f"negative Betti number at Alexander grading {alexander}, degree "
+                               f"{degree}: the boundary maps are not a complex.")
+        if betti:
+            poincare[(-degree, alexander)] = betti
+    return poincare
 
 
 def _record_bytes(n: int) -> int:
@@ -246,14 +316,28 @@ def histogram_jobs(grid, *, slice_states: int = _HISTOGRAM_SLICE_STATES) -> tupl
     return jobs, merge_key
 
 
-def generation_jobs(grid, *, slice_states: int = _SLICE_STATES, merge_shards=None) -> tuple:
-    """Generation jobs (contiguous lexicographic slices of the n! permutation space) plus the
-    merge that folds them into ``{A: GradedComplex}``, as ``(jobs, merge_key)``. The merge depends
-    on every slice and folds them in slice-index order, so its result equals ``grid_complexes``.
-    The slice *count* falls out of ``n!`` at ``slice_states`` states each -- a math granularity,
-    independent of the machine. ``merge_shards``, when given, declares the merge's output
-    partitioned over exactly those Alexander gradings, so each is stored and consumed independently
-    (the merge already returns ``{A: GradedComplex}``, the shard shape)."""
+def _dims_by_grading(histogram: dict) -> dict:
+    by_grading: dict = defaultdict(dict)
+    for (alexander, degree), count in histogram.items():
+        by_grading[alexander][degree] = count
+    return dict(by_grading)
+
+
+def generation_jobs(grid, histogram: dict, *, slice_states: int = _SLICE_STATES) -> tuple:
+    """Generation jobs, as ``(jobs, maps)``: contiguous lexicographic slices of the n! permutation
+    space, each split by Alexander grading, and one merge per grading that folds that grading's
+    share of every slice into its boundary maps. ``maps`` is ``{alexander: (merge_key, degrees)}``:
+    the merge's result is partitioned by degree, one shard per boundary map, for the gradings that
+    have a map at all (two adjacent nonzero degrees).
+
+    ``histogram`` is the grid's grading histogram. It says which gradings and degrees exist and
+    how large each is, so every job is declared and priced before anything is generated, and no
+    job ever holds more than one grading. The slice *count* falls out of ``n!`` at
+    ``slice_states`` states each -- a math granularity, independent of the machine."""
+    by_grading = _dims_by_grading(histogram)
+    degrees_of = {alexander: tuple(d for d in sorted(dims) if dims.get(d + 1))
+                  for alexander, dims in by_grading.items()}
+    gradings = tuple(sorted(alexander for alexander, degrees in degrees_of.items() if degrees))
     total = math.factorial(grid.n)
     slice_count = max(1, math.ceil(total / slice_states))
     record = _record_bytes(grid.n)
@@ -265,31 +349,43 @@ def generation_jobs(grid, *, slice_states: int = _SLICE_STATES, merge_shards=Non
         key = (_SLICE, w)
         jobs.append(Job(
             key=key, run=_slice_run, kind="floer.generation_slice",
-            inputs=(grid.O, grid.X, start, stop),
+            inputs=(grid.O, grid.X, start, stop, gradings),
             paths=(ComputePath(Placement.CPU_PINNED, cores=1,
                                ram_bytes=_FORK_BASE_BYTES + (stop - start) * record),),
-            cost=float(stop - start),
+            cost=float(stop - start), shards=frozenset(gradings),
         ))
         slice_keys.append(key)
-    merge_key = (_MERGE,)
+    maps = {}
+    for alexander in gradings:
+        dims = by_grading[alexander]
+        members = sum(dims.values())
+        merge_key = (_MERGE, alexander)
+        jobs.append(Job(
+            key=merge_key, run=_grading_merge_run, kind="floer.generation_merge",
+            inputs={"degrees": degrees_of[alexander], "dims": dims},
+            # The merge holds this grading's records from every slice and builds its maps from
+            # them; price the peak at both resident at once.
+            paths=(ComputePath(Placement.CPU_PINNED, cores=1,
+                               ram_bytes=_FORK_BASE_BYTES + 2 * members * record),),
+            dependencies={Shard(key, alexander) for key in slice_keys},
+            cost=float(members), shards=frozenset(degrees_of[alexander]),
+        ))
+        maps[alexander] = (merge_key, degrees_of[alexander])
+    return jobs, maps
+
+
+def generation_graph(grid, histogram: dict, *, slice_states: int = _SLICE_STATES):
+    """A JobGraph generating ``{A: GradedComplex}`` from ``grid``, plus the key of the job whose
+    result equals the serial ``grid_complexes(grid)``."""
+    jobs, maps = generation_jobs(grid, histogram, slice_states=slice_states)
+    collect_key = (_COLLECT,)
     jobs.append(Job(
-        key=merge_key, run=_merge_run, inputs={}, kind="floer.generation_merge",
-        # The merge holds every slice's records and builds the complexes from them; price the peak
-        # at both resident at once.
-        paths=(ComputePath(Placement.CPU_PINNED, cores=1,
-                           ram_bytes=max(2 * total * record, 1)),),
-        dependencies=slice_keys,
-        cost=float(total),
-        shards=merge_shards,
+        key=collect_key, run=_collect_run, inputs={"dims": _dims_by_grading(histogram)},
+        paths=(ComputePath(Placement.INLINE, cores=1, ram_bytes=0),),
+        dependencies={Shard(merge_key, degree)
+                      for merge_key, degrees in maps.values() for degree in degrees},
     ))
-    return jobs, merge_key
-
-
-def generation_graph(grid, *, slice_states: int = _SLICE_STATES):
-    """A JobGraph generating ``{A: GradedComplex}`` from ``grid`` plus the merge key whose result
-    equals the serial ``grid_complexes(grid)``."""
-    jobs, merge_key = generation_jobs(grid, slice_states=slice_states)
-    return JobGraph(jobs), merge_key
+    return JobGraph(jobs), collect_key
 
 
 def _tau_slice_run(inputs, deps):
@@ -416,12 +512,6 @@ def tau_jobs(grid, histogram: dict, *, slice_states: int = _TAU_SLICE_STATES) ->
     return jobs, assemble_key
 
 
-def _wired_reduce_run(inputs, deps):
-    # The single dep is this grading's complex -- the merge shard addressed by Shard(merge_key, A).
-    (complex_for_grading,) = deps.values()
-    return f2_homology(complex_for_grading, inputs["backend"])
-
-
 # The knot the benchmark runs: grid number 8, the largest whose three calculations take seconds.
 # A real knot, because the unknot's complexes reduce far faster per operation than a knot's do.
 _BENCHMARK_KNOT = "6_2"
@@ -443,36 +533,35 @@ def whole_knot_graph(grid, histogram: dict, *, backend: str = "bitint"):
 
 
 def whole_knot_jobs(grid, histogram: dict, *, backend: str = "bitint") -> tuple:
-    """The jobs from a grid to its Poincare count: generation slices feed a merge partitioned by
-    Alexander grading, each grading is reduced from its own shard (reading only that grading's
-    complex, never the whole output), and an assembly folds the per-grading homologies into the
-    ``{(Maslov, Alexander): dimension}`` count. Returned as ``(JobGraph, assemble_key)``.
+    """The jobs from a grid to its Poincare count, as ``(jobs, assemble_key)``: generation slices
+    split by Alexander grading, a merge per grading partitioned by degree, the rank of each
+    boundary map from its own shard, and an assembly that turns the ranks and the histogram's
+    dimensions into the ``{(Maslov, Alexander): dimension}`` count.
 
-    ``histogram`` is the grid's grading histogram (the ``histogram_graph`` result). The shard set
-    and the per-grading reduction footprints come from it: ``grading_peak_bytes`` and
-    ``grading_cost_ops`` over a grading's ``{degree: dim}`` equal the materialized complex's
-    predicted peak and cost, so the graph is fully priced before any complex exists. The merge
-    returns exactly those gradings, so the partition matches."""
-    by_grading: dict = defaultdict(dict)
-    for (alexander, degree), count in histogram.items():
-        by_grading[alexander][degree] = count
-    gradings = frozenset(by_grading)
-    jobs, merge_key = generation_jobs(grid, merge_shards=gradings)
-    reduce_keys = []
-    for alexander, degree_dims in by_grading.items():
-        key = (_REDUCE, alexander)
-        jobs.append(Job(
-            key=key, run=_wired_reduce_run, inputs={"backend": backend},
-            kind=f"f2.reduce.{backend}",
-            paths=_reduction_paths(grading_peak_bytes(degree_dims), backend),
-            cost=grading_cost_ops(degree_dims),
-            dependencies={Shard(merge_key, alexander)},
-        ))
-        reduce_keys.append(key)
+    ``histogram`` is the grid's grading histogram (the ``histogram_graph`` result). Every job's
+    footprint and cost come from it: a boundary map of ``cols`` columns into ``rows`` rows is
+    priced by ``dense_block_bytes`` and ``dense_block_ops``, so the graph is fully priced before
+    any generator exists."""
+    jobs, maps = generation_jobs(grid, histogram)
+    by_grading = _dims_by_grading(histogram)
+    rank_keys = []
+    for alexander, (merge_key, degrees) in maps.items():
+        dims = by_grading[alexander]
+        for degree in degrees:
+            cols, rows = dims[degree], dims[degree + 1]
+            key = (_RANK, alexander, degree)
+            jobs.append(Job(
+                key=key, run=_rank_run, inputs={"backend": backend, "rows": rows},
+                kind=f"f2.reduce.{backend}",
+                paths=_reduction_paths(dense_block_bytes(cols, rows), backend),
+                cost=float(dense_block_ops(cols, rows)),
+                dependencies={Shard(merge_key, degree)},
+            ))
+            rank_keys.append(key)
     assemble_key = (_ASSEMBLE,)
     jobs.append(Job(
-        key=assemble_key, run=_assemble_run, inputs={},
+        key=assemble_key, run=_rank_assemble_run, inputs={"dims": dict(histogram)},
         paths=(ComputePath(Placement.INLINE, cores=1, ram_bytes=0),),
-        dependencies=reduce_keys,
+        dependencies=rank_keys,
     ))
     return jobs, assemble_key

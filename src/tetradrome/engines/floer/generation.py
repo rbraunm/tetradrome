@@ -22,7 +22,6 @@ slice with the block grading kernel and is what the scheduler fans out;
 from __future__ import annotations
 
 import math
-from array import array
 from collections import defaultdict, namedtuple
 
 from ...algebra import GradedComplex
@@ -119,8 +118,9 @@ def _generate_slice(args):
     surviving transposition pairs, and those targets' lexicographic ranks over the whole slice, and
     the result is those arrays -- no per-generator Python on the output side, so the parent's result
     transport is a near-contiguous copy rather than one tuple per generator. Requires numpy (the
-    kernels do); for a pure-Python complex without numpy use ``grid_complexes``. Folded by
-    ``_merge_run``, which ``test_generation_graph_matches_serial`` pins against ``grid_complexes``."""
+    kernels do); for a pure-Python complex without numpy use ``grid_complexes``. Split by grading
+    and folded per grading in ``scheduling``, which ``test_generation_graph_matches_serial`` pins
+    against ``grid_complexes``."""
     o_markers, x_markers, start, stop = args
     if not HAVE_NUMPY:
         raise BackendUnavailable(
@@ -170,100 +170,6 @@ def _tau_slice(args):
     return _TauSlice(start, ranks[maslov_values == -1],
                      ranks[zero], alexander_values[zero], zero_targets, zero_counts,
                      ranks[one], one_targets, one_counts)
-
-
-def _build_complexes(maslov_values, alexander_values, targets_flat, offsets):
-    """Build ``{A: GradedComplex}`` from rank-indexed global arrays: generator ``r`` has gradings
-    ``maslov_values[r]`` / ``alexander_values[r]`` and differential targets
-    ``targets_flat[offsets[r]:offsets[r + 1]]`` (target ranks). Generators are identified by
-    lexicographic rank = array index; positions are assigned per (Alexander, degree) in rank order,
-    reproducing grid_complexes. The differential is degree-raising and Alexander-preserving, so the
-    surviving targets and their positions are resolved in bulk over the whole flat target array, and
-    each grading's CSC column buffers are then sliced out per (Alexander, degree) block with a single
-    integer comparison -- no per-generator Python and no intermediate frozensets."""
-    import numpy as np
-
-    total = maslov_values.shape[0]
-    if total == 0:
-        return {}
-
-    def as_index_array(values):
-        # Copy a numpy int array into an array('i') buffer in one memcpy (no per-element Python);
-        # 'i' is GradedComplex's 4-byte CSC typecode (its width is asserted at import there).
-        buf = array("i")
-        buf.frombytes(np.ascontiguousarray(values, dtype=np.int32).tobytes())
-        return buf
-
-    degree = -maslov_values
-
-    # Pass 1: each generator's position within its (grading, degree) block, in rank order. One global
-    # array, filled per grading -- the blocks are disjoint, so every entry is written exactly once.
-    position = np.empty(total, dtype=np.int64)
-    gradings = np.unique(alexander_values)
-    members_of = {}
-    dims_of = {}
-    for a_value in gradings:
-        members = np.nonzero(alexander_values == a_value)[0]      # ranks in grading, ascending
-        members_of[int(a_value)] = members
-        member_degrees = degree[members]
-        dims: dict = {}
-        for d in np.unique(member_degrees):
-            in_degree = members[member_degrees == d]
-            position[in_degree] = np.arange(in_degree.shape[0], dtype=np.int64)
-            dims[int(d)] = int(in_degree.shape[0])
-        dims_of[int(a_value)] = dims
-
-    # Bulk: keep only targets one degree above their source (the rest are not in the column), then
-    # resolve every surviving target to its position -- all vectorized over the flat target array.
-    counts = np.diff(offsets)
-    source_degree = np.repeat(degree, counts)                    # the source's degree, per target
-    raised = degree[targets_flat] == source_degree + 1
-    raised_positions = position[targets_flat[raised]]
-    raised_cumulative = np.empty(targets_flat.shape[0] + 1, dtype=np.int64)
-    raised_cumulative[0] = 0
-    np.cumsum(raised, out=raised_cumulative[1:])
-    raised_start = raised_cumulative[offsets]                    # per-generator span in raised_positions
-
-    # Label each surviving target with its source generator and that source's (Alexander, degree)
-    # block, so a whole block's column buffer is one boolean select over the flat position array.
-    gen_raised_count = np.diff(raised_start)                     # raised targets per generator
-    source_of_raised = np.repeat(np.arange(total, dtype=np.int64), gen_raised_count)
-    degree_min = int(degree.min())
-    degree_span = int(degree.max()) - degree_min + 1
-    alexander_min = int(alexander_values.min())
-    block_key = (alexander_values.astype(np.int64) - alexander_min) * degree_span + (
-        degree.astype(np.int64) - degree_min
-    )
-    block_key_of_raised = block_key[source_of_raised]
-
-    # Pass 2: slice each grading's CSC out of the resolved arrays. Within a block, generators are in
-    # rank order = position order, and a block's raised entries sit consecutively per source in
-    # raised_positions, so the boolean select yields columns in position order while the per-column
-    # counts give indptr -- the two agree column-for-column, empty columns included.
-    complexes: dict = {}
-    for a_value in gradings:
-        a_grading = int(a_value)
-        dims = dims_of[a_grading]
-        members = members_of[a_grading]
-        member_degrees = degree[members]
-        csc: dict = {}
-        for d in dims:
-            block = (a_grading - alexander_min) * degree_span + (d - degree_min)
-            indices = raised_positions[block_key_of_raised == block]
-            if indices.shape[0] == 0:
-                continue  # a zero map: from_csc omits it and differential returns it empty
-            in_degree = members[member_degrees == d]              # ascending = position order
-            column_counts = gen_raised_count[in_degree]
-            # Sort row indices within each column so the CSC is byte-identical to the column
-            # constructor (grid_complexes sorts each column) -- the bit-for-bit agreement contract.
-            column_of = np.repeat(np.arange(in_degree.shape[0]), column_counts)
-            indices = indices[np.lexsort((indices, column_of))]
-            indptr = np.empty(in_degree.shape[0] + 1, dtype=np.int64)
-            indptr[0] = 0
-            np.cumsum(column_counts, out=indptr[1:])
-            csc[d] = (as_index_array(indices), as_index_array(indptr))
-        complexes[a_grading] = GradedComplex.from_csc(dims, csc)
-    return complexes
 
 
 def _grading_slice(args):
