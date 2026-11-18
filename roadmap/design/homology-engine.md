@@ -113,8 +113,9 @@ available raises.
 - **Choosing a tier in a run.** A reduction job declares a CPU path for the named tier, and
   under `backend="auto"` a GPU path as well when a CUDA reducer is present. The scheduler
   chooses between them ([scheduler.md](scheduler.md)).
-- **Parallelism.** A graded complex splits into independent pieces by grading. The scheduler
-  runs them as separate jobs.
+- **Parallelism.** A graded complex splits into independent pieces by grading, and a grading's
+  homology needs only the rank of each boundary map, each computable alone. The scheduler runs
+  each rank as its own job.
 
 ## 4. Faithfulness
 
@@ -159,7 +160,7 @@ Times are data, never a gate.
 |---|---|
 | CPU reducers | `bitint` is the fastest in every regime tested; small dense blocks favour the CPU tiers |
 | Dense GPU kernel | correct; about 14 times slower than `bitint` at 2048 × 2048, because it syncs with the host once per column |
-| Grid Floer, grid number 10 (3.6 million states), 32-CPU two-socket container | HFK-hat 78 s, τ 487 s ([scheduler.md](scheduler.md)) |
+| Grid Floer, grid number 10 (3.6 million states), 32-CPU two-socket container | HFK-hat 15 s, τ 314 s ([scheduler.md](scheduler.md)) |
 | Grid Floer, grid number 11 (39.9 million states) | does not fit: over 200 GiB |
 
 Szabó's calculator runs a different algorithm (section 2), so its times are not a

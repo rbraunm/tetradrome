@@ -3,26 +3,19 @@
 
 """Adapter: express a knot's grid computation as scheduler jobs.
 
-Three graphs. The histogram graph counts generators per grading over slices of the n! states and
-sums them; its result prices everything after it. The whole-knot graph, built from that
-histogram, generates the complexes in slices, merges them partitioned by Alexander grading,
-reduces each grading, and assembles the Poincare count. The reduction graph is the tail of the
-whole-knot graph for complexes that already exist.
+The histogram graph counts generators per grading over slices of the n! states and sums them;
+its result prices everything after it. The whole-knot graph, built from that histogram, generates
+in slices split by Alexander grading, merges each grading by its own job into its boundary maps,
+takes each map's rank in its own job, and assembles the Poincare count from the ranks and the
+histogram's dimensions. The tau graph does the same for the filtered complex in Maslov 0 and 1.
+The reduction graph reduces complexes that already exist, one job per grading.
 
-A grading's reduction is f2_homology on one complex, and every backend returns the identical
-answer by the agreement discipline, so a reduction's compute paths are a pure performance
-choice: a GPU path when a CUDA reducer is present, and a single-core CPU path that is always
-there. The scheduler runs the fastest the machine can serve. Each path is priced by the cost
-model's packed peak. The assembly fans the per-grading homologies into the bigraded Poincare
-count, the same arithmetic the in-process reducer used.
-
-This builds only the reduction-plus-assembly subgraph. The whole-knot builder prepends
-generation and reuses it.
-
-A reduction's run resolves its backend from its input: a forced backend name reduces with that
-backend (this is how the agreement tests pin each tier), and ``auto`` lets the worker's
-environment decide, so a worker the scheduler placed on a GPU sees the device and one placed on
-CPU does not.
+Every rank backend returns the identical answer by the agreement discipline, so a rank's compute
+paths are a pure performance choice: a GPU path when a CUDA reducer is present, and a single-core
+CPU path that is always there. Each path is priced by the cost model's packed peak. A forced
+backend name ranks with that backend (this is how the agreement tests pin each tier), and
+``auto`` lets the worker's environment decide, so a worker the scheduler placed on a GPU sees
+the device and one placed on CPU does not.
 """
 from __future__ import annotations
 
