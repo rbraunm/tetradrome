@@ -635,3 +635,18 @@ def test_braid_notation_flat_nested_and_malformed():
     for text in ("[]", "[1,0,2]", "[[1,2],3]", "not a braid"):
         with pytest.raises((ValueError, SyntaxError)):
             adapters._parseBraidNotation(text)
+
+
+def test_native_timing_runs_the_computation_in_a_process_of_its_own():
+    import tetradrome as td
+
+    value, seconds = adapters.timeNative(td.knots.from_name("3_1"), "determinant", 2)
+    assert value == "3"
+    assert 0 < seconds < 1
+
+
+def test_native_timing_of_a_failing_computation_raises_with_its_reason():
+    import tetradrome as td
+
+    with pytest.raises(RuntimeError, match="compute does not support"):
+        adapters.timeNative(td.knots.from_name("3_1"), "no_such_invariant", 1)

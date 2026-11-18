@@ -37,6 +37,7 @@ from .scheduler import (
     Placement,
     Scheduler,
     Shard,
+    WorkerPool,
     calibration_store,
     detect_machine,
 )
@@ -87,7 +88,7 @@ def fit(points) -> tuple:
     return 0.0, sum(seconds for _, seconds in points) / sum(cost for cost, _ in points)
 
 
-def _work_rates(machine, worker) -> dict:
+def _work_rates(machine, worker, pool) -> dict:
     """``(fixed, per_unit)`` seconds of every kind the engines' benchmarks run through the
     scheduler on ``machine``, fitted to each job's fastest time over ``_PASSES``. A Scheduler
     with nothing measured gives every job a physical core of its own."""
@@ -97,7 +98,8 @@ def _work_rates(machine, worker) -> dict:
 
         def run(graph, key):
             which = next(graphs)
-            report = Scheduler(machine, calibration=Calibration(), **worker).run(graph)
+            report = Scheduler(machine, calibration=Calibration(), pool=pool,
+                               **worker).run(graph)
             if report.infeasible:
                 raise report.infeasible[0]
             if report.failures:
@@ -209,18 +211,21 @@ def _dispatch_seconds(machine, placement, worker) -> tuple:
     return max(first - dispatch, 0.0), dispatch
 
 
-def _handover_seconds(machine, placement, worker) -> float:
+def _handover_seconds(machine, placement, worker, pool) -> float:
     """The scheduler's own CPU seconds per job when it hands a burst of jobs with nothing to do
-    to ``placement`` and takes their results back."""
+    to ``placement`` and takes their results back. The burst is run twice and the second timed,
+    so the workers it needs are already waiting."""
     jobs = [Job(key=("handover", index), run=_nothing, inputs={},
                 paths=(ComputePath(placement, cores=1, ram_bytes=1),))
             for index in range(_HANDOVER_JOBS)]
-    started = time.process_time()
-    report = Scheduler(machine, calibration=Calibration(), **worker).run(JobGraph(jobs))
-    spent = time.process_time() - started
-    if report.failures or report.infeasible:
-        raise RuntimeError(f"hand-over benchmark failed on {placement.value}: "
-                           f"{report.failures or report.infeasible}")
+    for _ in range(2):
+        started = time.process_time()
+        report = Scheduler(machine, calibration=Calibration(), pool=pool,
+                           **worker).run(JobGraph(jobs))
+        spent = time.process_time() - started
+        if report.failures or report.infeasible:
+            raise RuntimeError(f"hand-over benchmark failed on {placement.value}: "
+                               f"{report.failures or report.infeasible}")
     return spent / len(jobs)
 
 
@@ -228,15 +233,24 @@ def measure(machine) -> dict:
     """Run the benchmark on ``machine`` and return its figures, in the stored form."""
     ram_baseline, context_vram = Scheduler(machine).worker_overhead()
     worker = {"worker_ram_baseline": ram_baseline, "context_vram_reserve": context_vram}
-    rates = _work_rates(machine, worker)
+    placements = (Placement.CPU_PINNED, Placement.CPU_UNPINNED)
+    # One pool for the benchmark's runs, as a session has; the dispatch measurement makes its
+    # own, since it times a worker's start.
+    pool = WorkerPool()
+    try:
+        rates = _work_rates(machine, worker, pool)
+        handover = {placement: _handover_seconds(machine, placement, worker, pool)
+                    for placement in placements}
+    finally:
+        pool.close()
     dispatch = {placement: _dispatch_seconds(machine, placement, worker)
-                for placement in (Placement.CPU_PINNED, Placement.CPU_UNPINNED)}
+                for placement in placements}
     return {
         "rates": [{"kind": kind, "device": "cpu", "seconds_fixed": rates[kind][0],
                    "seconds_per_unit": rates[kind][1]} for kind in sorted(rates)],
         "sibling": _sibling_factors(machine, rates),
         "overheads": [{"placement": placement.name, "seconds": seconds,
-                       "scheduler_seconds": _handover_seconds(machine, placement, worker)}
+                       "scheduler_seconds": handover[placement]}
                       for placement, (_, seconds) in dispatch.items()],
         "worker": {"ram_baseline": ram_baseline, "context_vram": context_vram,
                    "start_seconds": dispatch[Placement.CPU_PINNED][0]},

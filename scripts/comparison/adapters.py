@@ -22,10 +22,12 @@ import ast
 import dataclasses
 import hashlib
 import importlib
+import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 
 
@@ -68,13 +70,47 @@ def pdAsList(knot):
 
 # ---- Tetradrome side ----------------------------------------------------------------------
 
+_NATIVE_TIMER = """
+import json, sys, time
+from tetradrome import invariants, knots
+knot = knots.from_name(sys.argv[1])
+best = None
+for _ in range(int(sys.argv[3])):
+    start = time.perf_counter()
+    result = invariants.compute(knot, sys.argv[2], validate="off")
+    elapsed = time.perf_counter() - start
+    best = elapsed if best is None or elapsed < best else best
+print(json.dumps({"seconds": best, "value": repr(result.value)}))
+"""
+
+
+def timeNative(knot, computeName, reps):
+    """``(repr of the value, best-of-reps wall seconds)`` for the native computation, timed in a
+    process of its own. What one invariant leaves behind in a process (imported libraries, a
+    grown heap, started workers) changes how fast the next one runs there, so each is measured
+    from the same start. With two or more reps the best excludes what a first call pays once."""
+    if knot.identity is None:
+        raise RuntimeError("the native timer names its knot to a fresh process; this knot has "
+                           "no name")
+    done = subprocess.run(
+        [sys.executable, "-c", _NATIVE_TIMER, knot.identity, computeName, str(max(reps, 1))],
+        capture_output=True, text=True)
+    if done.returncode != 0:
+        said = done.stderr.strip().splitlines()
+        raise RuntimeError(f"timing {computeName} of {knot.identity} in a fresh process failed: "
+                           f"{said[-1] if said else done.returncode}")
+    timed = json.loads(done.stdout.strip().splitlines()[-1])
+    return timed["value"], timed["seconds"]
+
+
 def measureTetradrome(knot, computeName, reps):
     """Time the native computation and capture its validation verdict -- separately.
 
-    The timed call runs validate="off" so the artifact's native timing claim contains no
-    oracle time (a knotjob subprocess inside the timed lambda would skew a 10ms Khovanov
-    cell by 20x); the verdicts come from one untimed soft call, and the two values must
-    agree or this raises. An invariant whose wired computed oracles are ALL missing from
+    The timed call runs validate="off", in a process of its own (``timeNative``), so the
+    artifact's native timing claim contains no oracle time (a knotjob subprocess inside the timed
+    call would skew a 10ms Khovanov cell by 20x) and nothing another invariant left behind; the
+    verdicts come from one untimed soft call, and the two values must agree or this raises. An
+    invariant whose wired computed oracles are ALL missing from
     this host is a provisioning failure of the artifact run itself, not a per-cell state --
     fail loud before timing anything. A partially-provisioned invariant is fine:
     strict's own rule is >= 1 computed pass, so regina alone validates a classical cell on a
@@ -92,14 +128,14 @@ def measureTetradrome(knot, computeName, reps):
             f"generating the artifact."
         )
     try:
-        result, seconds = _best(lambda: invariants.compute(knot, computeName, validate="off"), reps)
         # Verdicts come from ONE untimed soft call, so oracle consultations (e.g. the
         # knotjob subprocess) never contaminate the native timing the artifact claims.
         validated = invariants.compute(knot, computeName, validate="soft")
     except Exception as error:                       # an engine that cannot run on this knot
         return Measurement(value=f"error: {type(error).__name__}", seconds=None,
                            note=str(error)[:60], agree="n/a")
-    if validated.value != result.value:
+    timedValue, seconds = timeNative(knot, computeName, reps)
+    if repr(validated.value) != timedValue:
         raise RuntimeError(f"{computeName}: nondeterministic native value across runs")
     if any(v.verdict == "pass" for v in validated.validation.validators if v.oracle != "knotinfo"):
         agree = "pass"

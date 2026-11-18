@@ -821,18 +821,23 @@ class Scheduler:
         component_of: dict = {}
         peak_ram: list = []             # per component: its largest job's footprint
         unfinished: list = []           # per component: jobs neither completed nor cancelled
+        footprint_of: dict = {}         # key -> the least RAM any of its paths needs
+        consumer_count: dict = {}       # result or shard -> how many jobs consume it
+        for job in graph.jobs():
+            footprint_of[job.key] = min(path.ram_bytes for path in job.paths)
+            for dep in job.dependencies:
+                consumer_count[dep] = consumer_count.get(dep, 0) + 1
         for job in graph.jobs():
             if job.key not in component_of:
                 members = graph.component(job.key)
                 component_of.update((member, len(peak_ram)) for member in members)
-                peak_ram.append(max(min(path.ram_bytes for path in graph.get(member).paths)
-                                    for member in members))
+                peak_ram.append(max(footprint_of[member] for member in members))
                 unfinished.append(len(members))
         started: set = set()            # components with a job started and jobs still to finish
         leaves_more: dict = {}          # running key -> declared output beyond its footprint
 
         def lacks_headroom(job) -> bool:
-            footprint = min(path.ram_bytes for path in job.paths)
+            footprint = footprint_of[job.key]
             need = max(footprint, job.output_bytes)
             if need == 0 or not (running or warm_running):
                 return False            # nothing to hold, or nothing running: only fitting matters
@@ -973,10 +978,10 @@ class Scheduler:
             # serialized warm run. The producer keeps its result resident only when it runs warm and
             # every consumer is GPU-only (a consumer that can fall to the CPU could not read a device
             # buffer, so the result goes to host instead).
-            consumers_all_gpu = all(path.placement is Placement.GPU
-                                    for consumer in graph.dependents(job.key)
-                                    for path in graph.get(consumer).paths)
-            keep_on_device = job.device_resident and warm and consumers_all_gpu
+            keep_on_device = job.device_resident and warm and all(
+                path.placement is Placement.GPU
+                for consumer in graph.dependents(job.key)
+                for path in graph.get(consumer).paths)
             if job.device_resident and not keep_on_device:
                 why = "it routed fresh rather than warm" if not warm else "a consumer is not GPU-only"
                 logger.warning("device-resident job %r: %s, so its result is host-resident this run "
@@ -1217,13 +1222,12 @@ class Scheduler:
                     logger.info("result %r resident in VRAM on gpu %s (%d bytes), %d consumer(s)",
                                 key, gpu_completed, payload.nbytes, fanout)
                 elif job_shards is None:
-                    measured_out = hold(key, payload, len(graph.dependents(key)), declared_out)
+                    measured_out = hold(key, payload, consumer_count.get(key, 0), declared_out)
                 else:
-                    consumers = {c: graph.get(c).dependencies for c in graph.dependents(key)}
-                    measured_out = sum(
-                        hold(Shard(key, shard_key), held,
-                             sum(1 for deps in consumers.values() if Shard(key, shard_key) in deps))
-                        for shard_key, held in payload.items())
+                    measured_out = 0
+                    for shard_key, held in payload.items():
+                        shard = Shard(key, shard_key)
+                        measured_out += hold(shard, held, consumer_count.get(shard, 0))
                 if declared_out and measured_out > declared_out and key not in output_over_warned:
                     output_over_warned.add(key)
                     logger.warning("job %r output exceeded declared budget: declared %d, actual %d",
@@ -1283,6 +1287,28 @@ class Scheduler:
                 ledger.discard(("__warm_context__", gpu_index))
             return True
 
+        views: dict = {}                # key -> (job with admission footprints, GPU routing)
+        shape_of: dict = {}             # key -> what it asks of the CPUs: its paths and its sharing
+
+        def admission_view(job):
+            # The job as the placer must see it: each path's footprint with a fresh worker's
+            # overhead folded in, so it cannot admit more processes than the box can hold, and
+            # the GPU path's warm-or-fresh decision, so launch dispatches it the same way. Kept
+            # per job; a job with a GPU path is looked at afresh, its routing follows what the
+            # calibration has learned.
+            view = views.get(job.key)
+            if view is None:
+                predicted = calibration.predicted_time(float(job.cost), Placement.GPU, job.kind)
+                aug_paths, gpu_execution = _augment_for_admission(
+                    job.paths, worker_shared=worker_shared, ram_baseline=ram_baseline,
+                    context_vram=context_vram, gpu_budget=gpu_budget,
+                    predicted_gpu_time=predicted, context_overhead=self.context_overhead,
+                    vram_fraction=self.vram_fraction, time_multiple=self.time_multiple)
+                view = (dataclasses.replace(job, paths=aug_paths), gpu_execution)
+                if not any(path.placement is Placement.GPU for path in job.paths):
+                    views[job.key] = view
+            return view
+
         def admit() -> bool:
             # Take the first admit_window ready jobs in graph order and try them longest tail
             # first; the ones that must wait go back on the heap. An entry whose job has started
@@ -1295,23 +1321,22 @@ class Scheduler:
                     continue
                 held.append(entry)
             held.sort(key=lambda entry: (-tail[entry[1]], entry[0]))
+            # Job shapes found short of CPUs in this pass. Admitting only takes CPUs, so a job
+            # that asks for the same CPUs in the same ways is not tried again until the next.
+            cpu_short: set = set()
             for entry in held:
                 job = graph.get(entry[1])
                 if job.key not in waiting:
                     continue            # abandoned by a failure earlier in this pass
-                if lacks_headroom(job):
+                shape = shape_of.get(job.key)
+                if shape is None:
+                    shape = shape_of[job.key] = (
+                        tuple((path.placement, path.cores) for path in job.paths),
+                        calibration.shares(job.kind))
+                if shape in cpu_short or lacks_headroom(job):
                     heapq.heappush(ready_heap, entry)
                     continue
-                # Show the placer the fresh-worker footprint, not just the working set, so it
-                # cannot admit more processes than the box can actually hold. The GPU path's
-                # warm/fresh decision comes back so launch dispatches it the same way.
-                predicted = calibration.predicted_time(float(job.cost), Placement.GPU, job.kind)
-                aug_paths, gpu_execution = _augment_for_admission(
-                    job.paths, worker_shared=worker_shared, ram_baseline=ram_baseline,
-                    context_vram=context_vram, gpu_budget=gpu_budget, predicted_gpu_time=predicted,
-                    context_overhead=self.context_overhead, vram_fraction=self.vram_fraction,
-                    time_multiple=self.time_multiple)
-                aug_job = dataclasses.replace(job, paths=aug_paths)
+                aug_job, gpu_execution = admission_view(job)
 
                 def estimate(path, job=job):
                     if total > 1:
@@ -1334,6 +1359,8 @@ class Scheduler:
                     launch(job, decision.placed, gpu_execution)
                     did = True
                 else:
+                    if decision.short_of_cpus:
+                        cpu_short.add(shape)
                     heapq.heappush(ready_heap, entry)
             return did
 
@@ -1390,14 +1417,7 @@ class Scheduler:
         # one bad job does not sink the batch.
         infeasible: list = []
         for job in graph.jobs():
-            predicted = calibration.predicted_time(float(job.cost), Placement.GPU, job.kind)
-            aug_paths, _ = _augment_for_admission(
-                job.paths, worker_shared=worker_shared, ram_baseline=ram_baseline,
-                context_vram=context_vram, gpu_budget=gpu_budget, predicted_gpu_time=predicted,
-                context_overhead=self.context_overhead, vram_fraction=self.vram_fraction,
-                time_multiple=self.time_multiple)
-            error = job_feasibility(self.machine, dataclasses.replace(job, paths=aug_paths),
-                                    self.margin)
+            error = job_feasibility(self.machine, admission_view(job)[0], self.margin)
             if error is not None:
                 infeasible.append(error)
         for error in infeasible:

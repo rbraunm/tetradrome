@@ -110,6 +110,9 @@ class Decision:
     outcome: Outcome
     placed: Placed | None = None
     reason: str | None = None
+    # For a WAIT: True when the chosen path found no CPUs for it on any node, whatever the memory.
+    # CPUs only get scarcer while a pass admits jobs, so a like job need not be tried again in it.
+    short_of_cpus: bool = False
 
 
 def _capability_gap(machine: Machine, path: ComputePath, margin: float) -> "PathGap | None":
@@ -190,44 +193,37 @@ def _pick_cpus(nodes, ledger: Ledger, count: int, kind: str, shares,
 
 
 def _place_now(machine: Machine, ledger: Ledger, path: ComputePath, note: str | None,
-               margin: float, kind: str = "", shares=None) -> Placed | None:
-    """A concrete Placed if the path's resources are free right now, else None."""
-    global_margin = int(margin * machine.mem_cap_bytes)
-    if path.placement is Placement.GPU:
-        if ledger.global_free_ram() - global_margin < path.ram_bytes:
-            return None
-        cpus = _pick_cpus(machine.nodes, ledger, path.cores, kind, shares)
-        if cpus is None:
-            return None
-        for gpu in machine.gpus:
-            if ledger.free_vram(gpu.index) >= path.vram_bytes:
-                return Placed(path=path, cores=cpus, gpu_index=gpu.index, note=note)
-        return None
+               margin: float, kind: str = "", shares=None) -> tuple:
+    """``(placed, short_of_cpus)``: a concrete Placed if the path's resources are free right now,
+    else None with whether CPUs were what it lacked, on every node and whatever the memory."""
+    enough_ram = ledger.global_free_ram() - int(margin * machine.mem_cap_bytes) >= path.ram_bytes
+    if path.placement is Placement.INLINE:
+        # The scheduler's own thread: no worker core to grant, only its RAM to fit.
+        return (Placed(path=path, cores=frozenset(), note=note) if enough_ram else None), False
     if path.placement is Placement.CPU_PINNED:
-        if ledger.global_free_ram() - global_margin < path.ram_bytes:
-            return None
+        found_cpus = False
         # A wholly free core on any node is better than a second thread on the first node.
         for whole_only in (True, False):
             for node in machine.nodes:
-                node_margin = int(margin * node.ram_bytes)
-                if ledger.free_ram_node(node.index) - node_margin < path.ram_bytes:
-                    continue
                 cpus = _pick_cpus((node,), ledger, path.cores, kind, shares, whole_only)
-                if cpus is not None:
-                    return Placed(path=path, cores=cpus, node_index=node.index, note=note)
-        return None
-    if path.placement is Placement.INLINE:
-        # The scheduler's own thread: no worker core to grant, only its RAM to fit.
-        if ledger.global_free_ram() - global_margin < path.ram_bytes:
-            return None
-        return Placed(path=path, cores=frozenset(), note=note)
-    # CPU_UNPINNED
-    if ledger.global_free_ram() - global_margin < path.ram_bytes:
-        return None
+                if cpus is None:
+                    continue
+                found_cpus = True
+                node_free = ledger.free_ram_node(node.index) - int(margin * node.ram_bytes)
+                if enough_ram and node_free >= path.ram_bytes:
+                    return Placed(path=path, cores=cpus, node_index=node.index, note=note), False
+        return None, not found_cpus
     cpus = _pick_cpus(machine.nodes, ledger, path.cores, kind, shares)
     if cpus is None:
-        return None
-    return Placed(path=path, cores=cpus, note=note)
+        return None, True
+    if not enough_ram:
+        return None, False
+    if path.placement is Placement.CPU_UNPINNED:
+        return Placed(path=path, cores=cpus, note=note), False
+    for gpu in machine.gpus:
+        if ledger.free_vram(gpu.index) >= path.vram_bytes:
+            return Placed(path=path, cores=cpus, gpu_index=gpu.index, note=note), False
+    return None, False
 
 
 def _gap_summary(skipped: list) -> str:
@@ -306,10 +302,11 @@ def plan_placement(machine: Machine, ledger: Ledger, job: Job, margin: float = 0
             f"job {job.key!r} reached placement with no capable path ({_gap_summary(skipped)}); "
             f"the feasibility pre-flight should have excluded it")
     note = _degradation_note(chosen, skipped)
-    placed = _place_now(machine, ledger, chosen, note, margin, job.kind, shares)
+    placed, short_of_cpus = _place_now(machine, ledger, chosen, note, margin, job.kind, shares)
     if placed is not None:
         return Decision(Outcome.ADMIT, placed=placed)
     return Decision(
         Outcome.WAIT,
         reason=f"job {job.key!r} waiting for {chosen.placement.value} resources",
+        short_of_cpus=short_of_cpus,
     )
