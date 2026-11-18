@@ -650,6 +650,43 @@ class Scheduler:
         ready_heap: list = [(position[key], key) for key in waiting]
         heapq.heapify(ready_heap)
         admit_window = max(64, 4 * self.machine.total_cores)
+        # Memory headroom. Producers are small and quick and what consumes them can be large, so
+        # the producers of many calculations could fill RAM with held results until no consumer
+        # fits and nothing can run. Each calculation (a component of the graph) therefore has a
+        # peak: the largest footprint among its jobs. While anything is running, a job is
+        # admitted only if the peak of every calculation already started, and of its own, would
+        # still fit beside it and beside what the running jobs are declared to leave behind.
+        component_of: dict = {}
+        peak_ram: list = []             # per component: its largest job's footprint
+        unfinished: list = []           # per component: jobs neither completed nor cancelled
+        for job in graph.jobs():
+            if job.key not in component_of:
+                members = graph.component(job.key)
+                component_of.update((member, len(peak_ram)) for member in members)
+                peak_ram.append(max(min(path.ram_bytes for path in graph.get(member).paths)
+                                    for member in members))
+                unfinished.append(len(members))
+        started: set = set()            # components with a job started and jobs still to finish
+        leaves_more: dict = {}          # running key -> declared output beyond its footprint
+
+        def lacks_headroom(job) -> bool:
+            footprint = min(path.ram_bytes for path in job.paths)
+            need = max(footprint, job.output_bytes)
+            if need == 0 or not (running or warm_running):
+                return False            # nothing to hold, or nothing running: only fitting matters
+            own = component_of[job.key]
+            reserve = max((peak_ram[index] for index in started if index != own), default=0)
+            if footprint < peak_ram[own]:
+                reserve = max(reserve, peak_ram[own])
+            return (ledger.global_committed_ram() + sum(leaves_more.values()) + need + reserve
+                    > self.machine.mem_cap_bytes)
+
+        def settle(key) -> None:
+            # One job of its component is over, by completing or by being cancelled.
+            own = component_of[key]
+            unfinished[own] -= 1
+            if unfinished[own] == 0:
+                started.discard(own)
 
         # Take ownership of the jobs' inputs so they are no longer pinned by the (frozen) jobs in
         # the graph. Each is charged against global RAM and freed when its job is dispatched (an
@@ -787,6 +824,9 @@ class Scheduler:
             declared_ram[job.key] = placed.path.ram_bytes
             placement_of[job.key] = placement
             waiting.discard(job.key)
+            started.add(component_of[job.key])
+            if job.output_bytes > placed.path.ram_bytes:
+                leaves_more[job.key] = job.output_bytes - placed.path.ram_bytes
             inline_outcome = None
             if placement is Placement.INLINE:
                 # Called here and now, and published like a worker's result.
@@ -844,11 +884,13 @@ class Scheduler:
         def forget_warm(key) -> None:
             # Drop a warm job's bookkeeping without touching the shared worker. A stray result
             # that arrives after this is ignored by reap_one's not-running guard.
+            leaves_more.pop(key, None)
             warm_running.pop(key, None)
             ledger.remove(key)
 
         def stop_worker(key) -> None:
             launched_at.pop(key, None)
+            leaves_more.pop(key, None)
             proc = running.pop(key)
             with pids_lock:
                 running_pids.pop(key, None)
@@ -873,8 +915,11 @@ class Scheduler:
                 if member_shards is not None:             # a partitioned producer's shards
                     for shard_key in member_shards:
                         release_resident((Kind.OUTPUT, Shard(member, shard_key)))
+                if member not in cancelled:
+                    if member not in completed:
+                        settle(member)
+                    cancelled.add(member)
                 completed.discard(member)
-                cancelled.add(member)
             failures.append((component, failed_key, error_text))
             logger.error("job %r failed; abandoning its component (%d job(s)): %s",
                          failed_key, len(component), error_text.strip().splitlines()[-1])
@@ -919,6 +964,7 @@ class Scheduler:
             key, status, payload, compute_time = item
             if not is_running(key):
                 return                  # stale message from a job already reaped or killed
+            leaves_more.pop(key, None)
             gpu_completed = None        # the GPU a warm job ran on, kept for a device-resident result
             if key in running:          # fresh: its own process to reap
                 proc = running.pop(key)
@@ -942,6 +988,7 @@ class Scheduler:
                 logger.debug("job %r done (warm)", key)
             if status == "ok":
                 completed.add(key)
+                settle(key)
                 for child in graph.dependents(key):
                     unmet[child] -= 1
                     if unmet[child] == 0 and child not in cancelled:
@@ -1061,6 +1108,9 @@ class Scheduler:
                 job = graph.get(entry[1])
                 if job.key not in waiting:
                     continue            # abandoned by a failure earlier in this pass
+                if lacks_headroom(job):
+                    heapq.heappush(ready_heap, entry)
+                    continue
                 # Show the placer the fresh-worker footprint, not just the working set, so it
                 # cannot admit more processes than the box can actually hold. The GPU path's
                 # warm/fresh decision comes back so launch dispatches it the same way.

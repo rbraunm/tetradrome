@@ -102,6 +102,12 @@ Ready jobs are tried in the order the graph lists them, a bounded number per pas
 many calculations (a roster of knots) the earlier ones therefore finish, and free what they
 hold, before the later ones start, instead of every one sitting half done.
 
+Each calculation in a graph has a peak: the largest footprint among its jobs. While anything is
+running, a job is admitted only if the peak of every calculation already started, and of its own,
+would still fit beside it. Without that, the quick producers of many calculations fill memory
+with held results until no consumer fits and nothing can run. When nothing is running a job is
+admitted whenever it fits.
+
 Under memory pressure the largest held results are spilled to disk rather than stalling.
 
 ## Failure

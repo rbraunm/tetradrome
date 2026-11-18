@@ -418,6 +418,27 @@ def test_spill_exhausted_aborts():
         sched.run(JobGraph(producers + [consumer]))
 
 
+def test_producers_of_a_second_calculation_wait_while_the_first_needs_the_room():
+    # Two calculations, each three producers (a 2 MiB held result apiece) feeding a consumer that
+    # needs 6 MiB, under a 14 MiB ceiling with nothing allowed to spill. Run greedily, all six
+    # producers finish first, hold 12 MiB, and neither consumer ever fits. Held back so that a
+    # started calculation's largest job still fits, the second one's producers wait and both
+    # finish.
+    cap = 14 * _SMALL
+    jobs = []
+    for name, base in (("a", 1), ("b", 10)):
+        producers = [_producer((name, i), base * (i + 1)) for i in range(3)]
+        consumer = Job(key=(name, "sum"), run=passthrough, inputs={"add": 0},
+                       paths=(ComputePath(Placement.CPU_PINNED, cores=1, ram_bytes=6 * _SMALL),),
+                       dependencies=[producer.key for producer in producers])
+        jobs += producers + [consumer]
+    report = Scheduler(_small_machine(cap), margin=0.0, spill_floor_bytes=_SMALL,
+                       spill_budget_bytes=0).run(JobGraph(jobs))
+    assert report.failures == []
+    assert report.results == {("a", "sum"): 6, ("b", "sum"): 60}
+    assert report.spill_count == 0
+
+
 def consume_big(inputs, deps):
     return len(inputs["blob"])
 
