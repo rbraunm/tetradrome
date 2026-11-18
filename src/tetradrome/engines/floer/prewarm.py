@@ -6,7 +6,8 @@ A process binds a numba kernel on its first call, loading the cached compile; fo
 kernels together that costs about 0.6 s. Every scheduler worker is a fresh process, so without
 this each slice job paid it: a generation slice of 4096 states at grid number 10 took 0.63 s in a
 fresh process against 0.044 s once bound. Importing this module runs each kernel once, on the two
-states of a 2 x 2 grid, with the argument types the slice jobs use.
+states of a 2 x 2 grid, with the argument types the slice jobs use. The sparse reducer tau's
+rank and level search run on is bound the same way.
 """
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ from .differential_jit import (
     unrank_block,
 )
 from .gradings_jit import maslov_alexander_block
+from ...algebra.reduce_f2_sparse import HAVE_SPARSE, f2_kernel_escape_sparse, f2_rank_sparse
 
 if HAVE_NUMPY and HAVE_NUMBA:
     _states = unrank_block(0, 2, 2)
@@ -25,3 +27,10 @@ if HAVE_NUMPY and HAVE_NUMBA:
     maslov_alexander_block(_states, _o_markers, _x_markers)
     _pairs, _counts = differential_block(_states, _o_markers, _x_markers)
     target_ranks_block(_states, _pairs, _counts)
+
+if HAVE_SPARSE:
+    from array import array
+
+    _one_column = (array("i", [0]), array("i", [0, 1]))
+    f2_rank_sparse(_one_column)
+    f2_kernel_escape_sparse(_one_column, [0], _one_column)

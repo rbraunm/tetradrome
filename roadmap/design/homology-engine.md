@@ -96,6 +96,11 @@ available raises.
 | `packed-cpu` | uint64 word arrays | numpy |
 | `packed-gpu` | dense vectorized kernel on a CUDA device | cupy, a GPU |
 
+`reduce_f2_sparse.py` is the reference's reduction on sorted index arrays, compiled by Numba:
+a rank and the filtered kernel search τ needs, for the two maps of τ's complex, which span every
+generator of their Maslov degrees and are too sparse and too wide for the packed tiers. τ's jobs
+use it where Numba is installed and the reference otherwise.
+
 - **F2.** `GradedComplex` stores columns in CSC form; the reducers pack them to bits.
   `packed-cpu` and `packed-gpu` run the same code with a different array module.
 - **ℚ.** `compute()` uses exact `Fraction` reduction (`rational_reduce.py`).

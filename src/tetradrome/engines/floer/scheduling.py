@@ -37,6 +37,7 @@ from ...algebra import (
     rank_backend,
     reduce_host_bytes,
 )
+from ...algebra.reduce_f2_sparse import HAVE_SPARSE, f2_kernel_escape_sparse, f2_rank_sparse
 from ...errors import TetradromeError
 from ...scheduler import ComputePath, Job, JobGraph, Placement, Shard
 from .generation import _generate_slice, _histogram_slice, _tau_slice
@@ -79,8 +80,9 @@ _HISTOGRAM_STATE_PER_N = 8
 # A tau slice grades every state but builds the differential for Maslov 0 and 1 only, so it sits
 # between the two: more states per job than a generation slice, priced at the generation record.
 _TAU_SLICE_STATES = 16384
-# The set-based reducer holds each column as a Python set of row indices; measured on a
-# grid-number-10 knot at just over 1 KiB per column for both the rank and the level search.
+# The set-based reference reducer holds each column as a Python set of row indices; measured on a
+# grid-number-10 knot at just over 1 KiB per column for both the rank and the level search. The
+# compiled sparse reducer holds less, so this prices either.
 _TAU_COLUMN_BYTES = 1152
 
 
@@ -441,8 +443,10 @@ def _tau_merge_run(inputs, deps):
 
 
 def _tau_rank_run(inputs, deps):
+    # The compiled sparse reducer where Numba is installed, else the reference it is tested
+    # against; the answer is the same.
     (csc,) = deps.values()
-    return f2_rank(csc)
+    return f2_rank_sparse(csc) if HAVE_SPARSE else f2_rank(csc)
 
 
 def _csc_columns(csc):
@@ -454,9 +458,10 @@ def _tau_levels_run(inputs, deps):
     # The first Alexander level whose cycles (the kernel of d0 on that level and below) are not
     # all boundaries (the image of d1), with rank d1.
     merge_key = (_TAU_MERGE,)
-    return f2_kernel_escape(_csc_columns(deps[Shard(merge_key, "d0")]),
-                            deps[Shard(merge_key, "alexander")],
-                            _csc_columns(deps[Shard(merge_key, "d1")]))
+    d0, levels, d1 = (deps[Shard(merge_key, name)] for name in ("d0", "alexander", "d1"))
+    if HAVE_SPARSE:
+        return f2_kernel_escape_sparse(d0, levels, d1)
+    return f2_kernel_escape(_csc_columns(d0), levels, _csc_columns(d1))
 
 
 def _tau_assemble_run(inputs, deps):

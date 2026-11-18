@@ -200,6 +200,6 @@ worker alone, 15 µs per state for a generation slice and 1.7 µs for a histogra
 
 - A Khovanov, Lee or Rasmussen calculation is one job; its build and per-grading reductions are
   not split.
-- tau's rank and level search are two long single jobs on the set-based reducer.
+- τ's rank and level search are one job each, on the compiled sparse reducer.
 - Oracle validation calls run in the caller.
 - `compute()` takes one knot; only the Floer engine has many-knot entry points.
