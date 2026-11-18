@@ -38,6 +38,11 @@ class Execution(enum.Enum):
     FRESH = "fresh"
 
 
+# Two jobs on one physical core must together finish at least this much more than one alone
+# before the second thread is used; closer than that, measurement noise would decide.
+_SHARE_GAIN = 1.1
+
+
 def _device(placement) -> str:
     """Which code does the work. The inline path and both CPU placements run the same code, so
     they share a work rate; what separates them is dispatch overhead, which is measured apart."""
@@ -67,6 +72,7 @@ class Calibration:
         self.alpha = alpha
         self._rate: dict = {}        # (kind, device) -> seconds per cost unit
         self._overhead: dict = {}    # placement -> dispatch seconds
+        self._sibling: dict = {}     # kind -> time per unit sharing a core, over time alone
         self._fixed: set = set()     # (table name, key) of benchmark figures
 
     def _blend(self, name: str, table: dict, key, observed: float) -> None:
@@ -77,7 +83,9 @@ class Calibration:
                       else self.alpha * observed + (1.0 - self.alpha) * previous)
 
     def fix(self, figures: dict) -> None:
-        """Set the benchmark's ``rates`` and ``overheads`` as final."""
+        """Set the benchmark's ``rates``, ``overheads`` and ``sibling`` factors as final."""
+        for entry in figures["sibling"]:
+            self._sibling[entry["kind"]] = float(entry["factor"])
         for entry in figures["rates"]:
             key = (entry["kind"], entry["device"])
             self._rate[key] = float(entry["seconds_per_unit"])
@@ -102,6 +110,12 @@ class Calibration:
         if cost <= 0:
             return                   # no cost, so no per-unit signal to learn from
         self._blend("rate", self._rate, (kind, _device(placement)), seconds / cost)
+
+    def shares(self, kind: str) -> bool:
+        """Whether a job of ``kind`` should take the second thread of a busy physical core. Only
+        where the benchmark measured that two of them sharing a core do more than one alone."""
+        factor = self._sibling.get(kind)
+        return factor is not None and 2.0 / factor >= _SHARE_GAIN
 
     def overhead(self, placement):
         """Dispatch seconds for a placement: 0.0 inline, the measured figure otherwise, or None

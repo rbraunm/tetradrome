@@ -163,36 +163,58 @@ def _capability_gap(machine: Machine, path: ComputePath, margin: float) -> "Path
     return None
 
 
-def _take(cores: frozenset, count: int) -> frozenset:
-    """A deterministic count-core subset (lowest ids) of a free core set."""
-    return frozenset(sorted(cores)[:count])
+def _pick_cpus(nodes, ledger: Ledger, count: int, kind: str, shares,
+               whole_only: bool = False) -> "frozenset | None":
+    """``count`` CPUs on ``nodes`` for a job of ``kind``, or None if they are not free now.
+
+    One CPU of each wholly free physical core comes first, lowest first. Unless ``whole_only``,
+    the rest are second threads: those of the cores just taken, which slows no other job, and
+    those of busy cores when ``shares`` says both this kind and every kind already on the core do
+    more sharing a core than one of them does alone."""
+    free = frozenset().union(*(ledger.free_cores(node.index) for node in nodes))
+    physical = [core for node in nodes for core in node.physical_cores]
+    whole = [core for core in physical if core <= free][:count]
+    chosen = [min(core) for core in whole]
+    if len(chosen) == count:
+        return frozenset(chosen)
+    if whole_only:
+        return None
+    second = sorted(cpu for core in whole for cpu in core if cpu != min(core))
+    if shares is not None and shares(kind):
+        for core in physical:
+            idle = core & free
+            if idle and idle != core and all(shares(other) for other in ledger.kinds_on(core)):
+                second += sorted(idle)
+    chosen += second[:count - len(chosen)]
+    return frozenset(chosen) if len(chosen) == count else None
 
 
-def _place_now(machine: Machine, ledger: Ledger, path: ComputePath,
-               note: str | None, margin: float) -> Placed | None:
+def _place_now(machine: Machine, ledger: Ledger, path: ComputePath, note: str | None,
+               margin: float, kind: str = "", shares=None) -> Placed | None:
     """A concrete Placed if the path's resources are free right now, else None."""
     global_margin = int(margin * machine.mem_cap_bytes)
     if path.placement is Placement.GPU:
         if ledger.global_free_ram() - global_margin < path.ram_bytes:
             return None
-        free = ledger.free_cores_all()
-        if len(free) < path.cores:
+        cpus = _pick_cpus(machine.nodes, ledger, path.cores, kind, shares)
+        if cpus is None:
             return None
         for gpu in machine.gpus:
             if ledger.free_vram(gpu.index) >= path.vram_bytes:
-                return Placed(path=path, cores=_take(free, path.cores),
-                              gpu_index=gpu.index, note=note)
+                return Placed(path=path, cores=cpus, gpu_index=gpu.index, note=note)
         return None
     if path.placement is Placement.CPU_PINNED:
         if ledger.global_free_ram() - global_margin < path.ram_bytes:
             return None
-        for node in machine.nodes:
-            free = ledger.free_cores(node.index)
-            node_margin = int(margin * node.ram_bytes)
-            if (len(free) >= path.cores
-                    and ledger.free_ram_node(node.index) - node_margin >= path.ram_bytes):
-                return Placed(path=path, cores=_take(free, path.cores),
-                              node_index=node.index, note=note)
+        # A wholly free core on any node is better than a second thread on the first node.
+        for whole_only in (True, False):
+            for node in machine.nodes:
+                node_margin = int(margin * node.ram_bytes)
+                if ledger.free_ram_node(node.index) - node_margin < path.ram_bytes:
+                    continue
+                cpus = _pick_cpus((node,), ledger, path.cores, kind, shares, whole_only)
+                if cpus is not None:
+                    return Placed(path=path, cores=cpus, node_index=node.index, note=note)
         return None
     if path.placement is Placement.INLINE:
         # The scheduler's own thread: no worker core to grant, only its RAM to fit.
@@ -202,10 +224,10 @@ def _place_now(machine: Machine, ledger: Ledger, path: ComputePath,
     # CPU_UNPINNED
     if ledger.global_free_ram() - global_margin < path.ram_bytes:
         return None
-    free = ledger.free_cores_all()
-    if len(free) < path.cores:
+    cpus = _pick_cpus(machine.nodes, ledger, path.cores, kind, shares)
+    if cpus is None:
         return None
-    return Placed(path=path, cores=_take(free, path.cores), note=note)
+    return Placed(path=path, cores=cpus, note=note)
 
 
 def _gap_summary(skipped: list) -> str:
@@ -261,9 +283,11 @@ def _choose(capable: list, estimate) -> ComputePath:
 
 
 def plan_placement(machine: Machine, ledger: Ledger, job: Job, margin: float = 0.0,
-                   estimate=None) -> Decision:
+                   estimate=None, shares=None) -> Decision:
     """Decide where (if anywhere) ``job`` should run, given current ledger state and margin.
-    ``estimate``, when given, maps a path to its measured ``(run_seconds, dispatch_seconds)``."""
+    ``estimate``, when given, maps a path to its measured ``(run_seconds, dispatch_seconds)``.
+    ``shares``, when given, says whether a kind of job may take the second thread of a busy
+    physical core; without it a job waits for a core of its own."""
     skipped: list = []
     capable: list = []
     for path in job.paths:
@@ -282,7 +306,7 @@ def plan_placement(machine: Machine, ledger: Ledger, job: Job, margin: float = 0
             f"job {job.key!r} reached placement with no capable path ({_gap_summary(skipped)}); "
             f"the feasibility pre-flight should have excluded it")
     note = _degradation_note(chosen, skipped)
-    placed = _place_now(machine, ledger, chosen, note, margin)
+    placed = _place_now(machine, ledger, chosen, note, margin, job.kind, shares)
     if placed is not None:
         return Decision(Outcome.ADMIT, placed=placed)
     return Decision(

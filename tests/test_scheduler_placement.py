@@ -238,3 +238,76 @@ def test_chosen_worker_path_still_waits_rather_than_falling_back_inline():
     long = _figures({Placement.INLINE: (2.0, 0.0), Placement.CPU_PINNED: (2.0, 0.05)})
     job = _job("j", (_inline(10), _pinned(1, 10)))
     assert plan_placement(m, ledger, job, estimate=long).outcome is Outcome.WAIT
+
+
+# -- hyperthreads: a physical core each first, second threads only where measured to help --
+
+def _smt_machine():
+    """Two nodes of two physical cores, each core two hyperthreads: (0, 4), (1, 5) | (2, 6), (3, 7)."""
+    return Machine(
+        nodes=(NumaNode(0, frozenset({0, 1, 4, 5}), 100, (frozenset({0, 4}), frozenset({1, 5}))),
+               NumaNode(1, frozenset({2, 3, 6, 7}), 100, (frozenset({2, 6}), frozenset({3, 7})))),
+        gpus=(), mem_cap_bytes=200,
+    )
+
+
+def _kind_job(key, kind, cores=1):
+    return Job(key=key, run=lambda i, d: None, inputs=None, paths=(_pinned(cores, 1),), kind=kind)
+
+
+def _admit(machine, ledger, job, shares=None):
+    decision = plan_placement(machine, ledger, job, shares=shares)
+    if decision.outcome is Outcome.ADMIT:
+        ledger.add(Allocation(job_key=job.key, placement=Placement.CPU_PINNED,
+                              cores=decision.placed.cores, declared_ram=1,
+                              node_index=decision.placed.node_index, kind=job.kind))
+        return sorted(decision.placed.cores)
+    return None
+
+
+def test_jobs_take_a_physical_core_each_across_nodes_before_any_second_thread():
+    machine = _smt_machine()
+    ledger = Ledger(machine)
+    taken = [_admit(machine, ledger, _kind_job(i, "shares"), shares=lambda kind: True)
+             for i in range(8)]
+    assert taken == [[0], [1], [2], [3], [4], [5], [6], [7]]
+
+
+def test_without_a_sharing_figure_a_job_waits_for_a_core_of_its_own():
+    machine = _smt_machine()
+    ledger = Ledger(machine)
+    taken = [_admit(machine, ledger, _kind_job(i, "unmeasured")) for i in range(5)]
+    assert taken == [[0], [1], [2], [3], None]
+
+
+def test_a_kind_that_does_not_share_never_takes_a_second_thread():
+    machine = _smt_machine()
+    ledger = Ledger(machine)
+    shares = {"shares": True, "alone": False}.get
+    for i in range(4):
+        _admit(machine, ledger, _kind_job(i, "shares"), shares)
+    assert _admit(machine, ledger, _kind_job("late", "alone"), shares) is None
+
+
+def test_a_second_thread_is_not_taken_beside_a_kind_that_does_not_share():
+    machine = _smt_machine()
+    ledger = Ledger(machine)
+    shares = {"shares": True, "alone": False}.get
+    kinds = ["alone", "shares", "alone", "alone"]              # on cores (0,4) (1,5) (2,6) (3,7)
+    for i, kind in enumerate(kinds):
+        _admit(machine, ledger, _kind_job(i, kind), shares)
+    assert _admit(machine, ledger, _kind_job("a", "shares"), shares) == [5]
+    assert _admit(machine, ledger, _kind_job("b", "shares"), shares) is None
+
+
+def test_a_job_wider_than_the_physical_cores_takes_its_own_second_threads():
+    machine = _smt_machine()
+    assert _admit(machine, Ledger(machine), _kind_job("wide", "alone", cores=3),
+                  shares=lambda kind: False) == [0, 1, 4]
+
+
+def test_a_node_without_listed_physical_cores_treats_each_cpu_as_one():
+    machine = _machine()                                        # NumaNode(...) with no physical
+    ledger = Ledger(machine)
+    taken = [_admit(machine, ledger, _kind_job(i, "unmeasured")) for i in range(5)]
+    assert taken == [[0], [1], [2], [3], None]

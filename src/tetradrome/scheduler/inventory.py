@@ -15,10 +15,23 @@ import dataclasses
 
 @dataclasses.dataclass(frozen=True)
 class NumaNode:
-    """One NUMA node: the cores we are allowed to run on there, and its RAM."""
+    """One NUMA node: the logical CPUs we are allowed to run on there, and its RAM. ``physical``
+    groups those CPUs into physical cores (hyperthread siblings together); left empty, every CPU
+    is a core of its own."""
     index: int
     cores: frozenset[int]
     ram_bytes: int
+    physical: tuple[frozenset[int], ...] = ()
+
+    def __post_init__(self):
+        if self.physical and sorted(cpu for core in self.physical for cpu in core) != sorted(
+                self.cores):
+            raise ValueError(f"node {self.index}: physical cores {self.physical} do not "
+                             f"partition its CPUs {sorted(self.cores)}")
+
+    @property
+    def physical_cores(self) -> tuple[frozenset[int], ...]:
+        return self.physical or tuple(frozenset({cpu}) for cpu in sorted(self.cores))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -51,11 +64,11 @@ class Machine:
         return sum(node.ram_bytes for node in self.nodes)
 
     def describe(self) -> str:
-        lines = [f"machine: {len(self.nodes)} NUMA node(s), {self.total_cores} cores, "
+        lines = [f"machine: {len(self.nodes)} NUMA node(s), {self.total_cores} CPUs, "
                  f"memory ceiling {self.mem_cap_bytes >> 30} GiB"]
         for node in self.nodes:
-            lines.append(f"  node {node.index}: {len(node.cores)} cores, "
-                         f"{node.ram_bytes >> 30} GiB")
+            lines.append(f"  node {node.index}: {len(node.cores)} CPUs on "
+                         f"{len(node.physical_cores)} physical cores, {node.ram_bytes >> 30} GiB")
         for g in self.gpus:
             where = f"node {g.numa_node}" if g.numa_node is not None else "node unknown"
             lines.append(f"  gpu {g.index}: {g.vram_bytes >> 30} GiB VRAM, {where}")

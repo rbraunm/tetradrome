@@ -37,6 +37,7 @@ class Allocation:
     declared_vram: int = 0
     actual_ram: int = 0
     actual_vram: int = 0
+    kind: str = ""
 
     @property
     def charged_ram(self) -> int:
@@ -60,6 +61,7 @@ class Ledger:
         self._ram_by_node: dict = defaultdict(int)
         self._vram_by_gpu: dict = defaultdict(int)
         self._core_holders: Counter = Counter()
+        self._kind_on: dict = {}        # CPU -> the kind of the job holding it
 
     # ---- mutation ----
 
@@ -69,8 +71,11 @@ class Ledger:
         self._vram_by_gpu[alloc.gpu_index] += sign * alloc.charged_vram
         for core in alloc.cores:
             self._core_holders[core] += sign
+            if sign > 0:
+                self._kind_on[core] = alloc.kind
             if not self._core_holders[core]:
                 del self._core_holders[core]
+                del self._kind_on[core]
 
     def add(self, alloc: Allocation) -> None:
         if alloc.job_key in self._allocs:
@@ -103,6 +108,10 @@ class Ledger:
 
     def free_cores(self, node_index: int) -> frozenset:
         return self._nodes[node_index].cores - self._core_holders.keys()
+
+    def kinds_on(self, cpus) -> frozenset:
+        """The kinds of the jobs holding any of ``cpus``."""
+        return frozenset(self._kind_on[cpu] for cpu in cpus if cpu in self._kind_on)
 
     def free_cores_all(self) -> frozenset:
         free: set = set()

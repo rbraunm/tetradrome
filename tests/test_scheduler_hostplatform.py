@@ -11,6 +11,7 @@ from tetradrome.scheduler.hostplatform import (
     WindowsHostPlatform,
     for_host,
     parse_cgroup_limit,
+    group_siblings,
     parse_cpulist,
     parse_meminfo_total,
     parse_node_meminfo_total,
@@ -137,3 +138,10 @@ def test_ubuntu_platform_topology_and_primitives():
     assert platform.private_bytes(os.getpid()) > 0
     assert platform.private_bytes(2 ** 31) is None
     platform.pin(os.sched_getaffinity(0))      # pinning to our own allowed set is a no-op-safe call
+
+
+def test_group_siblings_pairs_hyperthreads_lowest_cpu_first():
+    siblings_of = {28: frozenset({28, 72}), 72: frozenset({28, 72}),
+                   30: frozenset({30, 74}), 74: frozenset({30, 74}), 5: frozenset({5})}
+    assert group_siblings(siblings_of) == (
+        frozenset({5}), frozenset({28, 72}), frozenset({30, 74}))

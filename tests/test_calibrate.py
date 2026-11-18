@@ -66,11 +66,20 @@ def test_first_use_measures_each_worker_placement(first_use):
     assert all(entry["seconds"] > 0 for entry in figures["overheads"])
 
 
+def test_first_use_measures_sharing_a_core_for_every_kind_where_cores_have_two_threads(
+        first_use, machine):
+    _, _, figures, _ = first_use
+    paired = any(len(core) >= 2 for node in machine.nodes for core in node.physical_cores)
+    assert [entry["kind"] for entry in figures["sibling"]] == (_KINDS if paired else [])
+    assert all(entry["factor"] > 0.5 for entry in figures["sibling"])
+
+
 def test_first_use_says_it_is_measuring_and_why(first_use):
     _, _, _, records = first_use
-    assert [record.levelno for record in records] == [logging.WARNING, logging.WARNING]
-    assert "this machine has not been measured yet" in records[0].getMessage()
-    assert "python -m tetradrome.calibrate" in records[0].getMessage()
+    notices = [record.getMessage() for record in records if record.levelno == logging.WARNING]
+    assert len(notices) == 2
+    assert "this machine has not been measured yet" in notices[0]
+    assert "python -m tetradrome.calibrate" in notices[0]
 
 
 def test_first_use_keeps_its_figures_and_plans_with_them(first_use, machine):

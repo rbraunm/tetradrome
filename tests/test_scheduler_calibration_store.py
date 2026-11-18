@@ -12,6 +12,7 @@ _GIB = 2**30
 _FIGURES = {
     "rates": [{"kind": "slice", "device": "cpu", "seconds_per_unit": 0.5}],
     "overheads": [{"placement": "CPU_PINNED", "seconds": 0.02}],
+    "sibling": [{"kind": "slice", "factor": 1.5}],
     "worker": {"ram_baseline": 123, "context_vram": 0},
 }
 
@@ -93,3 +94,25 @@ def test_a_kind_the_benchmark_does_not_cover_is_still_learned():
     calibration.fix(_FIGURES)
     calibration.observe(cost=2.0, placement=Placement.CPU_PINNED, seconds=3.0, kind="other")
     assert calibration.rate(Placement.CPU_PINNED, "other") == 1.5
+
+
+def test_hyperthread_layout_is_part_of_the_machine(tmp_path):
+    cpus = frozenset({0, 1})
+    paired = Machine(nodes=(NumaNode(0, cpus, _GIB, (cpus,)),), gpus=(), mem_cap_bytes=_GIB)
+    calibration_store.write(_machine(ram=_GIB), tmp_path, _FIGURES)
+    assert calibration_store.read(paired, tmp_path) == (
+        None, "this machine's processors or GPUs are not the ones measured before")
+
+
+@pytest.mark.parametrize("factor, expected", [(1.0, True), (1.5, True), (1.81, True),
+                                               (1.83, False), (2.0, False), (3.0, False)])
+def test_second_thread_is_used_only_where_two_jobs_do_a_tenth_more_than_one(factor, expected):
+    calibration = Calibration()
+    calibration.fix({**_FIGURES, "sibling": [{"kind": "slice", "factor": factor}]})
+    assert calibration.shares("slice") is expected
+
+
+def test_a_kind_with_no_shared_core_figure_does_not_share():
+    calibration = Calibration()
+    calibration.fix(_FIGURES)
+    assert calibration.shares("other") is False

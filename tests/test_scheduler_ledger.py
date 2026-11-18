@@ -89,3 +89,15 @@ def test_duplicate_add_raises():
     led.add(_pinned("a", node_index=0, cores={0}, ram=30))
     with pytest.raises(ValueError):
         led.add(_pinned("a", node_index=0, cores={1}, ram=30))
+
+
+def test_ledger_reports_the_kinds_holding_cpus():
+    led = Ledger(_machine())
+    led.add(Allocation(job_key="a", placement=Placement.CPU_PINNED, cores=frozenset({0}),
+                       declared_ram=1, node_index=0, kind="slice"))
+    led.add(Allocation(job_key="b", placement=Placement.CPU_PINNED, cores=frozenset({2}),
+                       declared_ram=1, node_index=1, kind="merge"))
+    assert led.kinds_on({0, 1}) == frozenset({"slice"})
+    assert led.kinds_on({0, 2, 3}) == frozenset({"slice", "merge"})
+    led.remove("a")
+    assert led.kinds_on({0, 1}) == frozenset()

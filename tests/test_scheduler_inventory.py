@@ -3,6 +3,8 @@
 
 """Tests for the machine inventory: the Machine data model and live composition via
 detect_machine (structural, environment-tolerant)."""
+import pytest
+
 from tetradrome.scheduler import Machine, NumaNode, detect_machine
 
 
@@ -24,3 +26,20 @@ def test_detect_machine_smoke():
     assert all(node.cores for node in m.nodes)
     assert m.mem_cap_bytes > 0
     assert m.total_node_ram_bytes > 0
+
+
+def test_detected_physical_cores_partition_each_node():
+    for node in detect_machine().nodes:
+        assert sorted(cpu for core in node.physical_cores for cpu in core) == sorted(node.cores)
+
+
+def test_node_without_listed_physical_cores_has_one_per_cpu():
+    node = NumaNode(0, frozenset({3, 1}), 100)
+    assert node.physical_cores == (frozenset({1}), frozenset({3}))
+
+
+def test_physical_cores_must_partition_the_node():
+    with pytest.raises(ValueError, match="do not partition"):
+        NumaNode(0, frozenset({0, 1, 2}), 100, (frozenset({0, 1}),))
+    with pytest.raises(ValueError, match="do not partition"):
+        NumaNode(0, frozenset({0, 1}), 100, (frozenset({0, 1}), frozenset({1})))

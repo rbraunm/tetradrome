@@ -9,8 +9,8 @@ them; this module keeps them: one JSON file per machine under the user's cache d
 
 A file is used only while both of its keys still hold:
 
-- the machine: processor model, the CPUs the scheduler may use with their NUMA and core layout,
-  and the GPUs. RAM, load, uptime and kernel are left out, so a reboot changes nothing.
+- the machine: processor model, the CPUs the scheduler may use with their NUMA nodes and
+  physical cores, and the GPUs. RAM, load, uptime and kernel are left out, so a reboot changes nothing.
 - the software: every source file of the package, and the versions of the interpreter and the
   numerical libraries the kernels run on.
 """
@@ -27,7 +27,7 @@ from pathlib import Path
 
 from .inventory import Machine
 
-_FORMAT = 2
+_FORMAT = 3
 _LIBRARIES = ("numpy", "numba", "cupy", "cupy-cuda11x", "cupy-cuda12x", "cupy-cuda13x")
 
 
@@ -85,7 +85,8 @@ def machine_identity(machine: Machine) -> dict:
     return {
         "architecture": platform.machine(),
         "processor": _processor(),
-        "nodes": [[node.index, sorted(node.cores)] for node in machine.nodes],
+        "nodes": [[node.index, [sorted(core) for core in node.physical_cores]]
+                  for node in machine.nodes],
         "gpus": [[gpu.index, gpu.vram_bytes] for gpu in machine.gpus],
     }
 

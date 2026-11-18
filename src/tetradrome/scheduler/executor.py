@@ -796,6 +796,7 @@ class Scheduler:
                 job_key=job.key, placement=placement, cores=placed.cores,
                 declared_ram=placed.path.ram_bytes, node_index=placed.node_index,
                 gpu_index=placed.gpu_index, declared_vram=placed.path.vram_bytes,
+                kind=job.kind,
             ))
             declared_ram[job.key] = placed.path.ram_bytes
             placement_of[job.key] = placement
@@ -1092,7 +1093,8 @@ class Scheduler:
                     return (calibration.predicted_time(float(job.cost), path.placement, job.kind),
                             calibration.overhead(path.placement))
 
-                decision = plan_placement(self.machine, ledger, aug_job, self.margin, estimate)
+                decision = plan_placement(self.machine, ledger, aug_job, self.margin, estimate,
+                                          calibration.shares)
                 if decision.outcome is Outcome.ADMIT:
                     launch(job, decision.placed, gpu_execution)
                     did = True

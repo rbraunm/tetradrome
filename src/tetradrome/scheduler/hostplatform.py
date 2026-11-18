@@ -30,6 +30,7 @@ _CGROUP_MAX = (
     "/sys/fs/cgroup/memory/memory.limit_in_bytes",     # cgroup v1
 )
 _MEMINFO = "/proc/meminfo"
+_CPU_ROOT = "/sys/devices/system/cpu"
 
 
 # ---- pure parsers (tested directly against sample /sys content) ----------
@@ -102,6 +103,29 @@ def _read(path: str) -> str:
         return f.read()
 
 
+def group_siblings(siblings_of: dict) -> tuple:
+    """Physical cores from each CPU's set of hyperthread siblings (itself included), lowest CPU
+    first."""
+    seen: set = set()
+    physical = []
+    for cpu in sorted(siblings_of):
+        if cpu not in seen:
+            seen |= siblings_of[cpu]
+            physical.append(frozenset(siblings_of[cpu]))
+    return tuple(physical)
+
+
+def _physical_cores(cores: frozenset[int]) -> tuple:
+    """``cores`` grouped into physical cores. A system that exposes no thread topology is
+    modelled as one core per CPU, as one that exposes no NUMA topology is modelled as one node."""
+    siblings_of = {}
+    for cpu in cores:
+        path = f"{_CPU_ROOT}/cpu{cpu}/topology/thread_siblings_list"
+        siblings_of[cpu] = (parse_cpulist(_read(path)) & cores if os.path.exists(path)
+                            else frozenset({cpu}))
+    return group_siblings(siblings_of)
+
+
 def _allowed_cpus() -> frozenset[int]:
     """The cores this process may actually run on (honours cpuset / taskset). Linux-internal:
     only the Linux topology calls it, and Linux always provides sched_getaffinity."""
@@ -122,11 +146,13 @@ def detect_nodes() -> tuple[NumaNode, ...]:
             if not cores:
                 continue                                  # no core here we may use
             ram = parse_node_meminfo_total(_read(os.path.join(node_dir, "meminfo")))
-            nodes.append(NumaNode(index=int(name[4:]), cores=cores, ram_bytes=ram))
+            nodes.append(NumaNode(index=int(name[4:]), cores=cores, ram_bytes=ram,
+                                  physical=_physical_cores(cores)))
     if nodes:
         return tuple(nodes)
     # No usable NUMA topology: one node = all allowed cores + all RAM.
-    return (NumaNode(index=0, cores=allowed, ram_bytes=parse_meminfo_total(_read(_MEMINFO))),)
+    return (NumaNode(index=0, cores=allowed, ram_bytes=parse_meminfo_total(_read(_MEMINFO)),
+                     physical=_physical_cores(allowed)),)
 
 
 def detect_mem_ceiling(physical_total_bytes: int) -> int:
@@ -304,6 +330,36 @@ class WindowsHostPlatform(HostPlatform):
         mask = process_mask.value
         return frozenset(i for i in range(mask.bit_length()) if mask & (1 << i))
 
+    def _physical_cores(self, allowed: frozenset[int]) -> tuple:
+        import ctypes
+        from ctypes import wintypes
+
+        class SYSTEM_LOGICAL_PROCESSOR_INFORMATION(ctypes.Structure):
+            _fields_ = [("ProcessorMask", ctypes.c_size_t), ("Relationship", ctypes.c_int),
+                        ("Detail", ctypes.c_ulonglong * 2)]
+
+        k32 = ctypes.windll.kernel32
+        length = wintypes.DWORD(0)
+        k32.GetLogicalProcessorInformation(None, ctypes.byref(length))
+        entries = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION
+                   * (length.value // ctypes.sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION)))()
+        if not k32.GetLogicalProcessorInformation(entries, ctypes.byref(length)):
+            raise OSError("GetLogicalProcessorInformation failed")
+        relation_processor_core = 0
+        siblings_of = {}
+        for entry in entries:
+            if entry.Relationship == relation_processor_core:
+                mask = entry.ProcessorMask
+                core = frozenset(i for i in range(mask.bit_length()) if mask & (1 << i)) & allowed
+                siblings_of.update((cpu, core) for cpu in core)
+        if frozenset(siblings_of) != allowed:
+            # More than 64 logical processors are split into processor groups this call does not
+            # see; they need GetLogicalProcessorInformationEx and a host to build it against.
+            raise NotImplementedError(
+                f"Windows reported cores for CPUs {sorted(siblings_of)}, not the allowed "
+                f"{sorted(allowed)}; processor groups are not implemented yet.")
+        return group_siblings(siblings_of)
+
     def _total_physical_bytes(self) -> int:
         import ctypes
 
@@ -335,8 +391,9 @@ class WindowsHostPlatform(HostPlatform):
             raise NotImplementedError(
                 f"multi-NUMA Windows detection is not implemented yet (highest node "
                 f"{highest.value}); it needs a multi-socket Windows host to build against.")
-        return (NumaNode(index=0, cores=self._allowed_cores(),
-                         ram_bytes=self._total_physical_bytes()),)
+        allowed = self._allowed_cores()
+        return (NumaNode(index=0, cores=allowed, ram_bytes=self._total_physical_bytes(),
+                         physical=self._physical_cores(allowed)),)
 
     def mem_cap_bytes(self, physical_total_bytes: int) -> int:
         # Windows has no cgroup; absent a job-object memory limit, physical RAM is the ceiling.

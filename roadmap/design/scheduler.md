@@ -42,18 +42,21 @@ Each handler has a speed and a cost. A benchmark measures them once for a machin
 
 - **work rate**: seconds per cost unit, per kind and device. The inline path and both CPU
   placements run the same code, so they share a rate.
+- **sharing a core**: per kind, a job's time when a physical core's two hyperthreads both run it,
+  over its time with the core to itself. Measured with two pinned workers released together, on
+  one core while the rest of the machine is idle.
 - **dispatch overhead**: seconds to hand a job with nothing to do to a placement and reap it.
 - **worker start-up**: a fresh worker's RAM baseline and a GPU context's VRAM.
 
 The benchmark runs each engine's `benchmark()` through the scheduler: every Seifert and cube
 invariant of one six-crossing knot, and the histogram, HFK-hat and τ graphs of its grid (grid
-number 8). It takes the fastest of three passes, about 7 s on the 32-CPU container.
+number 8). It takes the fastest of three passes, and about 18 s in all on the 32-CPU container.
 
 The figures are one JSON file per machine in the user's cache directory (`TETRADROME_CACHE_DIR`
 moves it; `scheduler/calibration_store.py`). They are used while both keys hold:
 
-- **the machine**: processor model, the CPUs the scheduler may use with their NUMA layout, and the
-  GPUs. Not RAM, load, uptime or kernel, so a reboot changes nothing.
+- **the machine**: processor model, the CPUs the scheduler may use with their NUMA nodes and
+  physical cores, and the GPUs. Not RAM, load, uptime or kernel, so a reboot changes nothing.
 - **the software**: a hash of the package's source, and the versions of the interpreter, numpy,
   Numba and cupy.
 
@@ -80,9 +83,15 @@ For each ready job (`scheduler/placement.py`):
 2. Choose among the rest by measurement. Inline, when the predicted run time is no more than a
    worker's dispatch overhead. Otherwise the worker path with the smallest predicted run plus
    dispatch time. Where a figure is unmeasured, the order the builder declared.
-3. Admit the job if the chosen path's cores and memory are free now, per NUMA node and against
+3. Admit the job if the chosen path's CPUs and memory are free now, per NUMA node and against
    the global ceiling less a margin; otherwise it waits. A busy path never degrades a job to a
    slower one.
+
+A job gets a physical core to itself while any is free, on either node. It takes the second
+hyperthread of a busy core only when the benchmark measured that two jobs of its kind sharing a
+core finish at least a tenth more than one alone, and the same holds for the kind already there.
+A kind with no such figure never shares. On the 32-CPU container generation slices share
+(1.5 times slower each, so a third more done) and histogram slices do not (2 times slower each).
 
 Ready jobs are tried in the order the graph lists them, a bounded number per pass. In a graph of
 many calculations (a roster of knots) the earlier ones therefore finish, and free what they
@@ -140,8 +149,8 @@ worker alone, 15 µs per state for a generation slice and 1.7 µs for a histogra
 | 32, every logical CPU | x1.4 – 2.0 | x2.0 – 3.5 |
 
 - Spreading one calculation's jobs over both nodes costs nothing measurable.
-- Hyperthread siblings add about 20% throughput to generation and lose throughput on histogram
-  slices: 32 histogram workers do less than 16.
+- A second hyperthread adds throughput to generation and loses it on histogram slices: 32
+  histogram workers do less than 16. The planner now decides this per kind (above).
 - Not explained: 8 workers on one node run slower than the same node's 8 workers when the other
   node is also busy, and node 1 runs generation slower than node 0 (19 – 24 against 15 µs). The
   host runs other guests on these sockets and scales its clock (1.2 to 3.6 GHz), so both may be
