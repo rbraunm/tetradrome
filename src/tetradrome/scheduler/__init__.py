@@ -9,7 +9,7 @@ parallel, with dependencies. The math engines submit work to it rather than each
 parallel + memory-bounded execution. Design: roadmap/design/scheduler.md.
 """
 from . import calibration_store
-from .executor import RunReport, Scheduler
+from .executor import RunReport, Scheduler, WorkerPool
 from .graph import JobGraph
 from .inventory import GPU, Machine, NumaNode, detect_machine
 from .job import ComputePath, Job, Placement, Shard, scoped
@@ -48,6 +48,7 @@ __all__ = [
     "Shard",
     "RunReport",
     "Scheduler",
+    "WorkerPool",
     "detect_machine",
     "job_feasibility",
     "plan_placement",

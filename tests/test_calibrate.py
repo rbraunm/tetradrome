@@ -57,13 +57,33 @@ def test_first_use_measures_every_kind_on_the_cpu(first_use):
     _, _, figures, _ = first_use
     assert [(entry["kind"], entry["device"]) for entry in figures["rates"]] == [
         (kind, "cpu") for kind in _KINDS]
-    assert all(entry["seconds_per_unit"] > 0 for entry in figures["rates"])
+    assert all(entry["seconds_per_unit"] >= 0 and entry["seconds_fixed"] >= 0
+               and entry["seconds_per_unit"] + entry["seconds_fixed"] > 0
+               for entry in figures["rates"])
 
 
 def test_first_use_measures_each_worker_placement(first_use):
     _, _, figures, _ = first_use
     assert [entry["placement"] for entry in figures["overheads"]] == ["CPU_PINNED", "CPU_UNPINNED"]
     assert all(entry["seconds"] > 0 for entry in figures["overheads"])
+    # The scheduler's part of a hand-over is less than the wait for the worker's answer.
+    assert all(0 < entry["scheduler_seconds"] < entry["seconds"] for entry in figures["overheads"])
+
+
+def test_fit_recovers_a_fixed_part_and_a_rate():
+    points = [(cost, 0.002 + 0.0005 * cost) for cost in (1.0, 10.0, 100.0, 1000.0)]
+    fixed, per_unit = calibrate.fit(points)
+    assert fixed == pytest.approx(0.002)
+    assert per_unit == pytest.approx(0.0005)
+
+
+def test_fit_of_one_size_of_job_has_no_fixed_part():
+    assert calibrate.fit([(4.0, 2.0), (4.0, 6.0)]) == (0.0, 1.0)
+
+
+def test_fit_that_would_go_negative_falls_back_to_the_overall_rate():
+    # Time falls as cost rises: no line with both parts non-negative describes it.
+    assert calibrate.fit([(1.0, 3.0), (3.0, 1.0)]) == (0.0, 1.0)
 
 
 def test_first_use_measures_starting_a_worker_apart_from_dispatching_to_one(first_use):
@@ -92,10 +112,9 @@ def test_first_use_says_it_is_measuring_and_why(first_use):
 def test_first_use_keeps_its_figures_and_plans_with_them(first_use, machine):
     directory, calibration, figures, _ = first_use
     assert calibration_store.read(machine, directory) == (figures, "")
-    rate = next(entry["seconds_per_unit"] for entry in figures["rates"]
-                if entry["kind"] == "floer.generation_slice")
+    entry = next(entry for entry in figures["rates"] if entry["kind"] == "floer.generation_slice")
     assert calibration.predicted_time(1000.0, Placement.CPU_PINNED, "floer.generation_slice") == (
-        1000.0 * rate)
+        entry["seconds_fixed"] + 1000.0 * entry["seconds_per_unit"])
     assert calibration.overhead(Placement.CPU_PINNED) == figures["overheads"][0]["seconds"]
 
 

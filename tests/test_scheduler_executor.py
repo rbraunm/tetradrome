@@ -143,7 +143,8 @@ def test_failed_job_carries_no_timing():
 # -- warm worker: persistent, serial, frees between jobs --
 
 from tetradrome.scheduler.executor import (                            # noqa: E402
-    WarmWorker, _augment_for_admission, _fetch, _overhead_probe_main, _start_context)
+    Held, WarmWorker, WorkerPool, _augment_for_admission, _fetch, _overhead_probe_main,
+    _start_context)
 from tetradrome.scheduler.routing import Execution                     # noqa: E402
 from tetradrome.scheduler.hostplatform import for_host                    # noqa: E402
 
@@ -172,10 +173,10 @@ def test_warm_worker_runs_jobs_serially_in_one_process():
                         between=warm_between, platform=for_host())
     try:
         for key in ("a", "b", "c"):
-            worker.dispatch(key, report_warm_state, {}, {}, None, None, key)
+            worker.dispatch(0, key, report_warm_state, {}, {}, None, None, key)
         results = {}
         for _ in range(3):
-            key, status, payload, _seconds = result_queue.get(timeout=30)
+            _tag, key, status, payload, _seconds = result_queue.get(timeout=30)
             assert status == "ok"
             results[key] = _fetch(payload)
     finally:
@@ -193,11 +194,11 @@ def test_warm_worker_survives_a_failing_job():
     worker = WarmWorker(ctx, frozenset(os.sched_getaffinity(0)), None, result_queue,
                         platform=for_host())
     try:
-        worker.dispatch("bad", boom, {}, {}, None, None, "bad")
-        worker.dispatch("good", produce, {"value": 7}, {}, None, None, "good")
+        worker.dispatch(0, "bad", boom, {}, {}, None, None, "bad")
+        worker.dispatch(0, "good", produce, {"value": 7}, {}, None, None, "good")
         outcomes = {}
         for _ in range(2):
-            key, status, payload, _seconds = result_queue.get(timeout=30)
+            _tag, key, status, payload, _seconds = result_queue.get(timeout=30)
             outcomes[key] = (status, _fetch(payload) if status == "ok" else payload)
     finally:
         worker.shutdown()
@@ -861,7 +862,8 @@ def test_among_ready_jobs_the_longest_predicted_chain_starts_first():
     core = frozenset({min(os.sched_getaffinity(0))})
     machine = Machine(nodes=(NumaNode(0, core, 8 * _GIB),), gpus=(), mem_cap_bytes=8 * _GIB)
     calibration = Calibration()
-    calibration.fix({"rates": [{"kind": "probe", "device": "cpu", "seconds_per_unit": 1.0}],
+    calibration.fix({"rates": [{"kind": "probe", "device": "cpu", "seconds_fixed": 0.0,
+                                "seconds_per_unit": 1.0}],
                      "overheads": [], "sibling": []})
 
     def probe(key, cost, deps=()):
@@ -911,6 +913,43 @@ def test_a_job_after_a_killed_worker_gets_another_worker():
     report = Scheduler(machine).run(JobGraph(jobs))
     assert [failed for _, failed, _ in report.failures] == ["die"]
     assert report.results == {"after": 4}
+
+
+def test_a_kept_pool_hands_its_workers_to_the_next_run():
+    pool = WorkerPool()
+    try:
+        first = Scheduler(_machine(), pool=pool).run(JobGraph(_pid_chain(2))).results[1]
+        second = Scheduler(_machine(), pool=pool).run(JobGraph(_pid_chain(2))).results[1]
+    finally:
+        pool.close()
+    assert len(set(first)) == 1
+    assert set(second) == set(first)
+
+
+def test_a_result_posted_for_an_earlier_run_is_ignored():
+    # A job stopped when a run ends can still post its result. The next run, here reusing the
+    # key, must not take it for its own.
+    pool = WorkerPool()
+    try:
+        Scheduler(_machine(), pool=pool).run(JobGraph([_job("x", produce, {"value": 1})]))
+        stale = Held(0, data=pickle.dumps("stale"))
+        pool.results().put((1, "x", "ok", stale, 0.0, 0))        # the first run's tag was 1
+        report = Scheduler(_machine(), pool=pool).run(
+            JobGraph([_job("x", produce, {"value": 2})]))
+    finally:
+        pool.close()
+    assert report.results == {"x": 2}
+
+
+def test_idle_workers_are_trimmed_to_a_memory_budget():
+    pool = WorkerPool()
+    try:
+        Scheduler(_machine(), pool=pool).run(JobGraph(_pid_chain(2)))
+        assert len(pool.idle) == 1
+        pool.trim(0)
+        assert pool.idle == [] and pool.workers == []
+    finally:
+        pool.close()
 
 
 def test_report_carries_each_worker_jobs_dispatch_overhead():

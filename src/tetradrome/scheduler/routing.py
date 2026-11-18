@@ -66,7 +66,9 @@ class Calibration:
             raise ValueError(f"alpha must be in (0, 1], got {alpha}")
         self.alpha = alpha
         self._rate: dict = {}        # (kind, device) -> seconds per cost unit
+        self._flat: dict = {}        # (kind, device) -> seconds a job takes whatever its cost
         self._overhead: dict = {}    # placement -> dispatch seconds
+        self._handover: dict = {}    # placement -> the scheduler's own seconds per job handed over
         self._sibling: dict = {}     # kind -> time per unit sharing a core, over time alone
         self._fixed: set = set()     # (table name, key) of benchmark figures
 
@@ -84,10 +86,12 @@ class Calibration:
         for entry in figures["rates"]:
             key = (entry["kind"], entry["device"])
             self._rate[key] = float(entry["seconds_per_unit"])
+            self._flat[key] = float(entry["seconds_fixed"])
             self._fixed.add(("rate", key))
         for entry in figures["overheads"]:
             placement = Placement[entry["placement"]]
             self._overhead[placement] = float(entry["seconds"])
+            self._handover[placement] = float(entry["scheduler_seconds"])
             self._fixed.add(("overhead", placement))
 
     def rate(self, placement, kind: str = ""):
@@ -96,9 +100,12 @@ class Calibration:
         return self._rate.get((kind, _device(placement)))
 
     def predicted_time(self, cost: float, placement, kind: str = ""):
-        """Predicted run seconds for a job, or None if its kind has no rate on that device yet."""
+        """Predicted run seconds for a job, or None if its kind has no rate on that device yet:
+        what a job of the kind takes whatever its cost, plus its cost at the kind's rate."""
         rate = self.rate(placement, kind)
-        return None if rate is None else cost * rate
+        if rate is None:
+            return None
+        return self._flat.get((kind, _device(placement)), 0.0) + cost * rate
 
     def observe(self, cost: float, placement, seconds: float, kind: str = "") -> None:
         """Fold a completed job's measured run time into the rate for its kind and device."""
@@ -120,6 +127,15 @@ class Calibration:
         if placement is Placement.INLINE:
             return 0.0
         return self._overhead.get(placement)
+
+    def handover(self, placement):
+        """The scheduler's own seconds to hand a job to a placement and take its result back:
+        0.0 inline, else the benchmark's figure. Without one it is taken to be the whole dispatch
+        (``overhead``), which bounds it. While other jobs wait, a job is worth running in the
+        scheduler's process only if it is over sooner than this."""
+        if placement is Placement.INLINE:
+            return 0.0
+        return self._handover.get(placement, self._overhead.get(placement))
 
     def observe_overhead(self, placement, seconds: float) -> None:
         """Fold one job's measured dispatch-and-reap time into the placement's overhead."""

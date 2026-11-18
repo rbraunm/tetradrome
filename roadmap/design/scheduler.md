@@ -36,10 +36,12 @@ by the next run.
 | GPU, warm | the standing worker that holds the device context | queueing behind other warm jobs | small GPU jobs |
 | GPU, fresh | its own process and context | creating a context | large GPU jobs |
 
-A run keeps a pool of CPU workers. A worker takes one job after another: it pins itself to the
-job's CPUs, runs it, publishes the result and waits. One left holding more than 128 MiB after a
-job is retired, so what a large job leaves behind is not charged to the jobs after it; the pool
-ends with the run. Workers are forked from a template process that has already imported numpy
+CPU jobs run in a pool of long-lived workers. A worker takes one job after another: it pins
+itself to the job's CPUs, runs it, publishes the result and waits. One left holding more than
+128 MiB after a job is retired, so what a large job leaves behind is not charged to the jobs
+after it. The engines' session keeps one pool for the life of the process, so a calculation
+after the first finds workers waiting; between runs it keeps idle workers only up to half the
+admission margin of memory. A Scheduler used on its own makes a pool for its run. Workers are forked from a template process that has already imported numpy
 and bound the compiled grid kernels (`engines/floer/prewarm.py`), so a worker starts ready. On
 Windows workers are spawned cold and each is charged a measured import baseline.
 
@@ -48,13 +50,15 @@ Windows workers are spawned cold and each is charged a measured import baseline.
 Each handler has a speed and a cost. A benchmark measures them once for a machine and its software
 (`tetradrome/calibrate.py`), and every calculation after that starts out with them:
 
-- **work rate**: seconds per cost unit, per kind and device. The inline path and both CPU
-  placements run the same code, so they share a rate.
+- **work rate**: per kind and device, a fixed part per job and seconds per cost unit, fitted to
+  the benchmark's jobs so that small ones are predicted as well as large ones. The inline path
+  and both CPU placements run the same code, so they share a rate.
 - **sharing a core**: per kind, a job's time when a physical core's two hyperthreads both run it,
   over its time with the core to itself. Measured with two pinned workers released together, on
   one core while the rest of the machine is idle.
 - **dispatch overhead**: seconds to hand a job with nothing to do to a waiting worker and reap
-  it, and what starting a worker adds when none is waiting (2 ms and 20 ms on the container).
+  it, how much of that is the scheduler's own time, and what starting a worker adds when none is
+  waiting (2 ms, 1.3 ms and 20 ms on the container).
 - **worker start-up**: a fresh worker's RAM baseline and a GPU context's VRAM.
 
 The benchmark runs each engine's `benchmark()` through the scheduler: every Seifert and cube
@@ -89,8 +93,10 @@ For each ready job (`scheduler/placement.py`):
 
 1. Drop the paths this machine can never serve. If none is left the job is infeasible, reported
    before the run starts, and only its own component is abandoned.
-2. Choose among the rest by measurement. Inline, when the predicted run time is no more than a
-   worker's dispatch overhead. Otherwise the worker path with the smallest predicted run plus
+2. Choose among the rest by measurement. Inline, when the job is predicted to be over sooner
+   than handing it to a worker would cost: the scheduler's own hand-over time while other jobs
+   wait on its loop, or the whole dispatch, with a worker's start when none is idle, for a job
+   that is the entire graph. Otherwise the worker path with the smallest predicted run plus
    dispatch time. Where a figure is unmeasured, the order the builder declared.
 3. Admit the job if the chosen path's CPUs and memory are free now, per NUMA node and against
    the global ceiling less a margin; otherwise it waits. A busy path never degrades a job to a
@@ -130,6 +136,9 @@ raises on any failure, so no partial answer is returned.
   one's answer or failure (`hfk_hat_many`, `tau_many`).
 - Prices every job before it runs. The Floer engine first runs a histogram graph (generators per
   grading) and builds the main graph from its result.
+- Offers each job a worker path and the inline path, so a small calculation runs without a
+  worker. Sizes its slices by the calculation, never by the machine: at least 64 slices where the
+  states allow, each of 1,024 to 32,768 states.
 - Cuts its work where the mathematics is independent, so no long job stands alone. HFK-hat's
   slices are split by Alexander grading, each grading is merged by its own job, and each boundary
   map's rank is its own job; no job holds more than one grading.

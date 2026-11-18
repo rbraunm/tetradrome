@@ -10,8 +10,8 @@ from tetradrome.scheduler import GPU, Calibration, Machine, NumaNode, Placement,
 
 _GIB = 2**30
 _FIGURES = {
-    "rates": [{"kind": "slice", "device": "cpu", "seconds_per_unit": 0.5}],
-    "overheads": [{"placement": "CPU_PINNED", "seconds": 0.02}],
+    "rates": [{"kind": "slice", "device": "cpu", "seconds_fixed": 0.25, "seconds_per_unit": 0.5}],
+    "overheads": [{"placement": "CPU_PINNED", "seconds": 0.02, "scheduler_seconds": 0.001}],
     "sibling": [{"kind": "slice", "factor": 1.5}],
     "worker": {"ram_baseline": 123, "context_vram": 0, "start_seconds": 0.03},
 }
@@ -60,7 +60,8 @@ def test_changed_software_makes_the_figures_stale(tmp_path, change):
 
 def test_writing_replaces_the_earlier_figures(tmp_path):
     calibration_store.write(_machine(), tmp_path, _FIGURES)
-    later = {**_FIGURES, "rates": [{"kind": "slice", "device": "cpu", "seconds_per_unit": 0.9}]}
+    later = {**_FIGURES, "rates": [{"kind": "slice", "device": "cpu", "seconds_fixed": 0.0,
+                                    "seconds_per_unit": 0.9}]}
     calibration_store.write(_machine(), tmp_path, later)
     assert calibration_store.read(_machine(), tmp_path) == (later, "")
     assert len(list(tmp_path.iterdir())) == 1
@@ -85,7 +86,14 @@ def test_fixed_figures_are_not_moved_by_what_a_run_measures():
     calibration.observe_overhead(Placement.CPU_PINNED, 3.0)
     assert calibration.rate(Placement.CPU_PINNED, "slice") == 0.5
     assert calibration.rate(Placement.CPU_UNPINNED, "slice") == 0.5
+    assert calibration.predicted_time(4.0, Placement.CPU_PINNED, "slice") == 0.25 + 4.0 * 0.5
     assert calibration.overhead(Placement.CPU_PINNED) == 0.02
+    assert calibration.handover(Placement.CPU_PINNED) == 0.001
+    assert calibration.handover(Placement.INLINE) == 0.0
+    assert calibration.handover(Placement.CPU_UNPINNED) is None
+    calibration.observe_overhead(Placement.CPU_UNPINNED, 0.04)
+    # With no figure of its own, a placement's hand-over is taken to be its whole dispatch.
+    assert calibration.handover(Placement.CPU_UNPINNED) == 0.04
     assert calibration.rate(Placement.GPU, "slice") is None
 
 

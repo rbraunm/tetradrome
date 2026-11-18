@@ -30,6 +30,7 @@ from __future__ import annotations
 import dataclasses
 import enum
 import heapq
+import itertools
 import logging
 import multiprocessing
 import os
@@ -201,7 +202,7 @@ def _resolve_deps(deps):
 
 
 def _worker_main(key, run, inputs, deps, cores, gpu_index, result_queue, platform,
-                 shards, store, token):
+                 shards, store, token, tag):
     """Top-level worker entry, picklable for spawn: pin, time the run, publish the result, report
     one message.
 
@@ -222,9 +223,9 @@ def _worker_main(key, run, inputs, deps, cores, gpu_index, result_queue, platfor
         compute_time = time.perf_counter() - t0
         posted = _publish_result(key, result, shards, store, token)
     except Exception:
-        result_queue.put((key, "error", traceback.format_exc(), 0.0))
+        result_queue.put((tag, key, "error", traceback.format_exc(), 0.0))
         return
-    result_queue.put((key, "ok", posted, compute_time))
+    result_queue.put((tag, key, "ok", posted, compute_time))
 
 
 def _overhead_probe_main(result_queue, platform, accelerator, session_setup):
@@ -265,10 +266,13 @@ def _pool_worker_main(job_queue, result_queue, platform):
     scheduler can retire a worker that is left holding too much."""
     os.environ["CUDA_VISIBLE_DEVICES"] = ""          # a CPU worker must not grab a GPU
     while True:
-        item = job_queue.get()
+        try:
+            item = job_queue.get()
+        except EOFError:
+            return                                   # the scheduler's process is gone
         if item is None:
             return
-        key, run, inputs, deps, cores, shards, store, token = item
+        tag, key, run, inputs, deps, cores, shards, store, token = item
         del item
         try:
             platform.pin(cores)
@@ -280,7 +284,7 @@ def _pool_worker_main(job_queue, result_queue, platform):
         except Exception:
             report = (key, "error", traceback.format_exc(), 0.0)
         run = inputs = deps = result = None
-        result_queue.put(report + (platform.private_bytes(os.getpid()),))
+        result_queue.put((tag,) + report + (platform.private_bytes(os.getpid()),))
         del report
 
 
@@ -289,8 +293,10 @@ class PoolWorker:
     the run's result queue like any other job's."""
 
     def __init__(self, ctx, result_queue, platform):
+        self.retained = 0                       # its private bytes after its last job
         self._job_queue = ctx.Queue()
-        self._proc = ctx.Process(target=_pool_worker_main,
+        # A daemon, so that workers kept between runs end with the process that keeps them.
+        self._proc = ctx.Process(target=_pool_worker_main, daemon=True,
                                  args=(self._job_queue, result_queue, platform))
         self._proc.start()
 
@@ -305,8 +311,8 @@ class PoolWorker:
     def is_alive(self) -> bool:
         return self._proc.is_alive()
 
-    def dispatch(self, key, run, inputs, deps, cores, shards, store, token) -> None:
-        self._job_queue.put((key, run, inputs, deps, cores, shards, store, token))
+    def dispatch(self, tag, key, run, inputs, deps, cores, shards, store, token) -> None:
+        self._job_queue.put((tag, key, run, inputs, deps, cores, shards, store, token))
 
     def retire(self) -> None:
         self._job_queue.put(None)               # it exits once it has nothing more to do
@@ -319,6 +325,80 @@ class PoolWorker:
 
     def join(self, timeout=None) -> None:
         self._proc.join(timeout)
+
+
+class WorkerPool:
+    """The long-lived CPU workers and the queue their results come back on.
+
+    A Scheduler given no pool makes one for its run and closes it at the end. A session that
+    runs many graphs keeps one pool and passes it to each run, so a later run finds workers
+    already waiting. Each run takes a fresh tag and ignores results carrying another, which a job
+    stopped at the end of an earlier run may still have posted."""
+
+    def __init__(self):
+        self.idle: list = []            # workers with no job, last used last
+        self.workers: list = []         # every worker started and not retired
+        self._ctx = None
+        self._platform = None
+        self._results = None
+        self._tags = itertools.count(1)
+
+    def open(self, ctx, platform) -> int:
+        """Ready the pool for a run and give that run's tag."""
+        self._ctx, self._platform = ctx, platform
+        return next(self._tags)
+
+    def results(self):
+        if self._results is None:
+            self._results = self._ctx.Queue()
+        return self._results
+
+    def take(self) -> PoolWorker:
+        while self.idle and not self.idle[-1].is_alive():
+            self.workers.remove(self.idle.pop())         # it died while idle
+        if self.idle:
+            return self.idle.pop()
+        worker = PoolWorker(self._ctx, self.results(), self._platform)
+        self.workers.append(worker)
+        return worker
+
+    def give_back(self, worker, retained, limit: int) -> None:
+        """Return a worker after a job: to the idle ones, or retired when it reports no private
+        bytes figure or one above ``limit``."""
+        if retained is None or retained > limit:
+            self.drop(worker)
+            worker.retire()
+        else:
+            worker.retained = retained
+            self.idle.append(worker)
+
+    def drop(self, worker) -> None:
+        if worker in self.workers:
+            self.workers.remove(worker)
+
+    def trim(self, budget: int) -> None:
+        """Retire idle workers, the ones holding most first, until those kept hold no more than
+        ``budget`` private bytes together."""
+        self.idle.sort(key=lambda worker: worker.retained, reverse=True)     # lightest last
+        while self.idle and sum(worker.retained for worker in self.idle) > budget:
+            worker = self.idle.pop(0)
+            self.drop(worker)
+            worker.retire()
+
+    def close(self) -> None:
+        for worker in self.workers:
+            worker.retire()
+        for worker in self.workers:
+            worker.join(timeout=_GRACE_SECONDS)
+            if worker.is_alive():
+                worker.kill()
+                worker.join()
+        self.workers.clear()
+        self.idle.clear()
+        if self._results is not None:
+            self._results.close()
+            self._results.join_thread()
+            self._results = None
 
 
 def _augment_for_admission(paths, *, worker_shared, ram_baseline, context_vram, gpu_budget,
@@ -385,7 +465,7 @@ def _warm_worker_main(cores, gpu_index, job_queue, result_queue, setup, between,
         if item[0] == "free":              # parent says a device-resident result's last reader is done
             device_resident.pop(item[1], None)
             continue
-        _, key, run, inputs, deps, keep, shards, store, token = item
+        _, tag, key, run, inputs, deps, keep, shards, store, token = item
         try:
             deps = _resolve_deps(deps)
             deps = {dep_key: (device_resident[value.key] if isinstance(value, DeviceRef) else value)
@@ -395,12 +475,12 @@ def _warm_worker_main(cores, gpu_index, job_queue, result_queue, setup, between,
             elapsed = time.perf_counter() - t0
             if keep:                          # device-resident output: keep the buffer, post a handle
                 device_resident[key] = result
-                result_queue.put((key, "ok", DeviceHandle(key, result.nbytes), elapsed))
+                result_queue.put((tag, key, "ok", DeviceHandle(key, result.nbytes), elapsed))
             else:
-                result_queue.put((key, "ok", _publish_result(key, result, shards, store, token),
-                                  elapsed))
+                result_queue.put((tag, key, "ok",
+                                  _publish_result(key, result, shards, store, token), elapsed))
         except Exception:
-            result_queue.put((key, "error", traceback.format_exc(), 0.0))
+            result_queue.put((tag, key, "error", traceback.format_exc(), 0.0))
         finally:
             if between is not None:
                 between()
@@ -428,9 +508,10 @@ class WarmWorker:
     def pid(self):
         return self._proc.pid
 
-    def dispatch(self, key, run, inputs, deps, shards, store, token,
+    def dispatch(self, tag, key, run, inputs, deps, shards, store, token,
                  keep_on_device=False) -> None:
-        self._job_queue.put(("job", key, run, inputs, deps, keep_on_device, shards, store, token))
+        self._job_queue.put(("job", tag, key, run, inputs, deps, keep_on_device, shards, store,
+                             token))
 
     def free_device(self, key) -> None:
         # Tell the worker a device-resident result's last reader has finished, so it can drop the
@@ -557,8 +638,11 @@ class Scheduler:
                  calibration: Calibration | None = None, on_complete=None,
                  worker_ram_baseline: int | None = None,
                  worker_start_seconds: float | None = None,
-                 pool_retire_bytes: int = 128 * 1024 * 1024):
+                 pool_retire_bytes: int = 128 * 1024 * 1024,
+                 pool: "WorkerPool | None" = None):
         self.machine = machine
+        # A pool kept by the caller between runs; None makes one for each run.
+        self.pool = pool
         # What starting a pool worker adds to a job's dispatch when none is idle, as the benchmark
         # measured it; None leaves it out of the planner's estimate.
         self.worker_start_seconds = worker_start_seconds
@@ -662,7 +746,9 @@ class Scheduler:
         # What only worker jobs need -- the queue their results come back on and the thread that
         # samples their memory -- is set up when the first one is launched, so a run of inline
         # jobs costs none of it.
-        worker_side = {"queue": None, "sampler": None}
+        worker_side = {"sampler": None}
+        pool = self.pool if self.pool is not None else WorkerPool()
+        tag = pool.open(ctx, platform)
         stop = threading.Event()
         sample_queue: queue.Queue = queue.Queue()
         ledger = Ledger(self.machine)
@@ -693,8 +779,6 @@ class Scheduler:
         gpu_budget = self.machine.gpus[0].vram_bytes if self.machine.gpus else None
 
         running: dict = {}              # key -> the PoolWorker or one-job Process running it
-        pool_idle: list = []            # this run's pool workers with no job, last used last
-        pool_workers: list = []         # every pool worker this run started and has not retired
         overheads: dict = {}            # key -> dispatch seconds beyond the job's own run
         warm_running: dict = {}         # key -> gpu_index, jobs dispatched to a warm worker
         inline_running: set = set()     # the inline job being called right now, if any
@@ -803,12 +887,11 @@ class Scheduler:
             return stored_state["dir"]
 
         def result_queue():
-            if worker_side["queue"] is None:
-                worker_side["queue"] = ctx.Queue()
+            if worker_side["sampler"] is None:
                 worker_side["sampler"] = _Sampler(snapshot, sample_queue, self.sample_interval,
                                                   stop, platform)
                 worker_side["sampler"].start()
-            return worker_side["queue"]
+            return pool.results()
 
         def is_running(key) -> bool:
             return key in running or key in warm_running or key in inline_running
@@ -942,19 +1025,14 @@ class Scheduler:
                 # pid at a time, so a live sample could not be attributed to it cleanly anyway. A
                 # device-resident job keeps its result in the worker's VRAM rather than returning it.
                 ensure_warm(placed.gpu_index).dispatch(
-                    job.key, job.run, job_inputs, deps, job.shards, store(), token,
+                    tag, job.key, job.run, job_inputs, deps, job.shards, store(), token,
                     keep_on_device=keep_on_device)
                 warm_running[job.key] = placed.gpu_index
             elif placement in _POOLED:
-                while pool_idle and not pool_idle[-1].is_alive():
-                    pool_workers.remove(pool_idle.pop())     # it died while idle
-                if pool_idle:
-                    worker = pool_idle.pop()
-                else:
-                    worker = PoolWorker(ctx, result_queue(), platform)
-                    pool_workers.append(worker)
+                result_queue()                           # the sampler starts with the first worker
+                worker = pool.take()
                 launched_at[job.key] = time.perf_counter()
-                worker.dispatch(job.key, job.run, job_inputs, deps, placed.cores,
+                worker.dispatch(tag, job.key, job.run, job_inputs, deps, placed.cores,
                                 job.shards, store(), token)
                 running[job.key] = worker
                 with pids_lock:
@@ -963,7 +1041,7 @@ class Scheduler:
                 proc = ctx.Process(target=_worker_main, args=(
                     job.key, job.run, job_inputs, deps,
                     placed.cores, placed.gpu_index, result_queue(), platform,
-                    job.shards, store(), token,
+                    job.shards, store(), token, tag,
                 ))
                 launched_at[job.key] = time.perf_counter()
                 proc.start()
@@ -1004,8 +1082,7 @@ class Scheduler:
             with pids_lock:
                 running_pids.pop(key, None)
             ledger.remove(key)
-            if proc in pool_workers:
-                pool_workers.remove(proc)
+            pool.drop(proc)
             proc.terminate()
             proc.join(timeout=_GRACE_SECONDS)
             if proc.is_alive():
@@ -1084,11 +1161,9 @@ class Scheduler:
                 ledger.remove(key)
                 if not isinstance(proc, PoolWorker):
                     proc.join()                         # a one-job process: reap it
-                elif not retained or retained[0] is None or retained[0] > self.pool_retire_bytes:
-                    pool_workers.remove(proc)
-                    proc.retire()
                 else:
-                    pool_idle.append(proc)
+                    pool.give_back(proc, retained[0] if retained else None,
+                                   self.pool_retire_bytes)
                 turnaround = time.perf_counter() - launched_at.pop(key)
                 if status == "ok":
                     overheads[key] = max(turnaround - compute_time, 0.0)
@@ -1168,22 +1243,20 @@ class Scheduler:
                 poison(key, payload)
 
         def reap(block) -> bool:
-            results = worker_side["queue"]
-            if results is None:
+            if worker_side["sampler"] is None:
                 return False            # no worker has been launched, so nothing can be waiting
+            results = pool.results()
             got = False
-            if block:
-                try:
-                    reap_one(results.get(timeout=self.sample_interval))
-                    got = True
-                except queue.Empty:
-                    pass
+            timeout = self.sample_interval if block else None
             while True:
                 try:
-                    reap_one(results.get_nowait())
+                    message = results.get(timeout=timeout) if timeout else results.get_nowait()
                 except queue.Empty:
                     break
-                got = True
+                timeout = None          # block for the first message only
+                if message[0] == tag:   # another tag: posted by a job an earlier run stopped
+                    reap_one(message[1:])
+                    got = True
             return got
 
         def reap_lost() -> bool:
@@ -1241,10 +1314,17 @@ class Scheduler:
                 aug_job = dataclasses.replace(job, paths=aug_paths)
 
                 def estimate(path, job=job):
-                    dispatch = calibration.overhead(path.placement)
-                    if (dispatch is not None and self.worker_start_seconds is not None
-                            and path.placement in _POOLED and not pool_idle):
-                        dispatch += self.worker_start_seconds
+                    if total > 1:
+                        # Other jobs wait on this loop, so what a hand-over costs is the loop's
+                        # own time, not how long the worker takes to answer.
+                        dispatch = calibration.handover(path.placement)
+                    else:
+                        # A job that is the whole graph holds nothing up: it waits out the
+                        # hand-over, and a worker's start when none is idle, unless it runs here.
+                        dispatch = calibration.overhead(path.placement)
+                        if (dispatch is not None and self.worker_start_seconds is not None
+                                and path.placement in _POOLED and not pool.idle):
+                            dispatch += self.worker_start_seconds
                     return (calibration.predicted_time(float(job.cost), path.placement, job.kind),
                             dispatch)
 
@@ -1359,20 +1439,15 @@ class Scheduler:
                 worker_side["sampler"].join(timeout=1.0)
             for key in list(running):
                 stop_worker(key)
-            for worker in pool_workers:
-                worker.retire()
-            for worker in pool_workers:
-                worker.join(timeout=_GRACE_SECONDS)
-                if worker.is_alive():
-                    worker.kill()
-                    worker.join()
             for gpu_index, worker in warm_workers.items():
                 if context_vram > 0 or ram_baseline > 0:
                     ledger.remove(("__warm_context__", gpu_index))
                 worker.shutdown()
-            if worker_side["queue"] is not None:
-                worker_side["queue"].close()
-                worker_side["queue"].join_thread()
+            if self.pool is None:
+                pool.close()
+            else:
+                # Kept for the next run, within what the admission margin leaves uncharged.
+                pool.trim(int(self.margin * self.machine.mem_cap_bytes) // 2)
             for directory in (stored_state["dir"], spill_state["dir"]):
                 if directory is not None:
                     shutil.rmtree(directory, ignore_errors=True)

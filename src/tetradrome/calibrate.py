@@ -7,11 +7,11 @@
 The benchmark runs each engine's small representative calculations and records, for this machine
 and this software:
 
-- the work rate of every kind of job (seconds per cost unit);
+- what every kind of job costs: a fixed part per job and seconds per cost unit;
 - how much slower each kind runs when two jobs share a physical core's two hyperthreads, which
   decides whether the scheduler uses a core's second thread for that kind;
-- what each worker placement costs to dispatch to a waiting worker, and what starting a worker
-  adds;
+- what each worker placement costs to dispatch to a waiting worker, how much of that is the
+  scheduler's own time, and what starting a worker adds;
 - what a fresh worker holds before it does any work (its RAM baseline and a GPU context's VRAM).
 
 The figures are kept by ``scheduler.calibration_store`` and are measured again only when the
@@ -46,6 +46,7 @@ from .scheduler.hostplatform import for_host
 logger = logging.getLogger(__name__)
 
 _DISPATCH_SAMPLES = 8
+_HANDOVER_JOBS = 64
 # Other work on the machine can only slow a pass down, so the fastest of a few is the estimate.
 _PASSES = 3
 # A shared-core measurement repeats its job until it has run about this long, so that two workers
@@ -67,16 +68,35 @@ def _engines():
                                 "tetradrome.engines.floer.scheduling"))
 
 
+def fit(points) -> tuple:
+    """``(fixed, per_unit)`` seconds for one kind from its jobs' ``(cost, seconds)``: the line
+    that predicts each job's time with the least relative error, so small jobs count as much as
+    large ones. A kind whose jobs are all one size, or whose line would give a negative part, is
+    given no fixed part and its total seconds over its total cost."""
+    weight = [1.0 / max(seconds, 1e-9) ** 2 for _, seconds in points]
+    total = sum(weight)
+    cost_sum = sum(w * cost for w, (cost, _) in zip(weight, points))
+    time_sum = sum(w * seconds for w, (_, seconds) in zip(weight, points))
+    spread = total * sum(w * cost * cost for w, (cost, _) in zip(weight, points)) - cost_sum ** 2
+    if spread > 1e-9 * cost_sum ** 2:           # the jobs are not all one size
+        per_unit = (total * sum(w * cost * seconds for w, (cost, seconds) in zip(weight, points))
+                    - cost_sum * time_sum) / spread
+        fixed = (time_sum - per_unit * cost_sum) / total
+        if per_unit >= 0 and fixed >= 0:
+            return fixed, per_unit
+    return 0.0, sum(seconds for _, seconds in points) / sum(cost for cost, _ in points)
+
+
 def _work_rates(machine, worker) -> dict:
-    """Seconds per cost unit of every kind the engines' benchmarks run through the scheduler on
-    ``machine``: the fastest of ``_PASSES``. A Scheduler with nothing measured gives every job a
-    physical core of its own."""
-    rates: dict = {}
+    """``(fixed, per_unit)`` seconds of every kind the engines' benchmarks run through the
+    scheduler on ``machine``, fitted to each job's fastest time over ``_PASSES``. A Scheduler
+    with nothing measured gives every job a physical core of its own."""
+    fastest: dict = defaultdict(dict)       # kind -> {(which graph, job key): (cost, seconds)}
     for _ in range(_PASSES):
-        seconds: dict = defaultdict(float)
-        units: dict = defaultdict(float)
+        graphs = iter(range(10 ** 9))
 
         def run(graph, key):
+            which = next(graphs)
             report = Scheduler(machine, calibration=Calibration(), **worker).run(graph)
             if report.infeasible:
                 raise report.infeasible[0]
@@ -85,16 +105,13 @@ def _work_rates(machine, worker) -> dict:
             for job_key, job_seconds in report.timings.items():
                 job = graph.get(job_key)
                 if job.cost > 0:
-                    seconds[job.kind] += job_seconds
-                    units[job.kind] += float(job.cost)
+                    seen = fastest[job.kind].get((which, job_key), (0.0, job_seconds))[1]
+                    fastest[job.kind][(which, job_key)] = (float(job.cost), min(seen, job_seconds))
             return report.results[key]
 
         for benchmark in _engines():
             benchmark(run)
-        for kind in units:
-            rate = seconds[kind] / units[kind]
-            rates[kind] = min(rate, rates.get(kind, rate))
-    return rates
+    return {kind: fit(list(points.values())) for kind, points in fastest.items()}
 
 
 def _samples() -> dict:
@@ -165,7 +182,8 @@ def _sibling_factors(machine, rates) -> list:
         return []
     factors = []
     for kind, (cost, run, inputs, deps) in sorted(_samples().items()):
-        repeats = min(max(1, math.ceil(_SHARED_SECONDS / (cost * rates[kind]))),
+        fixed, per_unit = rates[kind]
+        repeats = min(max(1, math.ceil(_SHARED_SECONDS / max(fixed + cost * per_unit, 1e-9))),
                       _SHARED_REPEATS_MOST)
         alone = _seconds_on(pair[:1], run, inputs, deps, repeats)
         shared = _seconds_on(pair, run, inputs, deps, repeats)
@@ -191,6 +209,21 @@ def _dispatch_seconds(machine, placement, worker) -> tuple:
     return max(first - dispatch, 0.0), dispatch
 
 
+def _handover_seconds(machine, placement, worker) -> float:
+    """The scheduler's own CPU seconds per job when it hands a burst of jobs with nothing to do
+    to ``placement`` and takes their results back."""
+    jobs = [Job(key=("handover", index), run=_nothing, inputs={},
+                paths=(ComputePath(placement, cores=1, ram_bytes=1),))
+            for index in range(_HANDOVER_JOBS)]
+    started = time.process_time()
+    report = Scheduler(machine, calibration=Calibration(), **worker).run(JobGraph(jobs))
+    spent = time.process_time() - started
+    if report.failures or report.infeasible:
+        raise RuntimeError(f"hand-over benchmark failed on {placement.value}: "
+                           f"{report.failures or report.infeasible}")
+    return spent / len(jobs)
+
+
 def measure(machine) -> dict:
     """Run the benchmark on ``machine`` and return its figures, in the stored form."""
     ram_baseline, context_vram = Scheduler(machine).worker_overhead()
@@ -199,10 +232,11 @@ def measure(machine) -> dict:
     dispatch = {placement: _dispatch_seconds(machine, placement, worker)
                 for placement in (Placement.CPU_PINNED, Placement.CPU_UNPINNED)}
     return {
-        "rates": [{"kind": kind, "device": "cpu", "seconds_per_unit": rates[kind]}
-                  for kind in sorted(rates)],
+        "rates": [{"kind": kind, "device": "cpu", "seconds_fixed": rates[kind][0],
+                   "seconds_per_unit": rates[kind][1]} for kind in sorted(rates)],
         "sibling": _sibling_factors(machine, rates),
-        "overheads": [{"placement": placement.name, "seconds": seconds}
+        "overheads": [{"placement": placement.name, "seconds": seconds,
+                       "scheduler_seconds": _handover_seconds(machine, placement, worker)}
                       for placement, (_, seconds) in dispatch.items()],
         "worker": {"ram_baseline": ram_baseline, "context_vram": context_vram,
                    "start_seconds": dispatch[Placement.CPU_PINNED][0]},
@@ -234,17 +268,20 @@ def describe(figures: dict) -> str:
     factor = {entry["kind"]: entry["factor"] for entry in figures["sibling"]}
     lines = []
     for entry in figures["rates"]:
-        line = f"  {entry['kind']:<36} {entry['seconds_per_unit']:.3g} s per unit on {entry['device']}"
+        line = (f"  {entry['kind']:<36} {entry['seconds_fixed'] * 1000:.2f} ms + "
+                f"{entry['seconds_per_unit']:.3g} s per unit on {entry['device']}")
         if entry["kind"] in factor:
             use = "used" if calibration.shares(entry["kind"]) else "not used"
             line += f"; x{factor[entry['kind']]:.2f} sharing a core, second thread {use}"
         lines.append(line)
-    lines += [f"  dispatch to {entry['placement']:<24} {entry['seconds'] * 1000:.1f} ms"
+    lines += [f"  dispatch to {entry['placement']:<24} {entry['seconds'] * 1000:.1f} ms, of which "
+              f"the scheduler's own {entry['scheduler_seconds'] * 1000:.2f} ms"
               for entry in figures["overheads"]]
     lines.append(f"  starting a worker                    "
                  f"{figures['worker']['start_seconds'] * 1000:.1f} ms")
-    lines.append(f"  fresh worker RAM baseline            {figures['worker']['ram_baseline']} bytes")
-    lines.append(f"  GPU context VRAM                     {figures['worker']['context_vram']} bytes")
+    worker = figures["worker"]
+    lines.append(f"  fresh worker RAM baseline            {worker['ram_baseline']} bytes")
+    lines.append(f"  GPU context VRAM                     {worker['context_vram']} bytes")
     return "\n".join(lines)
 
 

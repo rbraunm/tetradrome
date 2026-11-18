@@ -11,11 +11,12 @@ the topology costs more than many of them do.
 """
 from __future__ import annotations
 
+import atexit
 import dataclasses
 import logging
 
 from ..errors import TetradromeError
-from .executor import Scheduler
+from .executor import Scheduler, WorkerPool
 from .graph import JobGraph
 from .inventory import Machine, detect_machine
 from .job import scoped
@@ -26,6 +27,9 @@ logger = logging.getLogger(__name__)
 _calibration = Calibration()
 _machine: Machine | None = None
 _worker: dict = {}
+# Kept between runs, so a calculation after the first finds workers waiting.
+_pool = WorkerPool()
+atexit.register(_pool.close)
 
 
 def capped_machine(mem_cap_bytes: int | None, vram_cap_bytes: int | None) -> Machine:
@@ -69,7 +73,8 @@ def run_to_result(graph, key, *, mem_cap_bytes: int | None = None,
 
 def _run(graph, mem_cap_bytes, vram_cap_bytes, on_complete=None):
     machine = capped_machine(mem_cap_bytes, vram_cap_bytes)
-    scheduler = Scheduler(machine, calibration=_calibration, on_complete=on_complete, **_worker)
+    scheduler = Scheduler(machine, calibration=_calibration, on_complete=on_complete,
+                          pool=_pool, **_worker)
     return scheduler.run(graph)
 
 

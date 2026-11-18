@@ -59,10 +59,10 @@ _TAU_ASSEMBLE = "tau_assemble"
 # Generation is not in the cost model (grading_histogram predicts reduction dims, not record
 # bytes), so a slice's working set and the merge's peak are priced by a per-record estimate: a
 # base plus a per-element term, tuned by the scheduler's over-budget warnings the same way every
-# other footprint is. Slice count falls out of n! at this many states per slice, a math
-# granularity, never a worker count. A slice must run long against its dispatch: at grid number
-# 10, 4096-state slices (0.15 s against 27 ms to dispatch) kept six to thirteen running; 32768
-# (1.2 s) ran a six-knot batch in 139 s against 179 s.
+# other footprint is. Slice count falls out of n! at so many states per slice, a math
+# granularity, never a worker count (``_slice_size``). This is the most a slice holds: at grid
+# number 10 such a slice runs about half a second and a knot is about 110 of them, which keeps the
+# scheduler's bookkeeping per knot small.
 _SLICE_STATES = 32768
 _GEN_RECORD_BASE = 256
 _GEN_RECORD_PER_N = 128
@@ -82,6 +82,28 @@ _TAU_SLICE_STATES = 16384
 # The set-based reducer holds each column as a Python set of row indices; measured on a
 # grid-number-10 knot at just over 1 KiB per column for both the rank and the level search.
 _TAU_COLUMN_BYTES = 1152
+
+
+# A calculation with the states for it is cut into at least this many slices, so a mid-sized
+# grid still spreads over a machine's CPUs, and never into slices smaller than this many states,
+# below which handing a slice to a worker costs more than a tenth of running it.
+_SLICES_LEAST = 64
+_SLICE_STATES_LEAST = 1024
+
+
+def _slice_size(total: int, most: int) -> int:
+    """States per slice for ``total`` states: ``most`` for a large calculation, less for one too
+    small to fill ``_SLICES_LEAST`` slices of that size. A function of the calculation alone, not
+    of the machine, so a graph is the same wherever it is built."""
+    return max(_SLICE_STATES_LEAST, min(most, total // _SLICES_LEAST))
+
+
+def _worker_or_inline(working_bytes: int) -> tuple:
+    """A job's paths: a pool worker, or the scheduler's own process, which the planner takes when
+    it predicts the job is over before a worker could be handed it. The worker is listed first,
+    so a job with nothing measured goes to one."""
+    return (ComputePath(Placement.CPU_PINNED, cores=1, ram_bytes=_FORK_BASE_BYTES + working_bytes),
+            ComputePath(Placement.INLINE, cores=1, ram_bytes=working_bytes))
 
 
 def _reduce_run(inputs, deps):
@@ -109,7 +131,9 @@ def _reduction_paths(peak: int, backend: str) -> tuple:
                             vram_bytes=max(peak, 1)),)
     if backend != "auto":
         return (ComputePath(Placement.CPU_PINNED, cores=1,
-                            ram_bytes=reduce_host_bytes(peak, backend)),)
+                            ram_bytes=reduce_host_bytes(peak, backend)),
+                ComputePath(Placement.INLINE, cores=1,
+                            ram_bytes=reduce_host_bytes(peak, backend)))
     available = {name: ok for name, ok, _ in available_f2_backends()}
     paths = []
     if available.get("packed-gpu"):
@@ -272,18 +296,19 @@ def _histogram_merge_run(inputs, deps):
     return dict(histogram)
 
 
-def histogram_graph(grid, *, slice_states: int = _HISTOGRAM_SLICE_STATES):
+def histogram_graph(grid, *, slice_states: int | None = None):
     """``histogram_jobs`` as a JobGraph plus its merge key."""
     jobs, merge_key = histogram_jobs(grid, slice_states=slice_states)
     return JobGraph(jobs), merge_key
 
 
-def histogram_jobs(grid, *, slice_states: int = _HISTOGRAM_SLICE_STATES) -> tuple:
+def histogram_jobs(grid, *, slice_states: int | None = None) -> tuple:
     """Jobs counting generators per ``(Alexander, degree)`` over all n! states, plus the
     merge key whose result equals ``grading_histogram_reference(grid)``. Slices are contiguous
     ranges of the permutation space at ``slice_states`` states each, a math granularity like the
     generation slices; the merge sums their counts, so slice order cannot matter."""
     total = math.factorial(grid.n)
+    slice_states = slice_states or _slice_size(total, _HISTOGRAM_SLICE_STATES)
     slice_count = max(1, math.ceil(total / slice_states))
     state_bytes = _HISTOGRAM_STATE_BASE + _HISTOGRAM_STATE_PER_N * grid.n
     jobs = []
@@ -295,8 +320,7 @@ def histogram_jobs(grid, *, slice_states: int = _HISTOGRAM_SLICE_STATES) -> tupl
         jobs.append(Job(
             key=key, run=_histogram_slice_run, kind="floer.histogram_slice",
             inputs=(grid.O, grid.X, start, stop),
-            paths=(ComputePath(Placement.CPU_PINNED, cores=1,
-                               ram_bytes=_FORK_BASE_BYTES + (stop - start) * state_bytes),),
+            paths=_worker_or_inline((stop - start) * state_bytes),
             cost=float(stop - start),
         ))
         slice_keys.append(key)
@@ -316,7 +340,7 @@ def _dims_by_grading(histogram: dict) -> dict:
     return dict(by_grading)
 
 
-def generation_jobs(grid, histogram: dict, *, slice_states: int = _SLICE_STATES) -> tuple:
+def generation_jobs(grid, histogram: dict, *, slice_states: int | None = None) -> tuple:
     """Generation jobs, as ``(jobs, maps)``: contiguous lexicographic slices of the n! permutation
     space, each split by Alexander grading, and one merge per grading that folds that grading's
     share of every slice into its boundary maps. ``maps`` is ``{alexander: (merge_key, degrees)}``:
@@ -326,12 +350,14 @@ def generation_jobs(grid, histogram: dict, *, slice_states: int = _SLICE_STATES)
     ``histogram`` is the grid's grading histogram. It says which gradings and degrees exist and
     how large each is, so every job is declared and priced before anything is generated, and no
     job ever holds more than one grading. The slice *count* falls out of ``n!`` at
-    ``slice_states`` states each -- a math granularity, independent of the machine."""
+    ``slice_states`` states each (``_slice_size`` when not given) -- a math granularity,
+    independent of the machine."""
     by_grading = _dims_by_grading(histogram)
     degrees_of = {alexander: tuple(d for d in sorted(dims) if dims.get(d + 1))
                   for alexander, dims in by_grading.items()}
     gradings = tuple(sorted(alexander for alexander, degrees in degrees_of.items() if degrees))
     total = math.factorial(grid.n)
+    slice_states = slice_states or _slice_size(total, _SLICE_STATES)
     slice_count = max(1, math.ceil(total / slice_states))
     record = _record_bytes(grid.n)
     jobs = []
@@ -343,8 +369,7 @@ def generation_jobs(grid, histogram: dict, *, slice_states: int = _SLICE_STATES)
         jobs.append(Job(
             key=key, run=_slice_run, kind="floer.generation_slice",
             inputs=(grid.O, grid.X, start, stop, gradings),
-            paths=(ComputePath(Placement.CPU_PINNED, cores=1,
-                               ram_bytes=_FORK_BASE_BYTES + (stop - start) * record),),
+            paths=_worker_or_inline((stop - start) * record),
             cost=float(stop - start), shards=frozenset(gradings),
         ))
         slice_keys.append(key)
@@ -358,8 +383,7 @@ def generation_jobs(grid, histogram: dict, *, slice_states: int = _SLICE_STATES)
             inputs={"degrees": degrees_of[alexander], "dims": dims},
             # The merge holds this grading's records from every slice and builds its maps from
             # them; price the peak at both resident at once.
-            paths=(ComputePath(Placement.CPU_PINNED, cores=1,
-                               ram_bytes=_FORK_BASE_BYTES + 2 * members * record),),
+            paths=_worker_or_inline(2 * members * record),
             dependencies={Shard(key, alexander) for key in slice_keys},
             cost=float(members), shards=frozenset(degrees_of[alexander]),
         ))
@@ -367,7 +391,7 @@ def generation_jobs(grid, histogram: dict, *, slice_states: int = _SLICE_STATES)
     return jobs, maps
 
 
-def generation_graph(grid, histogram: dict, *, slice_states: int = _SLICE_STATES):
+def generation_graph(grid, histogram: dict, *, slice_states: int | None = None):
     """A JobGraph generating ``{A: GradedComplex}`` from ``grid``, plus the key of the job whose
     result equals the serial ``grid_complexes(grid)``."""
     jobs, maps = generation_jobs(grid, histogram, slice_states=slice_states)
@@ -440,13 +464,13 @@ def _tau_assemble_run(inputs, deps):
     return len(deps[Shard((_TAU_MERGE,), "alexander")]), deps[(_TAU_RANK,)], rank_d1, level
 
 
-def tau_graph(grid, histogram: dict, *, slice_states: int = _TAU_SLICE_STATES):
+def tau_graph(grid, histogram: dict, *, slice_states: int | None = None):
     """``tau_jobs`` as a JobGraph plus its assemble key."""
     jobs, assemble_key = tau_jobs(grid, histogram, slice_states=slice_states)
     return JobGraph(jobs), assemble_key
 
 
-def tau_jobs(grid, histogram: dict, *, slice_states: int = _TAU_SLICE_STATES) -> tuple:
+def tau_jobs(grid, histogram: dict, *, slice_states: int | None = None) -> tuple:
     """The jobs for tau plus the assemble key, whose result is ``(Maslov-0 generator count,
     rank d0, rank d1, level)``: the two ranks that fix dim H_0 of the filtered complex, and the
     first Alexander level carrying the surviving class (None if no level does). Slices grade
@@ -457,6 +481,7 @@ def tau_jobs(grid, histogram: dict, *, slice_states: int = _TAU_SLICE_STATES) ->
     ``histogram`` is the grid's grading histogram; its Maslov -1, 0 and 1 generator counts price
     the merge and the linear algebra before any matrix exists."""
     total = math.factorial(grid.n)
+    slice_states = slice_states or _slice_size(total, _TAU_SLICE_STATES)
     slice_count = max(1, math.ceil(total / slice_states))
     record = _record_bytes(grid.n)
     count = {maslov: sum(generators for (_, degree), generators in histogram.items()
@@ -470,8 +495,7 @@ def tau_jobs(grid, histogram: dict, *, slice_states: int = _TAU_SLICE_STATES) ->
         jobs.append(Job(
             key=key, run=_tau_slice_run, kind="floer.tau_slice",
             inputs=(grid.O, grid.X, start, stop),
-            paths=(ComputePath(Placement.CPU_PINNED, cores=1,
-                               ram_bytes=_FORK_BASE_BYTES + (stop - start) * record),),
+            paths=_worker_or_inline((stop - start) * record),
             cost=float(stop - start),
         ))
         slice_keys.append(key)
@@ -479,8 +503,7 @@ def tau_jobs(grid, histogram: dict, *, slice_states: int = _TAU_SLICE_STATES) ->
     def serial(key, run, columns, dependencies, shards=None):
         return Job(
             key=key, run=run, inputs={}, kind=f"floer.{key[0]}",
-            paths=(ComputePath(Placement.CPU_PINNED, cores=1,
-                               ram_bytes=_FORK_BASE_BYTES + columns * _TAU_COLUMN_BYTES),),
+            paths=_worker_or_inline(columns * _TAU_COLUMN_BYTES),
             dependencies=dependencies, cost=float(columns), shards=shards,
         )
 
@@ -489,8 +512,7 @@ def tau_jobs(grid, histogram: dict, *, slice_states: int = _TAU_SLICE_STATES) ->
     columns = count[0] + count[1]
     jobs.append(Job(
         key=merge_key, run=_tau_merge_run, inputs={}, kind="floer.tau_merge",
-        paths=(ComputePath(Placement.CPU_PINNED, cores=1,
-                           ram_bytes=_FORK_BASE_BYTES + 2 * (columns + count[-1]) * record),),
+        paths=_worker_or_inline(2 * (columns + count[-1]) * record),
         dependencies=slice_keys, cost=float(columns), shards=frozenset(shard),
     ))
     jobs.append(serial((_TAU_RANK,), _tau_rank_run, count[0], {shard["d0"]}))
