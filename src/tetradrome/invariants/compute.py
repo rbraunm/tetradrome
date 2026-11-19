@@ -22,8 +22,8 @@ oracles compare RAW: KnotInfo's HFK/tau/genus columns share its PD chirality, an
 native grid is built in that standard chirality, so any mismatch is a genuine error and
 raises -- never a silent reflect/transpose. Seifert-form invariants accept a braid word
 (from_braid, off-table included) or a tabulated knot's KnotInfo braid; the diagrammatic
-invariants need a PD diagram (from_name or from_pd); the Floer invariants need a
-tabulated knot (the grid comes from KnotInfo's grid notation). Off-table results have no KnotInfo oracle,
+invariants need a PD diagram (from_name or from_pd); the Floer invariants take any knot, its
+grid built from the PD diagram or the braid's closure. Off-table results have no KnotInfo oracle,
 so until their computed oracles are wired they raise under strict and soft; pass
 validate="off" to opt in.
 """
@@ -35,7 +35,9 @@ from typing import Literal
 from .._version import __version__
 from ..backends import knotinfo_backend, registry
 from ..diagrams import NormalizedDiagram, build
+from ..diagrams.braid_closure import pd_from_braid
 from ..engines import floer, khovanov
+from ..engines.floer import grid_store
 from ..errors import UnknownKnot, UnvalidatedResult
 from ..scheduler import ComputePath, Job, JobGraph, Placement, run_to_result
 from . import jones, seifert
@@ -61,10 +63,10 @@ _PD_INVARIANTS = {
 # PD invariants whose computation verifies d^2 = 0 over its coefficient ring.
 _RUNS_D_SQUARED = {"khovanov_homology", "rational_khovanov_homology", "rasmussen_s"}
 # Invariants read from the grid diagram via the native Floer engine: (function, method label).
-# The grid comes from KnotInfo's tabulated grid notation, so these are tabulated-knot-only
-# paths. The engine carries its own fail-loud self-checks (hfk_hat verifies the V-factor
-# division by reconstruction; tau verifies dim H_0 = 1), which are not d^2 checks, so
-# d_squared_check stays not_applicable here.
+# The grid is built from the knot's crossing diagram, or its braid's closure, and kept in the
+# grid store (engines/floer/grid_store.py). The engine carries its own fail-loud self-checks
+# (hfk_hat verifies the V-factor division by reconstruction; tau verifies dim H_0 = 1), which
+# are not d^2 checks, so d_squared_check stays not_applicable here.
 _FLOER_INVARIANTS = {
     "knot_floer_homology": (floer.hfk_hat, "grid_hfk_hat"),
     "ozsvath_szabo_tau": (floer.tau, "grid_filtered_tau"),
@@ -189,7 +191,7 @@ def _computed_oracle_gap(invariant, not_installed, could_not_check):
 
 
 def _finalize(knot, invariant, value, method, inputs, fallback_label, validate,
-              d_squared="not_applicable", libraries: tuple[str, ...] = ()):
+              d_squared="not_applicable", libraries: tuple[str, ...] = (), grid=None):
     """Attach the validator verdicts, provenance, and validation outcome to a value.
 
     Every wired + installed validator covering the invariant is consulted (registry), then
@@ -247,6 +249,7 @@ def _finalize(knot, invariant, value, method, inputs, fallback_label, validate,
             method=method,
             inputs=inputs,
             library_versions=_library_versions(libraries),
+            grid=grid,
         ),
         validation=ValidationStatus(validators=tuple(records), d_squared_check=d_squared),
     )
@@ -337,17 +340,23 @@ def compute(
         )
 
     if invariant in _FLOER_INVARIANTS:
-        if knot.identity is None:
-            raise UnknownKnot(
-                f"{invariant} needs a tabulated knot: the grid diagram comes from "
-                "KnotInfo's grid notation, and an off-table knot has no grid."
-            )
-        grid = floer.GridDiagram.from_knotinfo(knot.identity)
+        if knot.pd_code:
+            pd, inputs, fallback_label = knot.pd_code, "pd_code", "(pd)"
+        else:
+            pd, inputs, fallback_label = pd_from_braid(knot.braid), "braid_word", "(braid word)"
+        located = grid_store.knot_grid(pd)
+        if knot.identity is not None:
+            smallest_known = len(knotinfo_backend.grid_notation(knot.identity)) // 2
+            if located.size > smallest_known:
+                logger.warning(
+                    "%s: the grid built for %s has %d rows; KnotInfo records one of %d, so this "
+                    "calculation does more work than the knot needs.",
+                    invariant, knot.identity, located.size, smallest_known)
         func, method = _FLOER_INVARIANTS[invariant]
-        value = func(grid)
+        value = func(located.grid)
         return _finalize(
-            knot, invariant, value, method, "knotinfo:grid_notation", "(grid)", validate,
-            libraries=_floer_libraries(),
+            knot, invariant, value, method, inputs, fallback_label, validate,
+            libraries=_floer_libraries(), grid=located,
         )
 
     raise ValueError(f"compute does not support {invariant!r}; supported: {_supported()}")

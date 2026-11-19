@@ -13,7 +13,8 @@ import pytest
 
 from tetradrome import invariants, knots
 from tetradrome.backends import knotinfo_backend as ki
-from tetradrome.errors import UnknownKnot
+from tetradrome.diagrams.reduction import reduced
+from tetradrome.engines.floer import grid_store, hfk_hat
 
 TIER0 = ["3_1", "4_1", "8_19"]
 FLOER = ["knot_floer_homology", "ozsvath_szabo_tau", "three_genus"]
@@ -47,7 +48,7 @@ def test_floer_provenance_records_the_libraries_its_kernels_run_on():
     result = invariants.compute(knots.from_name("3_1"), "knot_floer_homology")
     assert result.provenance.backend == "tetradrome-native"
     assert result.provenance.method == "grid_hfk_hat"
-    assert result.provenance.inputs == "knotinfo:grid_notation"
+    assert result.provenance.inputs == "pd_code"
     # The grid kernels run on numpy, compiled by Numba when it is installed.
     from tetradrome.engines.floer.differential_jit import HAVE_NUMBA
 
@@ -74,9 +75,33 @@ def test_floer_off_returns_full_provenance_without_validators():
     assert result.provenance.method == "grid_hfk_hat"
 
 
-# --- tabulated-only path fails loud off-table ---
+def test_floer_provenance_records_the_grid_and_where_it_came_from():
+    result = invariants.compute(knots.from_name("5_2"), "knot_floer_homology", validate="off")
+    grid = result.provenance.grid
+    assert grid.diagram == reduced(knots.from_name("5_2").pd_code)
+    assert grid.size == 7
+    assert grid.source in ("built", "stored")
+    assert grid.generator == grid_store.generator_stamp()
+    assert result.value == hfk_hat(grid.grid)
+    again = invariants.compute(knots.from_name("5_2"), "knot_floer_homology", validate="off")
+    assert again.provenance.grid.source == "stored"
+    assert again.provenance.grid.built_at == grid.built_at
+    assert again.provenance.grid.o_markers == grid.o_markers
 
-def test_floer_offtable_raises_unknown_knot():
+
+# --- any knot: a PD code without a name, or a braid ---
+
+def test_floer_of_an_unnamed_pd_code_is_validated_by_the_computed_oracle():
     raw = knots.from_pd(knots.from_name("3_1").pd_code)  # identity is None
-    with pytest.raises(UnknownKnot, match="no grid"):
-        invariants.compute(raw, "knot_floer_homology")
+    result = invariants.compute(raw, "knot_floer_homology")
+    assert result.value == ki.known_answer("3_1", "knot_floer_homology")
+    assert result.validation.verdict("knot_floer_homology") == "pass"
+
+
+@pytest.mark.parametrize("name", ["3_1", "5_2", "8_19"])
+def test_floer_of_a_braid_is_the_knot_s_with_its_chirality(name):
+    braid = knots.from_braid(ki.braid_word(name))
+    for invariant in ("knot_floer_homology", "ozsvath_szabo_tau"):
+        result = invariants.compute(braid, invariant, validate="off")
+        assert result.value == ki.known_answer(name, invariant)
+        assert result.provenance.inputs == "braid_word"

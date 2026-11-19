@@ -27,6 +27,10 @@ class Provenance:
     method: str  # e.g. "seifert_form"
     inputs: str  # e.g. "knotinfo:seifert_matrix"
     library_versions: tuple[tuple[str, str], ...] = ()  # (name, version), e.g. (("python", "3.12.3"),)
+    # A Floer result's grid: the grid itself, the reduced diagram it was built from, whether it
+    # was built now or read from the grid store, when, and by which code
+    # (engines/floer/grid_store.GridSource).
+    grid: Any = None
 
 
 @dataclass(frozen=True)
