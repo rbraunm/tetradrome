@@ -17,7 +17,8 @@ Code comments cite this document by section and phase number, so those numbers s
 | Rasmussen *s* | Lee deformation of the signed cube | exact ℚ lane | done |
 | HFK-hat, three-genus, τ | grid homology | shared F2 reducer | done to grid number 10 |
 | HFK-hat, three-genus | bordered algebras (`engines/bordered/`) | shared F2 reducer | done; equals KnotInfo on every knot through 12 crossings |
-| ε, ν, Υ | reduced CFK from the grid complex | shared F2 reducer | planned (Phase 7) |
+| the complex over F2[U, V]/(UV), τ, ν, ε | curved bordered matching algebras (`engines/bordered/`) | its own F2 linear algebra | done; τ and ε equal KnotInfo, τ, ν and ε equal Szabó's program, on every knot through 12 crossings |
+| Υ | the full knot Floer complex | — | planned (Phase 7) |
 
 Every invariant marked done is in `compute()` and runs as scheduler jobs.
 
@@ -51,9 +52,12 @@ FRONT ENDS (one per theory)
   global maximum is a type D structure over the algebra B(m, k, S); each slab below it is a DA
   bimodule, box-tensored on and cancelled to a smaller homotopy-equivalent structure. The global
   minimum is the terminal module, whose pairing is the complex reduced for HFK-hat. How the
-  paper's misprints and gaps were read: `../research/bordered-algebras.md`. The matching-algebra
-  version that gives the UV = 0 complex, and with it τ, ε and ν (arXiv:1707.00597,
-  arXiv:1912.01657), is not built.
+  paper's misprints and gaps were read: `../research/bordered-algebras.md`. Over the curved
+  matching algebras of arXiv:1707.00597 (in the curved form of its section 13 and
+  arXiv:1912.01657) the same walk gives the knot Floer complex over F2[U, V]/(UV), and from it τ,
+  ν and ε (`knot_complex.py`); how that paper was read:
+  `../research/bordered-matching-algebras.md`. The UV = 0 complex is not the full complex, so Υ
+  needs more.
 
 ```text
 src/tetradrome/
@@ -223,7 +227,7 @@ the reference it must agree with.
 | 7. Filtered complex as an artifact | (a) the bigraded grid complex with its bifiltered differential as a serializable object: generators with (Maslov, Alexander), arrows with their O- and X-crossing counts. (b) Reduction over F2, by filtered change of basis, to the simplified CFK (staircase ⊕ boxes). (c) ε, ν and Υ(t) read from the reduced model | planned | Oracles: ε and ν against KnotInfo and `knot_floer_homology`; the reduced complex against `knot_floer_homology` (`complex=True`); Υ against torus-knot closed forms. KnotInfo has no Υ column and Szabó's calculator does not output Υ; `yui-hfk` is a candidate oracle. Same grid-number bound as Phase 6 |
 | 8. Compact grid representation | generators named by lexicographic rank; slice results as columnar arrays; complexes stored CSC | built in the scheduled path. `grid_complexes` keeps permutation tuples as the readable oracle | Grid number 11 still does not fit. An on-disk form of the complex, decided with Phase 7 (a) |
 | 9. Reduced Khovanov | the basepoint-reduced complex: the subcomplex of enhanced states that label the basepoint circle *x*. A front-end change in `engines/khovanov/gradings.py::enhanced_generators`; the back end is untouched. F2 first | planned | Pin the *q*-shift against KnotInfo's `khovanov_reduced_mod2_vector`. Self-check: the result is the same at two basepoints. Wire a computed oracle: Khoca already returns the reduced theory, knotkit has `kk kh -r`, kht++ covers knots with a braid word (`../research/khtpp.md`, `../research/knotkit.md`). The canonical name follows `SPEC.md` section 7 |
-| 10. Engine choice and the bordered engine | (a) The Ozsváth–Szabó bordered-algebra algorithm (section 2) as a second Floer engine, written from the papers: it does not pay n!, gives the ranks, τ, ε, ν, genus, fibredness and the L-space test for knots, and gives the UV = 0 quotient of the knot Floer complex, not the whole complex. (b) An engine choice on `compute()`: by default the scheduler takes the bordered engine wherever it can answer (a knot, and an invariant the quotient complex determines) and the grid engine otherwise; a caller may name `grid` for any knot; naming `bordered` for a link or an invariant that needs the whole complex raises. (c) The engine that ran, and whether it was chosen or named, in the provenance | (a) for HFK-hat and genus: done (arXiv:1603.06559), equal to KnotInfo through 12 crossings. (b) and (c): done (`compute(..., engine=...)`, `Provenance.engine_choice`) | τ, ε and ν need the UV = 0 complex of the matching algebras (arXiv:1707.00597). The bordered engine must reproduce the grid engine's ranks exactly (section 6, class (A)) on every knot both reach. The grid engine stays the reference |
+| 10. Engine choice and the bordered engine | (a) The Ozsváth–Szabó bordered-algebra algorithm (section 2) as a second Floer engine, written from the papers: it does not pay n!, gives the ranks, τ, ε, ν, genus, fibredness and the L-space test for knots, and gives the UV = 0 quotient of the knot Floer complex, not the whole complex. (b) An engine choice on `compute()`: by default the scheduler takes the bordered engine wherever it can answer (a knot, and an invariant the quotient complex determines) and the grid engine otherwise; a caller may name `grid` for any knot; naming `bordered` for a link or an invariant that needs the whole complex raises. (c) The engine that ran, and whether it was chosen or named, in the provenance | (a) done: HFK-hat and genus (arXiv:1603.06559), and the UV = 0 complex with τ, ν and ε (arXiv:1707.00597), checked through 12 crossings. (b) and (c): done (`compute(..., engine=...)`, `Provenance.engine_choice`) | The bordered engine must reproduce the grid engine's ranks exactly (section 6, class (A)) on every knot both reach. The grid engine stays the reference |
 
 The Floer roster is the KnotInfo knots with HFK, τ and three-genus all tabulated (2,977),
 filtered by grid number: 13 at ≤ 8, 41 at ≤ 9, 185 at ≤ 10. `floer_roster` derives it from the

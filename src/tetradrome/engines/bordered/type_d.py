@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""Type D structures over B(m, k, S) (arXiv:1603.06559, section 2.4).
+"""Type D structures over B(m, k, S) (arXiv:1603.06559, section 2.4) and over the curved
+algebras of arXiv:1707.00597 (arXiv:1912.01657, section "Algebra").
 
 A generator has an idempotent state, a Maslov grading and a doubled Alexander grading. The map
 delta^1 is held as arrows: for each source, its targets with the set of pure elements on each
-arrow (a sum over F2). ``check`` verifies the structure relation, that every arrow lowers Maslov
-by one and keeps the Alexander grading, and that every element runs between the idempotents of
-its ends.
+arrow (a sum over F2). ``check`` verifies the structure relation, d + delta^1 delta^1 = mu_0 (x)
+Id with mu_0 the algebra's curvature (none for B(m, k, S)), that every arrow lowers Maslov by one
+and keeps the Alexander grading, and that every element runs between the idempotents of its
+ends.
 """
 from __future__ import annotations
 
@@ -60,7 +62,7 @@ class TypeD:
         outgoing = [list(self.terms(source)) for source in range(len(self))]
         multiply, differential = algebra.multiply, algebra.differential
         for source in range(len(self)):
-            total: set = set()
+            total = {(term, source) for term in algebra.curvature(idempotents[source])}
             for element, middle in outgoing[source]:
                 if element.c_strands:
                     for term in differential(element):

@@ -5,12 +5,13 @@
 R is the algebra isomorphism B(m, k, S) -> B(m, k, rho'(S)) that reflects positions p to m - p
 and strands s to m - 1 - s, so L moves become R moves. Conjugating a bimodule by R gives the
 bimodule of the rotated slab (Lemma 10.1); ``RotatedBimodule`` does that, which turns mho^1 at
-the left end into the minimum at the right end.
+the left end into the minimum at the right end. On a curved algebra R reflects the matching too
+and carries mu_0 to mu_0 (arXiv:1707.00597, Lemma 8.1).
 """
 from __future__ import annotations
 
 from ...errors import TetradromeError
-from .algebra import Algebra, Element, pack, unpack
+from .algebra import Algebra, CurvedAlgebra, Element, pack, unpack
 from .tensor import Generator
 
 
@@ -31,8 +32,12 @@ def rotated_strands(mask: int, strands: int) -> int:
 
 
 def rotated_algebra(algebra: Algebra) -> Algebra:
-    return Algebra(algebra.strands, algebra.occupied,
-                   frozenset(algebra.strands - 1 - s for s in algebra.upward))
+    last = algebra.strands - 1
+    upward = frozenset(last - s for s in algebra.upward)
+    if algebra.curved:
+        return CurvedAlgebra(algebra.strands, algebra.occupied, upward,
+                             tuple(last - algebra.partner[last - s] for s in range(last + 1)))
+    return Algebra(algebra.strands, algebra.occupied, upward)
 
 
 def rotated_element(element: Element, strands: int) -> Element:

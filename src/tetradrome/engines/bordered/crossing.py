@@ -18,11 +18,18 @@ Generator gradings: the Alexander grading is (5.13) with the output's upward set
 grading is -sign on the quadrant between the two outgoing ends and 0 on the other three, sign
 being the crossing's sign as a knot crossing; this is (5.2) with the zero chosen as Figure 2
 does, so that a state's grading is the sum of the local contributions of its quadrants.
+
+Over a curved algebra (arXiv:1707.00597, sections 3.2 and 13) the output matching is the input's
+with the two strands exchanged, and the operations are those above on C-free inputs, which are
+the gamma operations of the paper's (13.1), except that when the two strands are not matched
+to each other gamma_0 of S gains U_beta R_i (x) W + U_alpha L_{i+1} (x) E: the C-free parts of
+delta^1_2(S, C_{i+1, beta}) and delta^1_2(S, C_{i, alpha}) in (3.11). N^i reverses them with
+the rest.
 """
 from __future__ import annotations
 
 from ...errors import TetradromeError
-from .algebra import FIELD, FIELD_MASK, Algebra, Element
+from .algebra import FIELD, FIELD_MASK, Algebra, CurvedAlgebra, Element
 from .local_crossing import Word, local_delta
 from .tensor import Generator
 
@@ -37,9 +44,24 @@ class CrossingBimodule:
         self.upper = upper
         self.strand = strand
         self.positive = positive
-        swapped = {strand + 1 if s == strand else strand if s == strand + 1 else s
-                   for s in upper.upward}
-        self.lower = Algebra(upper.strands, upper.occupied, frozenset(swapped))
+
+        def swap(s):
+            return strand + 1 if s == strand else strand if s == strand + 1 else s
+
+        swapped = frozenset(swap(s) for s in upper.upward)
+        self._south_moves = None
+        if upper.curved:
+            partner = [0] * upper.strands
+            for s, t in enumerate(upper.partner):
+                partner[swap(s)] = swap(t)
+            self.lower = CurvedAlgebra(upper.strands, upper.occupied, swapped, tuple(partner))
+            alpha, beta = upper.partner[strand], upper.partner[strand + 1]
+            if alpha != strand + 1:
+                self._south_moves = (
+                    ("W", 1 << FIELD * strand | 2 << FIELD * beta),
+                    ("E", 1 << FIELD * (strand + 1) | 2 << FIELD * alpha))
+        else:
+            self.lower = Algebra(upper.strands, upper.occupied, swapped)
         self._types: dict = {}
         self._shift = FIELD * strand
         self._pair_fields = (FIELD_MASK | FIELD_MASK << FIELD) << self._shift
@@ -135,6 +157,8 @@ class CrossingBimodule:
     def _positive(self, generator: Generator, inputs: tuple, only: str | None) -> set:
         """delta^1 of P^i on ``generator`` with ``inputs``; with ``only``, just the terms ending
         at generators of that kind."""
+        if not inputs and generator.kind == "S" and self._south_moves is not None:
+            return self._curved_south(generator, only)
         local = local_delta(generator.kind, tuple(self.type_of(a) for a in inputs))
         if only is not None:
             local = [term for term in local if term[1] == only]
@@ -173,4 +197,18 @@ class CrossingBimodule:
                 rest | left_weight << shift | right_weight << shift + FIELD, c_strands)
             if element is not None and self.type_of(element) == word:
                 terms ^= {(element, target)}
+        return terms
+
+    def _curved_south(self, generator: Generator, only: str | None) -> set:
+        """gamma_0 of S when the crossing's strands are not matched: U_beta R_i (x) W +
+        U_alpha L_{i+1} (x) E, alpha and beta the strands matched to i and i + 1 above."""
+        targets = {target.kind: target for target in self.generators(generator.right)}
+        terms: set = set()
+        for kind, weights in self._south_moves:
+            target = targets.get(kind)
+            if target is None or only is not None and kind != only:
+                continue
+            element = self.lower.element(generator.left, target.left, weights, 0)
+            if element is not None:
+                terms.add((element, target))
         return terms

@@ -17,6 +17,9 @@ The doubled weights are packed into one integer, ``FIELD`` bits per strand, stra
 FIELD * s upwards (``pack``, ``unpack``), so that adding weights is adding integers
 and the relations are tested with masks. A weight must stay below ``LIMIT``, which keeps every
 field and every sum of fields inside its bits; a larger one raises.
+
+``CurvedAlgebra`` is the algebra of arXiv:1707.00597 in its curved form: B(m, k) with no C's and
+the curvature of a matching of the strands.
 """
 from __future__ import annotations
 
@@ -83,6 +86,8 @@ def _every(strands: int, value: int) -> int:
 
 class Algebra:
     """B(strands, occupied, upward) with its relations, products, differential and gradings."""
+
+    curved = False
 
     def __init__(self, strands: int, occupied: int, upward: frozenset):
         if not 0 <= occupied <= strands + 1:
@@ -238,6 +243,10 @@ class Algebra:
         """Twice the Alexander grading (the paper's (3.8))."""
         return field_sum(element.weights) - 2 * field_sum(element.weights & self.upward_fields)
 
+    def curvature(self, state: int) -> frozenset:
+        """mu_0 at ``state``: none, B(m, k, S) is a differential algebra."""
+        return frozenset()
+
     def identity(self, state: int) -> Element:
         return Element(state, state, 0, 0)
 
@@ -258,3 +267,53 @@ class Algebra:
 
     def c(self, state: int, strand: int) -> Element | None:
         return self.element(state, state, 2 << FIELD * strand, 1 << strand)
+
+
+class CurvedAlgebra(Algebra):
+    """B(strands, occupied) curved by mu_0, the sum of U_i U_j over the pairs {i, j} of a
+    matching of its strands (arXiv:1912.01657, (eq:CurvatureOfB)): the curved form of the
+    algebra A(n, k, M) of arXiv:1707.00597, section 2.2, with no C's.
+
+    ``partner[s]`` is the strand matched to s: the two ends of an arc of the diagram above the
+    slice. Such an arc leaves the slice upwards at one end and returns at the other, so every
+    pair has one upward strand; the upward strands only grade the algebra.
+    """
+
+    curved = True
+
+    def __init__(self, strands: int, occupied: int, upward: frozenset, partner: tuple):
+        super().__init__(strands, occupied, upward)
+        if len(partner) != strands or any(
+                not 0 <= partner[s] < strands or partner[s] == s or partner[partner[s]] != s
+                for s in range(strands)):
+            raise TetradromeError(f"{partner} is not a matching of {strands} strands.")
+        if any((s in self.upward) == (partner[s] in self.upward) for s in range(strands)):
+            raise TetradromeError(f"the matching {partner} pairs two strands pointing the same "
+                                  f"way among the upward {sorted(self.upward)}.")
+        self.partner = tuple(partner)
+        self._curvatures: dict = {}
+
+    def __eq__(self, other) -> bool:
+        return (isinstance(other, CurvedAlgebra) and self.strands == other.strands
+                and self.occupied == other.occupied and self.upward == other.upward
+                and self.partner == other.partner)
+
+    def __hash__(self) -> int:
+        return hash((self.strands, self.occupied, self.upward, self.partner))
+
+    def __repr__(self) -> str:
+        return f"B({self.strands}, {self.occupied}, {sorted(self.upward)}, {self.partner})"
+
+    def _doubled_c_weights(self, c_strands: int) -> int:
+        raise TetradromeError(f"C's on strands {positions(c_strands)} of {self}, which has none.")
+
+    def curvature(self, state: int) -> frozenset:
+        """mu_0 at ``state``: its nonzero terms U_i U_j."""
+        found = self._curvatures.get(state)
+        if found is None:
+            found = frozenset(
+                term for term in (self.element(state, state, 2 << FIELD * s | 2 << FIELD * t, 0)
+                                  for s, t in enumerate(self.partner) if s < t)
+                if term is not None)
+            self._curvatures[state] = found
+        return found

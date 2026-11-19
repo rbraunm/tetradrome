@@ -15,11 +15,15 @@ idempotent whose relative weight to x vanishes on the new strands. The lemma's p
 its cases with the types of x it allows; for the other type no such y exists (Y with input
 L_{c-1}, for one) and delta^1_2 is zero. Every generator has Maslov and Alexander grading 0. With
 no strands above, this is the global maximum's type D structure (section 8.1).
+
+Over a curved algebra (arXiv:1707.00597, section 5) the two new strands are matched to each
+other, and the C U loop is gone: with the C's that delta^1_2 carries through it is C^2 (x) Q,
+which the curved form drops (section 13.1).
 """
 from __future__ import annotations
 
 from ...errors import TetradromeError
-from .algebra import FIELD, Algebra, Element
+from .algebra import FIELD, Algebra, CurvedAlgebra, Element
 from .tensor import Generator
 
 
@@ -29,10 +33,23 @@ class MaximumBimodule:
             raise TetradromeError(f"no maximum at strand {strand} below {upper}.")
         self.upper = upper
         self.strand = strand
-        upward = {s if s < strand else s + 2 for s in upper.upward}
+
+        def inserted(s):
+            return s if s < strand else s + 2
+
+        upward = {inserted(s) for s in upper.upward}
         upward.add(strand if left_upward else strand + 1)
-        self.lower = Algebra(upper.strands + 2, upper.occupied + 1, frozenset(upward))
-        self._loop_c = 1 << strand if left_upward else 1 << strand + 1
+        if upper.curved:
+            partner = [0] * (upper.strands + 2)
+            partner[strand], partner[strand + 1] = strand + 1, strand
+            for s, t in enumerate(upper.partner):
+                partner[inserted(s)] = inserted(t)
+            self.lower = CurvedAlgebra(upper.strands + 2, upper.occupied + 1, frozenset(upward),
+                                       tuple(partner))
+            self._loop_c = None
+        else:
+            self.lower = Algebra(upper.strands + 2, upper.occupied + 1, frozenset(upward))
+            self._loop_c = 1 << strand if left_upward else 1 << strand + 1
 
     def _widened(self, state: int) -> int:
         low = state & ((1 << self.strand) - 1)
@@ -81,7 +98,7 @@ class MaximumBimodule:
         lower, c = self.lower, self.strand
         state = generator.left
         across = 1 << FIELD * c | 1 << FIELD * (c + 1)
-        candidates = [(state, 2 * across, self._loop_c)]
+        candidates = [] if self._loop_c is None else [(state, 2 * across, self._loop_c)]
         if generator.kind != "Z":
             candidates.append((state ^ (1 << c) ^ (1 << c + 2), across, 0))
         terms: set = set()
