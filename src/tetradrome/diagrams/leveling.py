@@ -66,14 +66,20 @@ def leveling(pd: PDCode) -> list:
     order = [0]
     rest = set(range(len(pd))) - {0}
     while len(rest) > 1:
-        for candidate in sorted(rest - {last}):
-            if neighbours[candidate] - rest and _connected(rest - {candidate}, neighbours):
-                break
-        else:
+        # Of the crossings that may come next, the one with the most arcs reaching below the
+        # sweep line narrows the line most: each such arc leaves it, each other arc joins it.
+        reaching = {candidate: sum(1 for position in range(4)
+                                   if across(candidate, position)[0] not in rest)
+                    for candidate in rest - {last}}
+        best = next((candidate for candidate in sorted(reaching,
+                                                       key=lambda c: (-reaching[c], c))
+                     if reaching[candidate] and _connected(rest - {candidate}, neighbours)),
+                    None)
+        if best is None:
             raise TetradromeError("no crossing continues the leveling; the diagram is not "
                                   "reduced.")
-        order.append(candidate)
-        rest.remove(candidate)
+        order.append(best)
+        rest.remove(best)
     order.append(last)
     return order
 

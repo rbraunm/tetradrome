@@ -256,7 +256,10 @@ closure (`diagrams/braid_closure.py`). KnotInfo's `grid_notation` is not an inpu
    vertices. A link is refused.
 2. **Build** (`grid_construction.py`). Bae and Park's construction (arc index ≤ c + 2), in No,
    Oh and Yoo's form (arXiv:1806.09719). The crossings are ordered so that every cut leaves both
-   sides connected (a bisected vertex leveling). The sweep draws the diagram with horizontal and
+   sides connected (a bisected vertex leveling, `diagrams/leveling.py`); of the crossings that
+   may come next, the one with the most arcs below the sweep line comes first, which keeps the
+   line narrow for the Morse presentation (`diagrams/morse.py`) cut from the same sweep. The
+   sweep draws the diagram with horizontal and
    vertical segments, c + 2 horizontal ones, each crossing at most one vertical one. Vertical
    segments become points on a binding axis and horizontal ones become pages, in front when they
    pass over. That gives a grid of size c + 2, which is the smallest grid when the reduced
@@ -275,9 +278,9 @@ closure (`diagrams/braid_closure.py`). KnotInfo's `grid_notation` is not an inpu
 
 | Measured on the 32-CPU container | Result |
 |---|---|
-| Build, every KnotInfo knot through 13 crossings (12,965) | no failure; size c + 2 every time; about 1 ms each; the 6,729 alternating knots at KnotInfo's grid size |
-| Search, the 1,126 non-alternating knots through 12 crossings | 1,123 at KnotInfo's grid size, 3 one row over (12n_25, 12n_242, 12n_435); median 0.4 s, slowest 2.0 s |
-| Search, 60 sampled non-alternating 13-crossing knots | all at KnotInfo's arc index; median 0.9 s, slowest 2.6 s |
+| Build, every KnotInfo knot through 13 crossings (12,965) | no failure; size c + 2 every time; about 7 ms each; the 6,729 alternating knots at KnotInfo's grid size |
+| Search, the 1,126 non-alternating knots through 12 crossings | 1,125 at KnotInfo's grid size, 12n_242 one row over; median 0.3 s, slowest 1.7 s |
+| Search, 60 sampled non-alternating 13-crossing knots | all at KnotInfo's arc index; median 0.75 s, slowest 2.4 s |
 | One start searched exhaustively instead, the same 60 | 58 at the arc index; median 0.06 s, slowest 104 s |
 
 Grids are checked by invariants already validated: HFK-hat equal to KnotInfo's, chirality
