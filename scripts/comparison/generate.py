@@ -366,18 +366,20 @@ def emit(tetraCells, oracleResults, oracleLive, facts, ladder, reps):
 
     add("## Honest caveats\n")
     add("- **Speed is a target, not a verdict.** Where Tetradrome trails a compiled oracle "
-        "(notably the n! grid Floer engine vs Szabo's compiled-C HFKcalc), that gap is expected "
-        "and is the documented case for the Tier-2 Szabo-cube engine. Trailing a compiled tool "
-        "while staying native, auditable, and portable is the accepted trade.")
+        "(notably the n! grid Floer engine vs Szabo's compiled-C HFKcalc), that gap is expected: "
+        "the grid method pays n! and Szabo's bordered-algebra algorithm does not. A native "
+        "bordered engine is planned (roadmap/design/homology-engine.md, Phase 10). Trailing a "
+        "compiled tool while staying native, auditable, and portable is the accepted trade.")
     add("- **In-process vs cold-subprocess timings.** These are not all measured the same way. "
-        "Oracles called in-process from the already-warm Python (`knot_floer_homology`, Regina, "
-        "SnapPy) report pure computation -- sub-millisecond to a few ms. The subprocess oracles "
-        "(SageMath, KnotJob, JavaKh, KhoHo) boot a fresh runtime on every call, so their numbers "
-        "are dominated by startup, not the algorithm: Sage's ~2.6 s is almost entirely launching "
-        "its stack. A native-vs-subprocess gap (e.g. Jones vs Sage) therefore largely measures "
-        "process launch, not math; the warm in-process oracles are the fair head-to-head, where "
-        "Regina actually edges native on Jones. Amortizing that startup with a persistent oracle "
-        "session is a tracked improvement.")
+        "Tetradrome is timed in a process of its own, best of the repeats, so its numbers leave "
+        "out its own start-up. Oracles called in-process from the already-warm Python "
+        "(`knot_floer_homology`, Regina, SnapPy, Khoca) report pure computation. The subprocess "
+        "oracles (SageMath, KnotJob, JavaKh, KhoHo, knotkit, kht++) start a fresh program on "
+        "every call, so their numbers include that start, and for the Java and Sage stacks are "
+        "dominated by it. A native-vs-subprocess gap therefore partly measures process launch, "
+        "not math; the in-process oracles are the fair head-to-head, where Regina is ahead of "
+        "native on Jones and Alexander. Amortizing that startup with a persistent oracle session "
+        "is a tracked improvement.")
     add("- **Chirality.** Tetradrome follows KnotInfo's mirror convention; `knot_floer_homology` "
         "may report the mirror, so tau / s agreement is judged up to sign.")
     add("- **Host matters.** These are this host's numbers. The grid Floer engine's multi-core "
