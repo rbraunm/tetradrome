@@ -115,19 +115,17 @@ def _remove_nugatory(crossings) -> bool:
     return False
 
 
-def _relabelled(crossings, start) -> PDCode:
+def _relabelled(crossings, ends, start) -> PDCode:
     """Labels 1..2n in the order the knot passes them, from the arc entering the slot
     ``start = (crossing, position)``; crossings numbered in the order the walk first meets them,
-    each listed from its incoming understrand."""
-    ends = _slots(crossings)
+    each listed from its incoming understrand. ``ends`` is ``_slots(crossings)``."""
     label_of = {}
     understrand_entry = {}
-    met = []
+    met: dict = {}
     index, position = start
     label = 0
     while True:
-        if index not in met:
-            met.append(index)
+        met.setdefault(index, None)
         if position % 2 == 0:
             understrand_entry[index] = position
         leaving = (index, (position + 2) % 4)
@@ -148,7 +146,8 @@ def relabellings(pd: PDCode) -> list:
     """The diagram relabelled from every arc in both directions: each a code of the same
     diagram, first in canonical order (the least)."""
     crossings = [list(crossing) for crossing in pd]
-    codes = {_relabelled(crossings, (index, position))
+    ends = _slots(crossings)
+    codes = {_relabelled(crossings, ends, (index, position))
              for index in range(len(crossings)) for position in range(4)}
     return sorted(codes)
 

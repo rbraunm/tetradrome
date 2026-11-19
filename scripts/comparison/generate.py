@@ -366,10 +366,11 @@ def emit(tetraCells, oracleResults, oracleLive, facts, ladder, reps):
 
     add("## Honest caveats\n")
     add("- **Speed is a target, not a verdict.** Where Tetradrome trails a compiled oracle "
-        "(notably the n! grid Floer engine vs Szabo's compiled-C HFKcalc), that gap is expected: "
-        "the grid method pays n! and Szabo's bordered-algebra algorithm does not. A native "
-        "bordered engine is planned (roadmap/design/homology-engine.md, Phase 10). Trailing a "
-        "compiled tool while staying native, auditable, and portable is the accepted trade.")
+        "(notably knot Floer homology vs Szabo's compiled-C HFKcalc), the gap is pure Python "
+        "against compiled code: both run bordered-algebra algorithms. tau still runs on the "
+        "grid engine, which pays n!, until the bordered engine computes it "
+        "(roadmap/design/homology-engine.md, Phase 10). Trailing a compiled tool while staying "
+        "native, auditable, and portable is the accepted trade.")
     add("- **In-process vs cold-subprocess timings.** These are not all measured the same way. "
         "Tetradrome is timed in a process of its own, best of the repeats, so its numbers leave "
         "out its own start-up. Oracles called in-process from the already-warm Python "

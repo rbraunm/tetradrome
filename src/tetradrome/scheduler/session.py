@@ -29,6 +29,8 @@ logger = logging.getLogger(__name__)
 
 _calibration = Calibration()
 _machine: Machine | None = None
+# Read once with the machine: reading the processor model costs milliseconds in a container.
+_machine_identity: dict | None = None
 _worker: dict = {}
 # Kept between runs, so a calculation after the first finds workers waiting.
 _pool = WorkerPool()
@@ -68,9 +70,9 @@ class Recorder:
         self.jobs: list = []
 
     def record(self) -> ComputationRecord:
-        if _machine is None:
+        if _machine_identity is None:
             raise TetradromeError("nothing was scheduled while recording")
-        return ComputationRecord(calibration_store.machine_identity(_machine),
+        return ComputationRecord(_machine_identity,
                                  calibration_store.software_identity()["source"],
                                  tuple(self.jobs))
 
@@ -92,7 +94,7 @@ def recording():
 def capped_machine(mem_cap_bytes: int | None, vram_cap_bytes: int | None) -> Machine:
     """The detected machine, optionally lowered to a tighter system-RAM and/or per-GPU VRAM
     ceiling. A cap only ever lowers a limit; it never promises more than the hardware has."""
-    global _machine
+    global _machine, _machine_identity
     if _machine is None:
         from ..calibrate import ensure          # the benchmark imports the engines, which import this
         machine = detect_machine()
@@ -100,6 +102,7 @@ def capped_machine(mem_cap_bytes: int | None, vram_cap_bytes: int | None) -> Mac
         _worker.update(worker_ram_baseline=figures["worker"]["ram_baseline"],
                        context_vram_reserve=figures["worker"]["context_vram"],
                        worker_start_seconds=figures["worker"]["start_seconds"])
+        _machine_identity = calibration_store.machine_identity(machine)
         _machine = machine
     if mem_cap_bytes is None and vram_cap_bytes is None:
         return _machine

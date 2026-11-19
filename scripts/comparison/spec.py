@@ -55,12 +55,12 @@ GROUPS = [
         "kfh",
         "knot Floer homology -- vs Szabo's HFK Calculator (`knot_floer_homology`)",
         "knot_floer_homology (Szabo HFKcalc, GPLv2+, binary wheel)",
-        "Tetradrome computes these natively from a grid diagram (Apache-2.0, auditable, "
-        "multi-core/optional-GPU accelerated with every tier checked to reproduce the "
-        "reference). `knot_floer_homology` wraps Szabo's compiled-C HFKcalc and is a validator "
-        "only, never a compute backend. Expect it to be far faster than the grid engine on a "
-        "real knot: it runs the bordered-algebra algorithm, which does not pay the grid's n! -- "
-        "that gap is the case for a bordered-algebra engine.",
+        "Tetradrome computes these natively with two engines (Apache-2.0, auditable): its own "
+        "bordered-algebra engine, written from Ozsvath and Szabo's papers, for HFK-hat and the "
+        "genus, and the grid engine (multi-core/optional-GPU, every tier checked to reproduce "
+        "the reference) for tau, which the bordered engine does not compute yet. Both must give "
+        "the same ranks. `knot_floer_homology` wraps Szabo's compiled-C HFKcalc, which runs the "
+        "bordered-algebra algorithm too, and is a validator only, never a compute backend.",
     ),
     Group(
         "knotjob",
@@ -120,14 +120,15 @@ GROUPS = [
 INVARIANTS = [
     # ---- knot Floer (kfh group) -------------------------------------------------------------
     Invariant("hfk", "HFK-hat (ranks / polynomial)", "kfh",
-              "Grid (MOS) knot Floer homology; bigraded ranks, Euler char = Alexander.",
-              "PD / grid", "bigraded ranks, HFK polynomial", "done", "yes", ("compute", "knot_floer_homology")),
+              "Bordered-algebra knot Floer homology (Ozsvath-Szabo), grid homology by name; "
+              "bigraded ranks, Euler char = Alexander.",
+              "PD / braid", "bigraded ranks, HFK polynomial", "done", "yes", ("compute", "knot_floer_homology")),
     Invariant("tau", "Ozsvath-Szabo tau", "kfh",
               "tau from the Alexander filtration on grid homology (concordance, |tau| <= g4).",
-              "PD / grid", "integer", "done", "yes", ("compute", "ozsvath_szabo_tau")),
+              "PD / braid", "integer", "done", "yes", ("compute", "ozsvath_szabo_tau")),
     Invariant("seifert_genus", "Seifert genus (via HFK)", "kfh",
-              "Top Alexander grading with nonzero HFK (HFK detects genus).",
-              "PD / grid", "integer", "done", "yes", ("compute", "three_genus")),
+              "Top Alexander grading with nonzero HFK (HFK detects genus), from the bordered engine.",
+              "PD / braid", "integer", "done", "yes", ("compute", "three_genus")),
     Invariant("fibered", "Fibered-ness (via HFK)", "kfh",
               "HFK detects fibredness (Ni): top Alexander grading has rank 1.",
               "PD / grid", "bool", "near", "yes", None),
