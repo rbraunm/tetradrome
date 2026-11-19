@@ -1036,6 +1036,7 @@ class Scheduler:
             elif placement in _POOLED:
                 result_queue()                           # the sampler starts with the first worker
                 worker = pool.take()
+                held_before[job.key] = worker.retained
                 launched_at[job.key] = time.perf_counter()
                 worker.dispatch(tag, job.key, job.run, job_inputs, deps, placed.cores,
                                 job.shards, store(), token)
@@ -1087,7 +1088,9 @@ class Scheduler:
             with pids_lock:
                 running_pids.pop(key, None)
             ledger.remove(key)
-            pool.drop(proc)
+            if held_before.pop(key, None) is not None:
+                pool.drop(proc)
+                charge_pool()
             proc.terminate()
             proc.join(timeout=_GRACE_SECONDS)
             if proc.is_alive():
@@ -1117,6 +1120,20 @@ class Scheduler:
             logger.error("job %r failed; abandoning its component (%d job(s)): %s",
                          failed_key, len(component), error_text.strip().splitlines()[-1])
 
+        held_before: dict = {}          # running key -> what its pool worker held before the job
+
+        def charge_pool() -> None:
+            # What the pool's workers hold between jobs is real memory. It is charged here, to
+            # the pool, and taken off what each job is seen to use.
+            ledger.discard(("__pool__",))
+            kept = sum(worker.retained for worker in pool.workers)
+            if kept:
+                ledger.add(Allocation(
+                    job_key=("__pool__",), placement=Placement.CPU_UNPINNED, cores=frozenset(),
+                    declared_ram=kept, node_index=None))
+
+        charge_pool()                   # a pool kept from an earlier run comes with what it holds
+
         def drain_samples() -> bool:
             got = False
             while True:
@@ -1127,6 +1144,7 @@ class Scheduler:
                 got = True
                 if key not in running:
                     continue
+                private = max(private - held_before.get(key, 0), 0)
                 peak_actual[key] = max(peak_actual.get(key, 0), private)
                 ledger.set_actual(key, private)
                 if private > declared_ram[key] and key not in over_warned:
@@ -1167,8 +1185,10 @@ class Scheduler:
                 if not isinstance(proc, PoolWorker):
                     proc.join()                         # a one-job process: reap it
                 else:
+                    del held_before[key]
                     pool.give_back(proc, retained[0] if retained else None,
                                    self.pool_retire_bytes)
+                    charge_pool()
                 turnaround = time.perf_counter() - launched_at.pop(key)
                 if status == "ok":
                     overheads[key] = max(turnaround - compute_time, 0.0)

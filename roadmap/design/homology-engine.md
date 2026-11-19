@@ -165,7 +165,7 @@ Times are data, never a gate.
 |---|---|
 | CPU reducers | `bitint` is the fastest in every regime tested; small dense blocks favour the CPU tiers |
 | Dense GPU kernel | correct; about 14 times slower than `bitint` at 2048 × 2048, because it syncs with the host once per column |
-| Grid Floer, grid number 10 (3.6 million states), 32-CPU two-socket container | HFK-hat 15 s, τ 314 s ([scheduler.md](scheduler.md)) |
+| Grid Floer, grid number 10 (3.6 million states), 32-CPU two-socket container | HFK-hat 15 s, τ 24 s ([scheduler.md](scheduler.md)) |
 | Grid Floer, grid number 11 (39.9 million states) | does not fit: over 200 GiB |
 
 Szabó's calculator runs a different algorithm (section 2), so its times are not a

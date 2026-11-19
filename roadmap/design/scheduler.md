@@ -38,8 +38,8 @@ by the next run.
 
 CPU jobs run in a pool of long-lived workers. A worker takes one job after another: it pins
 itself to the job's CPUs, runs it, publishes the result and waits. One left holding more than
-128 MiB after a job is retired, so what a large job leaves behind is not charged to the jobs
-after it. The engines' session keeps one pool for the life of the process, so a calculation
+128 MiB after a job is retired. A job is charged for what it adds to its worker; what the
+workers hold between jobs is charged to the pool. The engines' session keeps one pool for the life of the process, so a calculation
 after the first finds workers waiting; between runs it keeps idle workers only up to half the
 admission margin of memory. A Scheduler used on its own makes a pool for its run. Workers are forked from a template process that has already imported numpy
 and bound the compiled grid kernels (`engines/floer/prewarm.py`), so a worker starts ready. On
@@ -147,23 +147,28 @@ raises on any failure, so no partial answer is returned.
 
 ## Measured
 
-On a 32-CPU, two-socket container, one knot of grid number 10 (3.6 million states):
+On a 32-CPU, two-socket container, end to end, histogram included:
+
+| | HFK-hat | τ |
+|---|---|---|
+| one knot of grid number 10 (3.6 million states) | 15 s | 24 s |
+| grid number 8, repeated in one process | 240 ms | 105 ms |
+| grid number 7 | 70 ms | 22 ms |
+| grid number 5 | 14 ms | 2 ms |
 
 | | Seconds |
 |---|---|
-| HFK-hat, end to end, histogram included | 15 |
-| of which the histogram | 2 |
-| τ, end to end | 314 |
-| handing a job to a waiting worker | 0.002 |
-| starting a worker | 0.020 |
+| handing a job to a waiting worker | 0.003 |
+| of which the scheduler's own time | 0.0008 |
+| starting a worker | 0.018 |
 | a determinant through `compute()`, against 0.04 ms called directly | 0.0003 |
 
 The 185 roster knots of grid number up to 10, as one `run_many` graph each:
 
 | | Seconds |
 |---|---|
-| HFK-hat for all 185, sharing the machine with four other processes | 3,730 |
-| τ for all 185, alone | 1,358 |
+| HFK-hat for all 185 | 1,060 |
+| τ for all 185, on the set-based reducer | 1,340 |
 
 A batch of six grid-number-10 knots, HFK-hat with the histograms already known:
 
@@ -175,9 +180,9 @@ A batch of six grid-number-10 knots, HFK-hat with the histograms already known:
 | and a merge per Alexander grading, a rank per boundary map | 49 | 25.7 |
 | and long-lived workers, longest chain first, second threads on any measured gain | 46 | 26.5 |
 
-The old one-knot-at-a-time path took 5 h 15 min to 5 h 32 min for 43 knots' HFK-hat per process,
-four processes side by side. The τ run's last five minutes were two knots' single-core rank and
-level jobs.
+The whole heavy tier (`pytest --heavy`, 1,220 tests) takes 1 h 19 min, 28 minutes of it two
+single-threaded comparisons of the compiled kernels with the pure-Python reference at grid
+number 10.
 
 NUMA contention (`tools/gen_contention_probe.py`, five runs; x is per-state time against one
 worker alone, 15 µs per state for a generation slice and 1.7 µs for a histogram slice):

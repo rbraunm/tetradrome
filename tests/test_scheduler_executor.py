@@ -383,6 +383,12 @@ def _small_machine(cap):
     return Machine(nodes=(NumaNode(0, cores, cap),), gpus=(), mem_cap_bytes=cap)
 
 
+# These machines are megabytes large, to make memory pressure with small numbers. A real worker
+# holds more than that between jobs, and what the pool holds is charged, so on them no worker is
+# kept from one job to the next.
+_NO_KEPT_WORKERS = {"pool_retire_bytes": 0}
+
+
 def _producer(key, value):
     # 1 MiB working set, but a declared 2 MiB held result -- the result is what builds up.
     return Job(key=key, run=produce, inputs={"value": value},
@@ -398,7 +404,7 @@ def test_spill_relieves_output_pressure_and_restores():
     producers = [_producer("p1", 100), _producer("p2", 20), _producer("p3", 3)]
     consumer = Job(key="sum", run=passthrough, inputs={"add": 0},
                    paths=(_cpu(),), dependencies=("p1", "p2", "p3"))
-    report = Scheduler(_small_machine(cap), margin=0.0,
+    report = Scheduler(_small_machine(cap), margin=0.0, **_NO_KEPT_WORKERS,
                        spill_floor_bytes=_SMALL).run(JobGraph(producers + [consumer]))
     assert report.results["sum"] == 123          # restored deps fed the consumer correctly
     assert report.spill_count >= 1               # the degraded path fired
@@ -414,6 +420,7 @@ def test_spill_exhausted_aborts():
     consumer = Job(key="sum", run=passthrough, inputs={"add": 0},
                    paths=(_cpu(),), dependencies=("p1", "p2", "p3"))
     sched = Scheduler(_small_machine(cap), margin=0.0, spill_floor_bytes=_SMALL,
+                       **_NO_KEPT_WORKERS,
                       spill_budget_bytes=0)
     with pytest.raises(TetradromeError, match="stalled"):
         sched.run(JobGraph(producers + [consumer]))
@@ -434,6 +441,7 @@ def test_producers_of_a_second_calculation_wait_while_the_first_needs_the_room()
                        dependencies=[producer.key for producer in producers])
         jobs += producers + [consumer]
     report = Scheduler(_small_machine(cap), margin=0.0, spill_floor_bytes=_SMALL,
+                       **_NO_KEPT_WORKERS,
                        spill_budget_bytes=0).run(JobGraph(jobs))
     assert report.failures == []
     assert report.results == {("a", "sum"): 6, ("b", "sum"): 60}
@@ -451,7 +459,7 @@ def test_input_spill_relieves_resident_input_pressure():
     cap = 4 * _SMALL
     jobs = [Job(key=f"j{i}", run=consume_big, inputs={"blob": bytes(2 * _SMALL)},
                 paths=(_cpu(),)) for i in range(3)]
-    report = Scheduler(_small_machine(cap), margin=0.0,
+    report = Scheduler(_small_machine(cap), margin=0.0, **_NO_KEPT_WORKERS,
                        spill_floor_bytes=_SMALL).run(JobGraph(jobs))
     assert all(report.results[f"j{i}"] == 2 * _SMALL for i in range(3))  # restored inputs intact
     assert report.spill_count >= 1                                       # input spill fired
@@ -939,6 +947,39 @@ def test_a_result_posted_for_an_earlier_run_is_ignored():
     finally:
         pool.close()
     assert report.results == {"x": 2}
+
+
+_kept_in_worker = []
+
+
+def keep_memory(inputs, deps):
+    _kept_in_worker.append(bytearray(b"x") * inputs["bytes"])    # stays in this worker afterwards
+    return os.getpid()
+
+
+def nap_then_pid(inputs, deps):
+    time.sleep(inputs["seconds"])
+    return os.getpid()
+
+
+def test_a_job_is_not_charged_for_what_its_worker_held_before_it(caplog):
+    # The first job leaves 64 MiB behind in its worker. The second runs in that worker, declares
+    # 8 MiB and uses almost nothing: it must not be seen as 64 MiB over.
+    def one(key, run, inputs, ram):
+        return JobGraph([Job(key=key, run=run, inputs=inputs,
+                             paths=(ComputePath(Placement.CPU_PINNED, cores=1, ram_bytes=ram),))])
+
+    pool = WorkerPool()
+    try:
+        first = Scheduler(_machine(), margin=0.1, pool=pool).run(
+            one("fill", keep_memory, {"bytes": 64 * _SMALL}, 96 * _SMALL))
+        with caplog.at_level("WARNING"):
+            second = Scheduler(_machine(), margin=0.1, pool=pool, sample_interval=0.05).run(
+                one("small", nap_then_pid, {"seconds": 0.5}, 8 * _SMALL))
+    finally:
+        pool.close()
+    assert second.results["small"] == first.results["fill"]       # the same worker ran both
+    assert not any("exceeded predicted memory" in record.message for record in caplog.records)
 
 
 def test_idle_workers_are_trimmed_to_a_memory_budget():
