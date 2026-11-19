@@ -49,6 +49,9 @@ FRONT ENDS (one per theory)
 
 ```text
 src/tetradrome/
+  diagrams/
+    reduction.py          kinks and nugatory crossings removed; canonical labelling
+    braid_closure.py      a braid's closure as a PD code
   invariants/
     seifert.py            Seifert-form engine: determinant, signature, Alexander
     jones.py              Kauffman bracket -> Jones
@@ -58,7 +61,8 @@ src/tetradrome/
     khovanov/             gradings, differential (F2 and signed Q), homology, lee.py, rasmussen.py
     floer/                grid.py, gradings.py, differential.py, generation.py, homology.py
                           (HFK-hat, genus), tau.py, scheduling.py (job graphs), roster.py,
-                          the compiled block kernels (*_jit.py) and prewarm.py
+                          the compiled block kernels (*_jit.py) and prewarm.py;
+                          grid_construction.py, grid_moves.py, grid_store.py (section 9)
   algebra/
     complex.py            F2 graded complex (CSC columns)
     reduce_reference.py   set-based F2 reducer: rank, kernel, homology -- the reference
@@ -203,10 +207,11 @@ the reference it must agree with.
 | 3. Lee and *s* | signed Khovanov over ℚ; the Lee deformation; *s* from the quantum filtration; exact `Fraction` arithmetic | done; validated against KnotInfo for s = 0, ±2, ±4, ±6 | KnotInfo has s = 2τ on every row, so a check that tells s from 2τ needs an off-table knot such as 14n19265 (`docs/validation.md`). A calculation is one job; its build and per-grading reductions are not split |
 | 4. Exact reductions | Gaussian cancellation over F2 and ℚ (`reduce_gaussian.py`), verified `raw == reduced` | done, as a reference: it rescans for a pivot at each step | It cancels after the full cube is built. Cancelling while building (Bar-Natan scanning) is not implemented |
 | 5. Reduction tiers | `bitint`, numpy words, Numba, the dense GPU kernel; the tier registry; GPU detection; size and cost prediction | done; every tier equals the reference, GPU and Numba confirmed on hardware | On-device GPU kernel and `multimodular.py` (section 3) |
-| 6. Grid Floer | grid model, gradings, bigraded and filtered differentials, HFK-hat, three-genus, τ; in `compute()`; validated by `knot_floer_homology` and KnotInfo | done to grid number 10. Default tests cover the 13 roster knots of grid number ≤ 8; `pytest --heavy` covers the 185 of grid number ≤ 10 | Off-table knots: the grid comes from KnotInfo's `grid_notation`. Grid number 11. τ's rank and level search are two long single jobs on the set-based reducer. No test sends an oversized grid through the gate (the refusal is tested with synthetic jobs) |
+| 6. Grid Floer | grid model, gradings, bigraded and filtered differentials, HFK-hat, three-genus, τ; in `compute()` for any knot, its grid built from its crossing diagram or braid (section 9); validated by `knot_floer_homology` and KnotInfo | done to grid number 10. Default tests cover the 13 roster knots of grid number ≤ 8; `pytest --heavy` covers the 185 of grid number ≤ 10 | Grid number 11. τ's rank and level search are two long single jobs on the set-based reducer. No test sends an oversized grid through the gate (the refusal is tested with synthetic jobs) |
 | 7. Filtered complex as an artifact | (a) the bigraded grid complex with its bifiltered differential as a serializable object: generators with (Maslov, Alexander), arrows with their O- and X-crossing counts. (b) Reduction over F2, by filtered change of basis, to the simplified CFK (staircase ⊕ boxes). (c) ε, ν and Υ(t) read from the reduced model | planned | Oracles: ε and ν against KnotInfo and `knot_floer_homology`; the reduced complex against `knot_floer_homology` (`complex=True`); Υ against torus-knot closed forms. KnotInfo has no Υ column and Szabó's calculator does not output Υ; `yui-hfk` is a candidate oracle. Same grid-number bound as Phase 6 |
 | 8. Compact grid representation | generators named by lexicographic rank; slice results as columnar arrays; complexes stored CSC | built in the scheduled path. `grid_complexes` keeps permutation tuples as the readable oracle | Grid number 11 still does not fit. An on-disk form of the complex, decided with Phase 7 (a) |
 | 9. Reduced Khovanov | the basepoint-reduced complex: the subcomplex of enhanced states that label the basepoint circle *x*. A front-end change in `engines/khovanov/gradings.py::enhanced_generators`; the back end is untouched. F2 first | planned | Pin the *q*-shift against KnotInfo's `khovanov_reduced_mod2_vector`. Self-check: the result is the same at two basepoints. Wire a computed oracle: Khoca already returns the reduced theory, knotkit has `kk kh -r`, kht++ covers knots with a braid word (`../research/khtpp.md`, `../research/knotkit.md`). The canonical name follows `SPEC.md` section 7 |
+| 10. Engine choice and the bordered engine | (a) The Ozsváth–Szabó bordered-algebra algorithm (section 2) as a second Floer engine, written from the papers: it does not pay n!, gives the ranks, τ, ε, ν, genus, fibredness and the L-space test for knots, and gives the UV = 0 quotient of the knot Floer complex, not the whole complex. (b) An engine choice on `compute()`: by default the scheduler takes the bordered engine wherever it can answer (a knot, and an invariant the quotient complex determines) and the grid engine otherwise; a caller may name `grid` for any knot; naming `bordered` for a link or an invariant that needs the whole complex raises. (c) The engine that ran, and whether it was chosen or named, in the provenance | planned | The bordered engine must reproduce the grid engine's ranks exactly (section 6, class (A)) on every knot both reach. The grid engine stays the reference |
 
 The Floer roster is the KnotInfo knots with HFK, τ and three-genus all tabulated (2,977),
 filtered by grid number: 13 at ≤ 8, 41 at ≤ 9, 185 at ≤ 10. `floer_roster` derives it from the
@@ -222,7 +227,9 @@ installed table.
 | Khovanov over F2 from KnotInfo | derived from the stored integral vector by universal coefficients | |
 | Lee complex | one complex graded by i and filtered by q; Lee homology has dimension 2 for a knot | checked on every calculation |
 | Rasmussen *s* | s of the given diagram: s_min + 1, with s_max = s_min + 2 checked. Compared against −(KnotInfo's `rasmussen_invariant`) | s(mirror) = −s |
-| Grid markers | KnotInfo's `grid_notation` does not label O and X. They are recovered by tracing the knot through the markers and 2-colouring the cycle, then the rows are reversed to reach KnotInfo's chirality | HFK-hat and τ equal KnotInfo's values with no mirror and no sign change |
+| Grid markers | KnotInfo's `grid_notation` does not label O and X. They are recovered by tracing the knot through the markers and 2-colouring the cycle, then the rows are reversed to reach KnotInfo's chirality. The engine's tests and roster read these grids; `compute()` builds its own (section 9) | HFK-hat and τ equal KnotInfo's values with no mirror and no sign change |
+| Built grids | rows are the open book's pages in their order around the binding axis: the segments behind it from lowest to highest, then those in front from highest to lowest; columns are the vertical segments left to right; in each row the marker the trace enters at is O | HFK-hat and τ equal KnotInfo's values, from PD codes and from braid words |
+| Braid closure | the braid runs upward; `+j` crosses the strand at position j over the one at j + 1 | the closure's Jones polynomial equals KnotInfo's for every knot through 9 crossings |
 | Floer gradings | (Maslov, Alexander); A = (M_O − M_X − (n − 1)) / 2; back-end degree = −Maslov | graded Euler characteristic = (1 − t)^(n−1) · Δ_K(t) |
 | HFK-hat from grid homology | grid homology = HFK-hat ⊗ V^(n−1), V = F2 in (0, 0) ⊕ F2 in (−1, −1) | the division is checked by rebuilding the product |
 | Three-genus | the top Alexander grading where HFK-hat is nonzero | |
@@ -231,7 +238,48 @@ installed table.
 
 Code comments call the KnotInfo comparisons of Phases 2 and 3 "Phase 2c" and "Phase 3c".
 
-"Reduced" has three unrelated senses here. In Phase 9 and `coverage-map.md` it is the
+"Reduced" has four unrelated senses here. In Phase 9 and `coverage-map.md` it is the
 basepoint-reduced theory. In section 4 and Phase 4, `raw == reduced` is the
 Gaussian-cancelled complex. In Phase 7 and `four-manifold-objectives.md`, the reduced
-filtered complex is the simplified CFK.
+filtered complex is the simplified CFK. In section 9, a reduced diagram has no kinks and no
+nugatory crossings.
+
+## 9. Grids from crossing diagrams
+
+`compute()` builds every Floer calculation's grid from the knot's PD code, or from its braid's
+closure (`diagrams/braid_closure.py`). KnotInfo's `grid_notation` is not an input.
+
+1. **Reduce** (`diagrams/reduction.py`). Kinks are removed by a first Reidemeister move.
+   A nugatory crossing is removed by turning one side over: its plane picture is mirrored and
+   its crossings swapped. The result is relabelled canonically, so two labellings of one
+   diagram reduce to the same code. A reduced diagram, as a plane graph, has no loops and no cut
+   vertices. A link is refused.
+2. **Build** (`grid_construction.py`). Bae and Park's construction (arc index ≤ c + 2), in No,
+   Oh and Yoo's form (arXiv:1806.09719). The crossings are ordered so that every cut leaves both
+   sides connected (a bisected vertex leveling). The sweep draws the diagram with horizontal and
+   vertical segments, c + 2 horizontal ones, each crossing at most one vertical one. Vertical
+   segments become points on a binding axis and horizontal ones become pages, in front when they
+   pass over. That gives a grid of size c + 2, which is the smallest grid when the reduced
+   diagram is alternating (Bae–Park with Morton–Beltrami).
+3. **Shrink** (`grid_moves.py`). Commutations and destabilizations, read on the torus. A row
+   whose two markers sit in neighbouring columns crosses nothing. Every vertical segment passes
+   over every horizontal one, so that row and its two columns straighten into one column. Every
+   move keeps the knot, so the search changes the grid's size, never an answer.
+4. **Search** (`grid_store.py`). An alternating reduced diagram's grid is used as built.
+   Otherwise a grid is built from every starting arc in both directions. Each is shrunk by
+   destabilizations reached through up to 6 commutations at a time, and the smallest is kept.
+5. **Keep.** One JSON file per reduced diagram, under the benchmark figures' cache directory, in
+   `grids/`, stamped with a digest of the code in steps 1 to 4. A different stamp means the grid
+   is built again. The result's `Provenance.grid` records the grid, the reduced diagram, "built"
+   or "stored", when, the stamp and the file.
+
+| Measured on the 32-CPU container | Result |
+|---|---|
+| Build, every KnotInfo knot through 13 crossings (12,965) | no failure; size c + 2 every time; about 1 ms each; the 6,729 alternating knots at KnotInfo's grid size |
+| Search, the 1,126 non-alternating knots through 12 crossings | 1,123 at KnotInfo's grid size, 3 one row over (12n_25, 12n_242, 12n_435); median 0.4 s, slowest 2.0 s |
+| Search, 60 sampled non-alternating 13-crossing knots | all at KnotInfo's arc index; median 0.9 s, slowest 2.6 s |
+| One start searched exhaustively instead, the same 60 | 58 at the arc index; median 0.06 s, slowest 104 s |
+
+Grids are checked by invariants already validated: HFK-hat equal to KnotInfo's, chirality
+included, from PD codes and braid words. The graded Euler characteristic must equal
+(1 − t)^(n−1) Δ(t), and each horizontal segment must cross exactly the column it names.

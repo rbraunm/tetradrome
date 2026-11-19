@@ -214,3 +214,8 @@ worker alone, 15 µs per state for a generation slice and 1.7 µs for a histogra
 - τ's rank and level search are one job each, on the compiled sparse reducer.
 - Oracle validation calls run in the caller.
 - `compute()` takes one knot; only the Floer engine has many-knot entry points.
+- A result's provenance does not yet record how its jobs ran: which reducer each reduction used
+  (reference, compiled, sparse or GPU) and where the scheduler placed each job. The run report
+  holds it; passing it into the result is the next step of the audit trail.
+- A Floer calculation's grid is built in the caller before its graph is scheduled
+  (`homology-engine.md` section 9).

@@ -114,9 +114,11 @@ class Provenance:
                                   # | "khovanov_cube_q" | "lee_quantum_filtration" | "grid_hfk_hat"
                                   # | "grid_filtered_tau" | "grid_hfk_genus"
     inputs: str                   # "braid_word" | "knotinfo:braid_notation" | "pd_code"
-                                  # | "knotinfo:grid_notation"
     library_versions: tuple[tuple[str, str], ...]   # (name, version); the interpreter, then each
                                                     # computational library the caller declares
+    grid: GridSource | None       # Floer results: the grid, the reduced diagram it was built
+                                  # from, "built" or "stored", when, by which code, and its file
+                                  # (engines/floer/grid_store.py)
 
 class ValidatorRecord:
     oracle: str                   # "knotinfo", "regina", "knot_floer_homology", ...

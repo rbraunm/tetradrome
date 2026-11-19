@@ -27,7 +27,7 @@ The motivating example is the Conway knot, whose smooth sliceness Lisa Piccirill
 | | |
 |---|---|
 | Computed and validated | determinant, signature, Alexander polynomial, Jones polynomial, Khovanov homology over F2 and ℚ, Rasmussen *s*, knot Floer homology (HFK-hat), three-genus, τ |
-| Limits | the Floer invariants need a tabulated knot; grid number 10 is the largest that has fit in memory |
+| Limits | the Floer invariants run on a grid diagram built from the knot's crossing diagram or braid; grid number 10 is the largest that has fit in memory |
 | Planned | ε, ν, Υ; reduced Khovanov; reports; the Conway reproducer; links and 4-manifold constructions |
 
 Detail: `roadmap/claim-ledger.md` (every claim and its evidence) and `roadmap/design/homology-engine.md` section 7 (phases and open work). Interfaces may still change.
@@ -72,6 +72,10 @@ provenance. The off-table call above needs `"off"` unless SageMath is installed:
 word has no PD, Regina reads only PDs, and KnotInfo has no row for T(2,15), so under strict
 or soft it raises `UnvalidatedResult` naming the missing oracle. Knots can also be given as
 PD codes with `td.knots.from_pd`.
+
+A Floer calculation builds the knot's grid diagram once and keeps it beside the benchmark
+figures; the result's provenance carries the grid, the diagram it was built from, and whether
+it was built then or read back.
 
 The first calculation on a machine benchmarks it (about 20 seconds on a 32-CPU machine), so the
 scheduler knows what each kind of job costs there, and keeps the figures. It repeats this only when the machine's
