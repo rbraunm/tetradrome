@@ -25,12 +25,13 @@ from .placement import (
     plan_placement,
 )
 from .routing import Calibration, Execution, route_execution
-from .session import run_many, run_to_result
+from .session import ComputationRecord, JobRecord, recording, run_many, run_to_result
 
 __all__ = [
     "GPU",
     "Allocation",
     "Calibration",
+    "ComputationRecord",
     "ComputePath",
     "Decision",
     "Execution",
@@ -38,6 +39,7 @@ __all__ = [
     "InfeasibleJobError",
     "Job",
     "JobGraph",
+    "JobRecord",
     "Ledger",
     "Machine",
     "NumaNode",
@@ -52,6 +54,7 @@ __all__ = [
     "detect_machine",
     "job_feasibility",
     "plan_placement",
+    "recording",
     "route_execution",
     "run_many",
     "run_to_result",

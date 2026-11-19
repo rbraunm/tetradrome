@@ -119,6 +119,10 @@ class Provenance:
     grid: GridSource | None       # Floer results: the grid, the reduced diagram it was built
                                   # from, "built" or "stored", when, by which code, and its file
                                   # (engines/floer/grid_store.py)
+    computation: ComputationRecord  # every scheduler job the calculation ran: kind (for a
+                                    # reduction, the reducer), placement, CPUs, NUMA node, GPU,
+                                    # seconds; the machine; the package source digest
+                                    # (scheduler/session.py)
 
 class ValidatorRecord:
     oracle: str                   # "knotinfo", "regina", "knot_floer_homology", ...

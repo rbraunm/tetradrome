@@ -12,10 +12,13 @@ the topology costs more than many of them do.
 from __future__ import annotations
 
 import atexit
+import contextlib
+import contextvars
 import dataclasses
 import logging
 
 from ..errors import TetradromeError
+from . import calibration_store
 from .executor import Scheduler, WorkerPool
 from .graph import JobGraph
 from .inventory import Machine, detect_machine
@@ -30,6 +33,60 @@ _worker: dict = {}
 # Kept between runs, so a calculation after the first finds workers waiting.
 _pool = WorkerPool()
 atexit.register(_pool.close)
+
+
+@dataclasses.dataclass(frozen=True)
+class JobRecord:
+    """How one job ran: its key, its kind (what it computes and, for a reduction, the reducer),
+    where the scheduler placed it (inline, a pinned or unpinned CPU worker, or a GPU), the CPUs
+    it held, its NUMA node and GPU, and its run time in seconds."""
+
+    job: str
+    kind: str
+    placement: str
+    cpus: tuple
+    node: int | None
+    gpu: int | None
+    seconds: float
+
+
+@dataclasses.dataclass(frozen=True)
+class ComputationRecord:
+    """Every job one calculation ran, in the order they finished, on which machine (the
+    benchmark's identity of it: processor, NUMA nodes and physical cores, GPUs), and the digest
+    of the package source that ran them."""
+
+    machine: dict
+    source: str
+    jobs: tuple
+
+
+class Recorder:
+    """Collects the jobs of every run made while it is recording."""
+
+    def __init__(self):
+        self.jobs: list = []
+
+    def record(self) -> ComputationRecord:
+        if _machine is None:
+            raise TetradromeError("nothing was scheduled while recording")
+        return ComputationRecord(calibration_store.machine_identity(_machine),
+                                 calibration_store.software_identity()["source"],
+                                 tuple(self.jobs))
+
+
+_recorder: contextvars.ContextVar = contextvars.ContextVar("tetradrome_recorder", default=None)
+
+
+@contextlib.contextmanager
+def recording():
+    """Within the block, every scheduler run's jobs are kept in the yielded ``Recorder``."""
+    recorder = Recorder()
+    token = _recorder.set(recorder)
+    try:
+        yield recorder
+    finally:
+        _recorder.reset(token)
 
 
 def capped_machine(mem_cap_bytes: int | None, vram_cap_bytes: int | None) -> Machine:
@@ -75,7 +132,15 @@ def _run(graph, mem_cap_bytes, vram_cap_bytes, on_complete=None):
     machine = capped_machine(mem_cap_bytes, vram_cap_bytes)
     scheduler = Scheduler(machine, calibration=_calibration, on_complete=on_complete,
                           pool=_pool, **_worker)
-    return scheduler.run(graph)
+    report = scheduler.run(graph)
+    recorder = _recorder.get()
+    if recorder is not None:
+        for key, placed in report.placed.items():
+            recorder.jobs.append(JobRecord(
+                repr(key), graph.get(key).kind, placed.path.placement.value,
+                tuple(sorted(placed.cores)), placed.node_index, placed.gpu_index,
+                report.timings[key]))
+    return report
 
 
 def run_many(parts: dict, *, what: str, mem_cap_bytes: int | None = None,

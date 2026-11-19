@@ -622,6 +622,8 @@ class RunReport:
     # key -> seconds a worker job took beyond its own run time: being handed over and reaped
     overheads: dict = dataclasses.field(default_factory=dict)
     calibration: "Calibration | None" = None     # final per-placement rates, for inspection
+    # key -> the Placed each completed job ran on: its path, CPUs, NUMA node and GPU
+    placed: dict = dataclasses.field(default_factory=dict)
 
 
 class Scheduler:
@@ -797,6 +799,7 @@ class Scheduler:
         stored_state = {"dir": None, "count": 0, "bytes": 0}   # the result store and its use
         device_state = {"count": 0, "bytes": 0}     # results kept resident in GPU VRAM
         placement_of: dict = {}         # key -> the placement it ran on, for calibration
+        placed_of: dict = {}            # key -> the Placed it was launched on, for the report
         launched_at: dict = {}          # key -> when its worker was started, for dispatch overhead
         calibration = self.calibration if self.calibration is not None else Calibration()
         timings: dict = {}              # key -> measured run seconds, for cost calibration
@@ -1006,6 +1009,7 @@ class Scheduler:
             ))
             declared_ram[job.key] = placed.path.ram_bytes
             placement_of[job.key] = placement
+            placed_of[job.key] = placed
             waiting.discard(job.key)
             started.add(component_of[job.key])
             if job.output_bytes > placed.path.ram_bytes:
@@ -1499,4 +1503,5 @@ class Scheduler:
                          stored_bytes=stored_state["bytes"],
                          device_count=device_state["count"],
                          device_bytes=device_state["bytes"],
-                         timings=timings, overheads=overheads, calibration=calibration)
+                         timings=timings, overheads=overheads, calibration=calibration,
+                         placed={key: placed_of[key] for key in timings})

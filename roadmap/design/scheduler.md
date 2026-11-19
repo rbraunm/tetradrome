@@ -133,6 +133,15 @@ A job that raises, or whose worker exits without reporting (killed for memory, o
 the job), fails. Its whole component is abandoned; other components finish. `run_to_result`
 raises on any failure, so no partial answer is returned.
 
+## The record a result carries
+
+Every run reports, per completed job, the placement it ran on and its run time.
+`compute()` records every run its calculation makes (`session.recording`). The result's
+`Provenance.computation` lists each job: its kind (for a reduction, the reducer), its placement,
+CPUs, NUMA node, GPU and seconds. It also names the machine, by the benchmark's identity, and the
+digest of the package source. Oracle calls run outside the scheduler and are recorded in the
+validation status instead.
+
 ## What an engine does
 
 - Builds a graph and calls `run_to_result`. For several independent calculations it builds each
@@ -214,8 +223,5 @@ worker alone, 15 µs per state for a generation slice and 1.7 µs for a histogra
 - τ's rank and level search are one job each, on the compiled sparse reducer.
 - Oracle validation calls run in the caller.
 - `compute()` takes one knot; only the Floer engine has many-knot entry points.
-- A result's provenance does not yet record how its jobs ran: which reducer each reduction used
-  (reference, compiled, sparse or GPU) and where the scheduler placed each job. The run report
-  holds it; passing it into the result is the next step of the audit trail.
 - A Floer calculation's grid is built in the caller before its graph is scheduled
   (`homology-engine.md` section 9).

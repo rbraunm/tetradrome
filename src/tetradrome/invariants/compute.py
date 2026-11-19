@@ -39,7 +39,7 @@ from ..diagrams.braid_closure import pd_from_braid
 from ..engines import floer, khovanov
 from ..engines.floer import grid_store
 from ..errors import UnknownKnot, UnvalidatedResult
-from ..scheduler import ComputePath, Job, JobGraph, Placement, run_to_result
+from ..scheduler import ComputePath, Job, JobGraph, Placement, recording, run_to_result
 from . import jones, seifert
 from .schema import InvariantResult, Provenance, ValidationStatus, ValidatorRecord
 
@@ -190,7 +190,7 @@ def _computed_oracle_gap(invariant, not_installed, could_not_check):
     return "; ".join(parts)
 
 
-def _finalize(knot, invariant, value, method, inputs, fallback_label, validate,
+def _finalize(knot, invariant, value, method, inputs, fallback_label, validate, computation,
               d_squared="not_applicable", libraries: tuple[str, ...] = (), grid=None):
     """Attach the validator verdicts, provenance, and validation outcome to a value.
 
@@ -250,6 +250,7 @@ def _finalize(knot, invariant, value, method, inputs, fallback_label, validate,
             inputs=inputs,
             library_versions=_library_versions(libraries),
             grid=grid,
+            computation=computation,
         ),
         validation=ValidationStatus(validators=tuple(records), d_squared_check=d_squared),
     )
@@ -310,6 +311,14 @@ def compute(
             f"validate must be one of {_VALIDATE_MODES}, got {validate!r}; the boolean "
             f"form is gone (True -> 'strict', False -> 'off')."
         )
+    with recording() as recorder:
+        calculated = _calculated(knot, invariant)
+    return _finalize(knot, invariant, validate=validate, computation=recorder.record(),
+                     **calculated)
+
+
+def _calculated(knot: NormalizedDiagram, invariant: str) -> dict:
+    """The value and how it was reached, as ``_finalize``'s keyword arguments."""
     if invariant in _SEIFERT_INVARIANTS:
         if knot.braid is not None:
             braid = list(knot.braid)
@@ -321,10 +330,9 @@ def compute(
             raise UnknownKnot(
                 "Invariant computation needs a braid word (from_braid) or a KnotInfo identity."
             )
-        value = _scheduled(_seifert_job(invariant, braid))
-        return _finalize(
-            knot, invariant, value, "seifert_form_from_braid", inputs, "(braid word)", validate
-        )
+        return {"value": _scheduled(_seifert_job(invariant, braid)),
+                "method": "seifert_form_from_braid", "inputs": inputs,
+                "fallback_label": "(braid word)"}
 
     if invariant in _PD_INVARIANTS:
         if not knot.pd_code:
@@ -333,11 +341,9 @@ def compute(
                 "this knot is braid-presented."
             )
         _, method = _PD_INVARIANTS[invariant]
-        value = _scheduled(_pd_job(invariant, knot.pd_code))
-        d_squared = "pass" if invariant in _RUNS_D_SQUARED else "not_applicable"
-        return _finalize(
-            knot, invariant, value, method, "pd_code", "(pd)", validate, d_squared=d_squared
-        )
+        return {"value": _scheduled(_pd_job(invariant, knot.pd_code)), "method": method,
+                "inputs": "pd_code", "fallback_label": "(pd)",
+                "d_squared": "pass" if invariant in _RUNS_D_SQUARED else "not_applicable"}
 
     if invariant in _FLOER_INVARIANTS:
         if knot.pd_code:
@@ -353,10 +359,8 @@ def compute(
                     "calculation does more work than the knot needs.",
                     invariant, knot.identity, located.size, smallest_known)
         func, method = _FLOER_INVARIANTS[invariant]
-        value = func(located.grid)
-        return _finalize(
-            knot, invariant, value, method, inputs, fallback_label, validate,
-            libraries=_floer_libraries(), grid=located,
-        )
+        return {"value": func(located.grid), "method": method, "inputs": inputs,
+                "fallback_label": fallback_label, "libraries": _floer_libraries(),
+                "grid": located}
 
     raise ValueError(f"compute does not support {invariant!r}; supported: {_supported()}")

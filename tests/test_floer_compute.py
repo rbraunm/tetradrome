@@ -89,6 +89,29 @@ def test_floer_provenance_records_the_grid_and_where_it_came_from():
     assert again.provenance.grid.o_markers == grid.o_markers
 
 
+def test_provenance_records_every_job_the_calculation_ran():
+    from tetradrome.engines.floer import grading_histogram
+    from tetradrome.engines.floer.scheduling import whole_knot_graph
+    from tetradrome.scheduler import calibration_store
+
+    result = invariants.compute(knots.from_name("6_2"), "knot_floer_homology", validate="off")
+    computation = result.provenance.computation
+    grid = result.provenance.grid.grid
+    graph, _ = whole_knot_graph(grid, grading_histogram(grid))
+    # The histogram run's jobs, then the calculation's: one record per job, none lost or doubled.
+    assert len(computation.jobs) == len({record.job for record in computation.jobs})
+    assert {repr(job.key) for job in graph.jobs()} <= {record.job for record in computation.jobs}
+    kinds = {record.kind for record in computation.jobs}
+    assert any(kind.startswith("f2.reduce.") for kind in kinds)
+    assert {record.placement for record in computation.jobs} <= {
+        "inline", "cpu_pinned", "cpu_unpinned", "gpu"}
+    for record in computation.jobs:
+        assert record.seconds >= 0
+        assert (record.cpus == ()) == (record.placement == "inline")
+    assert computation.source == calibration_store.software_identity()["source"]
+    assert computation.machine["nodes"]
+
+
 # --- any knot: a PD code without a name, or a braid ---
 
 def test_floer_of_an_unnamed_pd_code_is_validated_by_the_computed_oracle():

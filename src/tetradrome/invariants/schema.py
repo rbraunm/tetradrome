@@ -31,6 +31,10 @@ class Provenance:
     # was built now or read from the grid store, when, and by which code
     # (engines/floer/grid_store.GridSource).
     grid: Any = None
+    # Every scheduler job the calculation ran: its kind (for a reduction, the reducer), where it
+    # ran, on which CPUs, NUMA node and GPU, and for how long; the machine; the source digest
+    # (scheduler/session.ComputationRecord).
+    computation: Any = None
 
 
 @dataclass(frozen=True)
