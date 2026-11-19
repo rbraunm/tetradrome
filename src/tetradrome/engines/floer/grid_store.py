@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 _FORMAT = 1
 SEARCH_DEPTH = 6
-_GENERATOR = ("diagrams/reduction.py", "engines/floer/grid.py",
+_GENERATOR = ("diagrams/reduction.py", "diagrams/leveling.py", "engines/floer/grid.py",
               "engines/floer/grid_construction.py", "engines/floer/grid_moves.py",
               "engines/floer/grid_store.py")
 
