@@ -285,7 +285,7 @@ closure (`diagrams/braid_closure.py`). KnotInfo's `grid_notation` is not an inpu
    destabilizations reached through up to 6 commutations at a time, and the smallest is kept.
 5. **Keep.** One JSON file per reduced diagram, under the benchmark figures' cache directory, in
    `grids/`, stamped with a digest of the code in steps 1 to 4. A different stamp means the grid
-   is built again. The result's `Provenance.grid` records the grid, the reduced diagram, "built"
+   is built again. The result's `Provenance.presentation` records the grid, the reduced diagram, "built"
    or "stored", when, the stamp and the file.
 
 | Measured on the 32-CPU container | Result |

@@ -44,8 +44,8 @@ def test_known_scalar_floer_values():
 
 # --- provenance of the native path ---
 
-def test_floer_provenance_records_the_libraries_its_kernels_run_on():
-    result = invariants.compute(knots.from_name("3_1"), "knot_floer_homology")
+def test_grid_provenance_records_the_libraries_its_kernels_run_on():
+    result = invariants.compute(knots.from_name("3_1"), "knot_floer_homology", engine="grid")
     assert result.provenance.backend == "tetradrome-native"
     assert result.provenance.method == "grid_hfk_hat"
     assert result.provenance.inputs == "pd_code"
@@ -57,11 +57,63 @@ def test_floer_provenance_records_the_libraries_its_kernels_run_on():
     assert result.validation.d_squared_check == "not_applicable"
 
 
-def test_floer_method_labels_per_invariant():
-    tau = invariants.compute(knots.from_name("3_1"), "ozsvath_szabo_tau")
-    genus = invariants.compute(knots.from_name("3_1"), "three_genus")
-    assert tau.provenance.method == "grid_filtered_tau"
-    assert genus.provenance.method == "grid_hfk_genus"
+def test_floer_method_labels_per_invariant_and_engine():
+    trefoil = knots.from_name("3_1")
+    labels = {(invariant, engine): invariants.compute(trefoil, invariant, engine=engine)
+              .provenance.method
+              for invariant in FLOER for engine in ("auto", "grid")}
+    assert labels == {
+        ("knot_floer_homology", "auto"): "bordered_hfk_hat",
+        ("three_genus", "auto"): "bordered_hfk_genus",
+        ("ozsvath_szabo_tau", "auto"): "grid_filtered_tau",
+        ("knot_floer_homology", "grid"): "grid_hfk_hat",
+        ("three_genus", "grid"): "grid_hfk_genus",
+        ("ozsvath_szabo_tau", "grid"): "grid_filtered_tau",
+    }
+
+
+# --- the engine choice ---
+
+@pytest.mark.parametrize("name", ["3_1", "6_2", "8_19", "8_20"])
+def test_both_engines_give_the_same_floer_values(name):
+    knot = knots.from_name(name)
+    for invariant in ("knot_floer_homology", "three_genus"):
+        chosen = invariants.compute(knot, invariant, validate="off")
+        named = invariants.compute(knot, invariant, validate="off", engine="grid")
+        assert chosen.value == named.value == ki.known_answer(name, invariant)
+
+
+def test_the_provenance_says_whether_the_engine_was_chosen_or_named():
+    knot = knots.from_name("4_1")
+    assert invariants.compute(knot, "knot_floer_homology").provenance.engine_choice == (
+        "automatic")
+    for engine in ("grid", "bordered"):
+        result = invariants.compute(knot, "knot_floer_homology", engine=engine)
+        assert result.provenance.engine_choice == "named"
+        assert result.provenance.method == f"{engine}_hfk_hat"
+    assert invariants.compute(knot, "determinant").provenance.engine_choice is None
+
+
+def test_the_bordered_engine_records_its_morse_presentation():
+    from tetradrome.diagrams.morse import morse_diagram
+
+    pd = knots.from_name("7_4").pd_code
+    result = invariants.compute(knots.from_name("7_4"), "knot_floer_homology", validate="off")
+    source = result.provenance.presentation
+    assert source.diagram == reduced(pd)
+    assert source.morse == morse_diagram(reduced(pd))
+    assert source.widest == max(source.morse.widths())
+    assert [record.kind for record in result.provenance.computation.jobs] == [
+        "invariant.bordered_hfk_hat"]
+
+
+def test_naming_an_engine_that_cannot_answer_raises():
+    with pytest.raises(ValueError, match="does not compute ozsvath_szabo_tau"):
+        invariants.compute(knots.from_name("3_1"), "ozsvath_szabo_tau", engine="bordered")
+    with pytest.raises(ValueError, match="has one engine"):
+        invariants.compute(knots.from_name("3_1"), "jones_polynomial", engine="grid")
+    with pytest.raises(ValueError, match="engine must be one of"):
+        invariants.compute(knots.from_name("3_1"), "knot_floer_homology", engine="szabo")
 
 
 # --- modes on the Floer path ---
@@ -72,21 +124,23 @@ def test_floer_off_returns_full_provenance_without_validators():
     )
     assert result.validation.validators == ()
     assert result.value == ki.known_answer("3_1", "knot_floer_homology")
-    assert result.provenance.method == "grid_hfk_hat"
+    assert result.provenance.method == "bordered_hfk_hat"
 
 
-def test_floer_provenance_records_the_grid_and_where_it_came_from():
-    result = invariants.compute(knots.from_name("5_2"), "knot_floer_homology", validate="off")
-    grid = result.provenance.grid
+def test_grid_provenance_records_the_grid_and_where_it_came_from():
+    result = invariants.compute(knots.from_name("5_2"), "knot_floer_homology", validate="off",
+                                engine="grid")
+    grid = result.provenance.presentation
     assert grid.diagram == reduced(knots.from_name("5_2").pd_code)
     assert grid.size == 7
     assert grid.source in ("built", "stored")
     assert grid.generator == grid_store.generator_stamp()
     assert result.value == hfk_hat(grid.grid)
-    again = invariants.compute(knots.from_name("5_2"), "knot_floer_homology", validate="off")
-    assert again.provenance.grid.source == "stored"
-    assert again.provenance.grid.built_at == grid.built_at
-    assert again.provenance.grid.o_markers == grid.o_markers
+    again = invariants.compute(knots.from_name("5_2"), "knot_floer_homology", validate="off",
+                               engine="grid")
+    assert again.provenance.presentation.source == "stored"
+    assert again.provenance.presentation.built_at == grid.built_at
+    assert again.provenance.presentation.o_markers == grid.o_markers
 
 
 def test_provenance_records_every_job_the_calculation_ran():
@@ -94,9 +148,10 @@ def test_provenance_records_every_job_the_calculation_ran():
     from tetradrome.engines.floer.scheduling import whole_knot_graph
     from tetradrome.scheduler import calibration_store
 
-    result = invariants.compute(knots.from_name("6_2"), "knot_floer_homology", validate="off")
+    result = invariants.compute(knots.from_name("6_2"), "knot_floer_homology", validate="off",
+                                engine="grid")
     computation = result.provenance.computation
-    grid = result.provenance.grid.grid
+    grid = result.provenance.presentation.grid
     graph, _ = whole_knot_graph(grid, grading_histogram(grid))
     # The histogram run's jobs, then the calculation's: one record per job, none lost or doubled.
     assert len(computation.jobs) == len({record.job for record in computation.jobs})

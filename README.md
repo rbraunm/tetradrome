@@ -27,7 +27,7 @@ The motivating example is the Conway knot, whose smooth sliceness Lisa Piccirill
 | | |
 |---|---|
 | Computed and validated | determinant, signature, Alexander polynomial, Jones polynomial, Khovanov homology over F2 and ℚ, Rasmussen *s*, knot Floer homology (HFK-hat), three-genus, τ |
-| Limits | the Floer invariants run on a grid diagram built from the knot's crossing diagram or braid; grid number 10 is the largest that has fit in memory |
+| Limits | HFK-hat and three-genus run on the bordered engine by default, through 12 crossings checked against KnotInfo; τ runs on the grid engine, where grid number 10 is the largest that has fit in memory |
 | Planned | ε, ν, Υ; reduced Khovanov; reports; the Conway reproducer; links and 4-manifold constructions |
 
 Detail: `roadmap/claim-ledger.md` (every claim and its evidence) and `roadmap/design/homology-engine.md` section 7 (phases and open work). Interfaces may still change.
@@ -73,9 +73,11 @@ word has no PD, Regina reads only PDs, and KnotInfo has no row for T(2,15), so u
 or soft it raises `UnvalidatedResult` naming the missing oracle. Knots can also be given as
 PD codes with `td.knots.from_pd`.
 
-A Floer calculation builds the knot's grid diagram once and keeps it beside the benchmark
-figures; the result's provenance carries the grid, the diagram it was built from, and whether
-it was built then or read back.
+The Floer invariants have two engines: the bordered-algebra engine and the grid engine.
+`compute()` takes the bordered one wherever it computes the invariant; `engine="grid"` runs the
+grid engine on any knot. The grid engine builds the knot's grid diagram once and keeps it beside
+the benchmark figures. The result's provenance names the engine and whether it was chosen or
+named, and carries the grid or Morse presentation it ran on.
 
 The first calculation on a machine benchmarks it (about 20 seconds on a 32-CPU machine), so the
 scheduler knows what each kind of job costs there, and keeps the figures. It repeats this only when the machine's

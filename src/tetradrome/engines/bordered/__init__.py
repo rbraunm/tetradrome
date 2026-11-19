@@ -6,6 +6,6 @@ every slab below it, and the terminal module at the global minimum. It does not 
 n!; the grid engine is the reference it must agree with (roadmap/design/homology-engine.md,
 section 7, Phase 10).
 """
-from .knot import hfk_hat
+from .knot import MorseSource, hfk_hat
 
-__all__ = ["hfk_hat"]
+__all__ = ["MorseSource", "hfk_hat"]

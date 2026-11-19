@@ -20,6 +20,7 @@ _KINDS = [
     "floer.tau_rank",
     "floer.tau_slice",
     "invariant.alexander_polynomial",
+    "invariant.bordered_hfk_hat",
     "invariant.determinant",
     "invariant.jones_polynomial",
     "invariant.khovanov_homology",

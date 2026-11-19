@@ -112,13 +112,17 @@ class Provenance:
     backend_version: str
     method: str                   # "seifert_form_from_braid" | "kauffman_bracket" | "khovanov_cube_f2"
                                   # | "khovanov_cube_q" | "lee_quantum_filtration" | "grid_hfk_hat"
-                                  # | "grid_filtered_tau" | "grid_hfk_genus"
+                                  # | "grid_filtered_tau" | "grid_hfk_genus" | "bordered_hfk_hat"
+                                  # | "bordered_hfk_genus"
     inputs: str                   # "braid_word" | "knotinfo:braid_notation" | "pd_code"
     library_versions: tuple[tuple[str, str], ...]   # (name, version); the interpreter, then each
                                                     # computational library the caller declares
-    grid: GridSource | None       # Floer results: the grid, the reduced diagram it was built
-                                  # from, "built" or "stored", when, by which code, and its file
-                                  # (engines/floer/grid_store.py)
+    presentation: GridSource | MorseSource | None   # Floer results: what the engine ran on. The
+                                  # grid, the reduced diagram it was built from, "built" or
+                                  # "stored", when, by which code, and its file
+                                  # (engines/floer/grid_store.py); or the reduced diagram and
+                                  # its Morse presentation (engines/bordered)
+    engine_choice: str | None     # Floer results: "automatic" or "named"
     computation: ComputationRecord  # every scheduler job the calculation ran: kind (for a
                                     # reduction, the reducer), placement, CPUs, NUMA node, GPU,
                                     # seconds; the machine; the package source digest
@@ -245,8 +249,13 @@ import tetradrome as td
 td.knots.from_name(name)                      # "K11n34", "4_1"
 td.knots.from_pd(pd_code, identity=None)
 td.knots.from_braid(word, identity=None)      # off-table input
-td.invariants.compute(knot, invariant, validate="strict") -> InvariantResult
+td.invariants.compute(knot, invariant, validate="strict", engine="auto") -> InvariantResult
 ```
+
+`engine` applies to the Floer invariants. `"auto"` takes the bordered engine wherever it computes
+the invariant (HFK-hat, three-genus) and the grid engine otherwise (τ). `"grid"` runs the grid
+engine on any knot. `"bordered"` raises for an invariant it does not compute, and any engine but
+`"auto"` raises for a non-Floer invariant.
 
 Errors, all subclasses of `TetradromeError`: `UnknownKnot`, `BackendUnavailable`,
 `UnvalidatedResult`. Planned: `ConventionMismatch`, `ExportHashMismatch`.

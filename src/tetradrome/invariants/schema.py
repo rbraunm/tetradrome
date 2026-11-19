@@ -27,10 +27,14 @@ class Provenance:
     method: str  # e.g. "seifert_form"
     inputs: str  # e.g. "knotinfo:seifert_matrix"
     library_versions: tuple[tuple[str, str], ...] = ()  # (name, version), e.g. (("python", "3.12.3"),)
-    # A Floer result's grid: the grid itself, the reduced diagram it was built from, whether it
-    # was built now or read from the grid store, when, and by which code
-    # (engines/floer/grid_store.GridSource).
-    grid: Any = None
+    # What a Floer result was computed from. From the grid engine: the grid, the reduced diagram
+    # it was built from, whether it was built now or read from the grid store, when, and by which
+    # code (engines/floer/grid_store.GridSource). From the bordered engine: the reduced diagram
+    # and its Morse presentation (engines/bordered.MorseSource).
+    presentation: Any = None
+    # Floer results: "automatic" when compute() chose the engine, "named" when the caller did.
+    # The method label names the engine.
+    engine_choice: str | None = None
     # Every scheduler job the calculation ran: its kind (for a reduction, the reducer), where it
     # ran, on which CPUs, NUMA node and GPU, and for how long; the machine; the source digest
     # (scheduler/session.ComputationRecord).

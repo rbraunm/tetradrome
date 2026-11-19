@@ -19,8 +19,10 @@ the faithful reference.
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 
 from ...algebra.reduce_reference import homology
+from ...diagrams.model import PDCode
 from ...diagrams.morse import MorseDiagram
 from ...errors import TetradromeError
 from .algebra import Algebra
@@ -32,6 +34,19 @@ from .rotation import RotatedBimodule, rotated_algebra
 from .tensor import box
 from .terminal import hat_complexes
 from .type_d import TypeD
+
+
+@dataclass(frozen=True)
+class MorseSource:
+    """What a bordered result was computed from: the reduced crossing diagram and the Morse
+    presentation cut from it."""
+
+    diagram: PDCode
+    morse: MorseDiagram
+
+    @property
+    def widest(self) -> int:
+        return max(self.morse.widths())
 
 
 def _step(bimodule, typed: TypeD, cancel: bool) -> TypeD:

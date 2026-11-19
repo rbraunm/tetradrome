@@ -36,7 +36,9 @@ from .._version import __version__
 from ..backends import knotinfo_backend, registry
 from ..diagrams import NormalizedDiagram, build
 from ..diagrams.braid_closure import pd_from_braid
-from ..engines import floer, khovanov
+from ..diagrams.morse import morse_diagram
+from ..diagrams.reduction import reduced
+from ..engines import bordered, floer, khovanov
 from ..engines.floer import grid_store
 from ..errors import UnknownKnot, UnvalidatedResult
 from ..scheduler import ComputePath, Job, JobGraph, Placement, recording, run_to_result
@@ -74,6 +76,25 @@ _FLOER_INVARIANTS = {
 }
 
 
+def _hfk_itself(ranks: dict) -> dict:
+    return ranks
+
+
+def _genus_from_hfk(ranks: dict) -> int:
+    # Genus detection: the top Alexander grading carrying HFK-hat.
+    return max(alexander for _, alexander in ranks)
+
+
+# The Floer invariants the bordered engine reads from HFK-hat: (method label, reading). By default
+# compute() takes the bordered engine for these and the grid engine for the rest (homology-engine.md
+# section 7, Phase 10).
+_BORDERED_INVARIANTS = {
+    "knot_floer_homology": ("bordered_hfk_hat", _hfk_itself),
+    "three_genus": ("bordered_hfk_genus", _genus_from_hfk),
+}
+_ENGINES = ("auto", "grid", "bordered")
+
+
 # What a worker dirties before it holds any of the calculation: the scheduler's measured figure
 # for a pre-warmed worker, as engines/floer/scheduling.py prices its slices.
 _WORKER_BASE_BYTES = 16 * 2**20
@@ -88,6 +109,9 @@ _CUBE_STATE_BYTES = {
     "rasmussen_s": 56 * 1024,
 }
 _SEIFERT_ENTRY_BYTES = 256
+# The bordered engine's work grows with each level's 2^width; its memory was measured at 3 to 5
+# KiB per such unit on knots of 9 to 12 crossings.
+_BORDERED_UNIT_BYTES = 6 * 1024
 
 
 def _seifert_run(inputs, deps):
@@ -98,6 +122,10 @@ def _seifert_run(inputs, deps):
 def _pd_run(inputs, deps):
     invariant, pd_code = inputs
     return _PD_INVARIANTS[invariant][0](pd_code)
+
+
+def _bordered_run(inputs, deps):
+    return bordered.hfk_hat(inputs)
 
 
 def _job(invariant: str, run, inputs, cost: float, working_bytes: int) -> Job:
@@ -124,22 +152,29 @@ def _pd_job(invariant: str, pd_code) -> Job:
                 cost=float(states), working_bytes=states * _CUBE_STATE_BYTES[invariant])
 
 
+def _bordered_job(morse) -> Job:
+    units = sum(2 ** width for width in morse.widths())
+    return _job("bordered_hfk_hat", _bordered_run, morse, cost=float(units),
+                working_bytes=units * _BORDERED_UNIT_BYTES)
+
+
 def _scheduled(job: Job):
     return run_to_result(JobGraph([job]), job.key)
 
 
-# The knot the benchmark computes the Seifert and cube invariants of: six crossings, between the
-# smallest table knots and the ones whose cube takes most of a second.
+# The knot the benchmark computes the Seifert, cube and bordered invariants of: six crossings,
+# between the smallest table knots and the ones whose cube takes most of a second.
 _BENCHMARK_KNOT = "6_2"
 
 
 def benchmark(run) -> None:
-    """The Seifert and cube engines' representative calculations for ``tetradrome.calibrate``:
-    every invariant of one knot, each run through ``run(graph, key)``."""
+    """The Seifert, cube and bordered engines' representative calculations for
+    ``tetradrome.calibrate``: every invariant of one knot, each run through ``run(graph, key)``."""
     knot = build.from_name(_BENCHMARK_KNOT)
     braid = knotinfo_backend.braid_word(knot.identity)
     jobs = [_seifert_job(invariant, braid) for invariant in _SEIFERT_INVARIANTS]
     jobs += [_pd_job(invariant, knot.pd_code) for invariant in _PD_INVARIANTS]
+    jobs.append(_bordered_job(morse_diagram(reduced(knot.pd_code))))
     for job in jobs:
         run(JobGraph([job]), job.key)
 
@@ -191,7 +226,8 @@ def _computed_oracle_gap(invariant, not_installed, could_not_check):
 
 
 def _finalize(knot, invariant, value, method, inputs, fallback_label, validate, computation,
-              d_squared="not_applicable", libraries: tuple[str, ...] = (), grid=None):
+              d_squared="not_applicable", libraries: tuple[str, ...] = (), presentation=None,
+              engine_choice=None):
     """Attach the validator verdicts, provenance, and validation outcome to a value.
 
     Every wired + installed validator covering the invariant is consulted (registry), then
@@ -249,7 +285,8 @@ def _finalize(knot, invariant, value, method, inputs, fallback_label, validate, 
             method=method,
             inputs=inputs,
             library_versions=_library_versions(libraries),
-            grid=grid,
+            presentation=presentation,
+            engine_choice=engine_choice,
             computation=computation,
         ),
         validation=ValidationStatus(validators=tuple(records), d_squared_check=d_squared),
@@ -305,19 +342,28 @@ def compute(
     knot: NormalizedDiagram,
     invariant: str,
     validate: Literal["strict", "soft", "off"] = "strict",
+    engine: Literal["auto", "grid", "bordered"] = "auto",
 ) -> InvariantResult:
+    """``engine`` applies to the Floer invariants. "auto" takes the bordered engine wherever it
+    computes the invariant and the grid engine otherwise; "grid" runs the grid engine on any
+    knot; "bordered" raises for an invariant it does not compute."""
     if validate not in _VALIDATE_MODES:
         raise ValueError(
             f"validate must be one of {_VALIDATE_MODES}, got {validate!r}; the boolean "
             f"form is gone (True -> 'strict', False -> 'off')."
         )
+    if engine not in _ENGINES:
+        raise ValueError(f"engine must be one of {_ENGINES}, got {engine!r}.")
+    if engine != "auto" and invariant not in _FLOER_INVARIANTS:
+        raise ValueError(f"{invariant} has one engine; engine={engine!r} applies to the Floer "
+                         f"invariants {sorted(_FLOER_INVARIANTS)}.")
     with recording() as recorder:
-        calculated = _calculated(knot, invariant)
+        calculated = _calculated(knot, invariant, engine)
     return _finalize(knot, invariant, validate=validate, computation=recorder.record(),
                      **calculated)
 
 
-def _calculated(knot: NormalizedDiagram, invariant: str) -> dict:
+def _calculated(knot: NormalizedDiagram, invariant: str, engine: str) -> dict:
     """The value and how it was reached, as ``_finalize``'s keyword arguments."""
     if invariant in _SEIFERT_INVARIANTS:
         if knot.braid is not None:
@@ -350,6 +396,19 @@ def _calculated(knot: NormalizedDiagram, invariant: str) -> dict:
             pd, inputs, fallback_label = knot.pd_code, "pd_code", "(pd)"
         else:
             pd, inputs, fallback_label = pd_from_braid(knot.braid), "braid_word", "(braid word)"
+        choice = "automatic" if engine == "auto" else "named"
+        if engine == "bordered" and invariant not in _BORDERED_INVARIANTS:
+            raise ValueError(f"the bordered engine does not compute {invariant}; it gives "
+                             f"{sorted(_BORDERED_INVARIANTS)}. Leave engine='auto' or name "
+                             f"engine='grid'.")
+        if engine == "bordered" or (engine == "auto" and invariant in _BORDERED_INVARIANTS):
+            diagram = reduced(pd)
+            morse = morse_diagram(diagram)
+            method, read = _BORDERED_INVARIANTS[invariant]
+            return {"value": read(_scheduled(_bordered_job(morse))), "method": method,
+                    "inputs": inputs, "fallback_label": fallback_label,
+                    "presentation": bordered.MorseSource(diagram, morse),
+                    "engine_choice": choice}
         located = grid_store.knot_grid(pd)
         if knot.identity is not None:
             smallest_known = len(knotinfo_backend.grid_notation(knot.identity)) // 2
@@ -361,6 +420,6 @@ def _calculated(knot: NormalizedDiagram, invariant: str) -> dict:
         func, method = _FLOER_INVARIANTS[invariant]
         return {"value": func(located.grid), "method": method, "inputs": inputs,
                 "fallback_label": fallback_label, "libraries": _floer_libraries(),
-                "grid": located}
+                "presentation": located, "engine_choice": choice}
 
     raise ValueError(f"compute does not support {invariant!r}; supported: {_supported()}")
