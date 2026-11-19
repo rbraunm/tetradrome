@@ -76,8 +76,15 @@ _FLOER_INVARIANTS = {
 # for a pre-warmed worker, as engines/floer/scheduling.py prices its slices.
 _WORKER_BASE_BYTES = 16 * 2**20
 # A cube calculation holds on the order of its 2^c resolution states; priced per state, and
-# tuned, like every footprint, by the scheduler's over-budget warnings.
-_CUBE_STATE_BYTES = 2048
+# tuned, like every footprint, by the scheduler's over-budget warnings. The two that reduce over
+# the rationals hold exact fractions: measured at 64 MB for the 1,024 states of a ten-crossing
+# knot and 34 MB for 256 states.
+_CUBE_STATE_BYTES = {
+    "jones_polynomial": 2048,
+    "khovanov_homology": 2048,
+    "rational_khovanov_homology": 56 * 1024,
+    "rasmussen_s": 56 * 1024,
+}
 _SEIFERT_ENTRY_BYTES = 256
 
 
@@ -112,7 +119,7 @@ def _seifert_job(invariant: str, braid) -> Job:
 def _pd_job(invariant: str, pd_code) -> Job:
     states = 2 ** len(pd_code)                       # the resolution cube's vertices
     return _job(invariant, _pd_run, (invariant, pd_code),
-                cost=float(states), working_bytes=states * _CUBE_STATE_BYTES)
+                cost=float(states), working_bytes=states * _CUBE_STATE_BYTES[invariant])
 
 
 def _scheduled(job: Job):

@@ -83,9 +83,13 @@ learned while jobs run, for the life of the process.
 
 Open:
 
-- One rate per kind. A kind whose time per unit changes with its size is predicted roughly.
+- A fixed part and one rate per kind. A kind whose time per unit changes with its size is still
+  predicted roughly.
 - GPU rates are not benchmarked; there has been no GPU host to build that on.
+- A benchmark taken while the machine is busy stores skewed figures (the shared-core factors come
+  out near 1) until the code changes or `python -m tetradrome.calibrate` is run on a quiet machine.
 - Two processes that both find no figures both run the benchmark, and slow each other's.
+- On Windows the benchmark takes minutes, because every worker there is a spawned process.
 
 ## The planner
 
@@ -167,8 +171,8 @@ The 185 roster knots of grid number up to 10, as one `run_many` graph each:
 
 | | Seconds |
 |---|---|
-| HFK-hat for all 185 | 1,060 |
-| τ for all 185, on the set-based reducer | 1,340 |
+| HFK-hat for all 185 | 1,036 |
+| τ for all 185 | 161 |
 
 A batch of six grid-number-10 knots, HFK-hat with the histograms already known:
 
@@ -180,7 +184,7 @@ A batch of six grid-number-10 knots, HFK-hat with the histograms already known:
 | and a merge per Alexander grading, a rank per boundary map | 49 | 25.7 |
 | and long-lived workers, longest chain first, second threads on any measured gain | 46 | 26.5 |
 
-The whole heavy tier (`pytest --heavy`, 1,220 tests) takes 1 h 19 min, 28 minutes of it two
+The whole heavy tier (`pytest --heavy`, 1,234 tests) takes 59 minutes, 27 of them two
 single-threaded comparisons of the compiled kernels with the pure-Python reference at grid
 number 10.
 
@@ -201,8 +205,10 @@ worker alone, 15 µs per state for a generation slice and 1.7 µs for a histogra
   host runs other guests on these sockets and scales its clock (1.2 to 3.6 GHz), so both may be
   the host rather than the work.
 
-## Not scheduled yet
+## Open
 
+- The scheduler's own time is about 0.8 ms per job. A knot of grid number 8 is about 150 jobs, so
+  most of its 240 ms is that. Grouping a grading's small boundary maps into one job would cut it.
 - A Khovanov, Lee or Rasmussen calculation is one job; its build and per-grading reductions are
   not split.
 - τ's rank and level search are one job each, on the compiled sparse reducer.
